@@ -4,7 +4,9 @@ import type { PrismaService } from "../prisma.service";
 import { assertNoThirdPartyApplications } from "./application-guard";
 
 function prismaWithCount(count: number) {
-  return { application: { count: async () => count } } as unknown as PrismaService;
+  return {
+    application: { count: async () => count },
+  } as unknown as PrismaService;
 }
 
 describe("assertNoThirdPartyApplications", () => {
@@ -35,7 +37,9 @@ describe("assertNoThirdPartyApplications", () => {
       },
     } as unknown as PrismaService;
 
-    await assertNoThirdPartyApplications(prisma, "profile-1", { id: "listing-1" });
+    await assertNoThirdPartyApplications(prisma, "profile-1", {
+      id: "listing-1",
+    });
 
     expect(captured[0]).toMatchObject({
       where: {

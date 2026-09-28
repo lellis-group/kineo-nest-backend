@@ -1,3 +1,5 @@
+import { escapeHtml, safeUrl } from "../escape";
+
 export function notificationEmailTemplate({
   name,
   title,
@@ -11,7 +13,11 @@ export function notificationEmailTemplate({
   url?: string;
   ctaLabel?: string;
 }) {
-  const displayName = name ?? "Cher utilisateur";
+  const displayName = escapeHtml(name ?? "Cher utilisateur");
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message).replace(/\n/g, "<br>");
+  const safeCta = ctaLabel ? escapeHtml(ctaLabel) : ctaLabel;
+  const href = safeUrl(url);
 
   return `
 <!DOCTYPE html>
@@ -21,7 +27,7 @@ export function notificationEmailTemplate({
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
-  <title>${title}</title>
+  <title>${safeTitle}</title>
   <!--[if (gte mso 9)|(IE)]>
   <style type="text/css">
     table { border-collapse: collapse; }
@@ -41,7 +47,7 @@ export function notificationEmailTemplate({
 </head>
 <body style="margin:0; padding:0; background-color:#11100F;">
   <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">
-    ${title}
+    ${safeTitle}
   </div>
   <!--[if (gte mso 9)|(IE)]>
   <table width="600" align="center" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
@@ -66,7 +72,7 @@ export function notificationEmailTemplate({
           <tr><td style="line-height:32px; font-size:0;" height="32">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px;">
-              <h1 style="font-size:24px; font-weight:600; color:#FFFFFF; margin:0; padding:0; line-height:1.4; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">${title}</h1>
+              <h1 style="font-size:24px; font-weight:600; color:#FFFFFF; margin:0; padding:0; line-height:1.4; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">${safeTitle}</h1>
             </td>
           </tr>
           <tr><td style="line-height:28px; font-size:0;" height="28">&nbsp;</td></tr>
@@ -86,11 +92,11 @@ export function notificationEmailTemplate({
           <tr><td style="line-height:18px; font-size:0;" height="18">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif; background-color:#201F1E;">
-              <p style="padding:0; margin:0;">${message}</p>
+              <p style="padding:0; margin:0;">${safeMessage}</p>
             </td>
           </tr>
           ${
-            url && ctaLabel
+            href && safeCta
               ? `
           <tr><td style="line-height:34px; font-size:0;" height="34">&nbsp;</td></tr>
           <tr>
@@ -98,7 +104,7 @@ export function notificationEmailTemplate({
               <table role="presentation" align="center" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                 <tr>
                   <td align="center" style="background-color:#D7D1B0; padding:15px 34px; border-radius:999px;" bgcolor="#D7D1B0">
-                    <a href="${url}" style="color:#11100F; font-weight:600; font-size:16px; text-decoration:none; display:inline-block; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">${ctaLabel}</a>
+                    <a href="${href}" style="color:#11100F; font-weight:600; font-size:16px; text-decoration:none; display:inline-block; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">${safeCta}</a>
                   </td>
                 </tr>
               </table>
