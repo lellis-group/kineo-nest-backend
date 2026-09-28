@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { assertNoThirdPartyApplications } from "../common/application-guard";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import type {
@@ -285,6 +286,10 @@ export class ReplacementlistingsService {
         "A filled listing cannot be deleted, close it instead",
       );
     }
+
+    const profileId = await getOwnedProfileId(this.prisma, userId);
+
+    await assertNoThirdPartyApplications(this.prisma, profileId, { id });
 
     return this.prisma.replacementListing.delete({ where: { id } });
   }
