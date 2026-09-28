@@ -19,7 +19,10 @@ export const ProfileSchema = z.object({
 
 export class Profile extends createZodDto(ProfileSchema) {}
 
-export const PublicProfileSchema = ProfileSchema.omit({ rppsNumber: true });
+export const PublicProfileSchema = ProfileSchema.omit({
+  rppsNumber: true,
+  userId: true,
+});
 
 export class PublicProfile extends createZodDto(PublicProfileSchema) {}
 
