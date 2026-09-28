@@ -154,7 +154,7 @@ export function createAuth(
     }),
 
     plugins: [
-      openAPI(),
+      ...(isHardenedEnv(authEnv.nodeEnv) ? [] : [openAPI()]),
       nextCookies(),
       emailVerificationStatusPlugin(),
       ...(authEnv.jwtEnabled
