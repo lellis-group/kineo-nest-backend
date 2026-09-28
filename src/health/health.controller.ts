@@ -1,6 +1,7 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
+import { logError } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 
 @ApiTags("Health")
@@ -15,23 +16,15 @@ export class HealthController {
   @ApiResponse({ status: 503, description: "Service is unhealthy" })
   async check() {
     try {
-      // Verify database connectivity
       await this.prisma.$queryRaw`SELECT 1`;
 
       return {
         status: "ok",
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        database: "connected",
       };
     } catch (error) {
-      return {
-        status: "error",
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        database: "disconnected",
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
+      logError("health.db_check_failed", error);
+      throw new ServiceUnavailableException("Service unavailable");
     }
   }
 }
