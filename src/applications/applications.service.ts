@@ -225,7 +225,11 @@ export class ApplicationsService {
         skip,
         take: limit,
         orderBy: { createdAt: "desc" },
-        include: { applicant: { include: { user: true } } },
+        include: {
+          applicant: {
+            include: { user: { select: { name: true, image: true } } },
+          },
+        },
       }),
       this.prisma.application.count({ where }),
       this.countApplicationsByStatus({ listingId }),
@@ -288,7 +292,9 @@ export class ApplicationsService {
       where: { id },
       include: {
         listing: { include: { practice: true } },
-        applicant: { include: { user: true } },
+        applicant: {
+          include: { user: { select: { name: true, image: true } } },
+        },
       },
     });
 
