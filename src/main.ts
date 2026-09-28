@@ -11,6 +11,7 @@ import { cleanupOpenApiDoc } from "nestjs-zod";
 
 import { AppModule } from "./app.module";
 import { isHardenedEnv } from "./config/env";
+import { errorMessage } from "./lib/log";
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -109,6 +110,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error) => {
-  console.error("Failed to start server", error);
+  console.error("Failed to start server", errorMessage(error));
   process.exit(1);
 });

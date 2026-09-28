@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
 import nodemailer from "nodemailer";
+import { logError } from "../log";
+
+function hashSecret(secret: string): string {
+  return createHash("sha256").update(secret).digest("hex");
+}
 
 export interface SmtpConfig {
   host: string;
@@ -50,6 +56,8 @@ function getTransporter() {
     port: smtp.port,
     secure: smtp.secure,
     user: smtp.user ?? null,
+    from: smtp.from,
+    passHash: smtp.pass ? hashSecret(smtp.pass) : null,
   });
   if (!cachedTransporter || cachedKey !== key) {
     cachedTransporter = nodemailer.createTransport({
@@ -86,7 +94,9 @@ export async function sendEmail({
       html,
     });
   } catch (error) {
-    console.error(`Failed to send email to ${to}:`, error);
+    logError("email.send_failed", error, {
+      recipientDomain: to.split("@")[1] ?? "unknown",
+    });
     throw error;
   }
 }

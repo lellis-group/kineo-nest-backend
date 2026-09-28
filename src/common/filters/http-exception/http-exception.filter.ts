@@ -12,6 +12,12 @@ import { ZodSerializationException, ZodValidationException } from "nestjs-zod";
 import { ZodError, type ZodIssue } from "zod";
 import { isHardenedEnv } from "../../../config/env";
 
+function pathOnly(url?: string): string | undefined {
+  if (!url) return undefined;
+  const queryStart = url.indexOf("?");
+  return queryStart === -1 ? url : url.slice(0, queryStart);
+}
+
 @Catch(HttpException)
 export class HttpExceptionFilter extends BaseExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
@@ -63,13 +69,13 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       const exceptionResponse = exception.getResponse();
 
       this.logger.error(
-        `HTTP ${status} on ${request?.method} ${request?.url}: ${exception.message}`,
+        `HTTP ${status} on ${request?.method} ${pathOnly(request?.url)}: ${exception.message}`,
       );
 
       const sanitizedResponse = {
         statusCode: status,
         message: status >= 500 ? "Internal server error" : exception.message,
-        path: request?.url,
+        path: pathOnly(request?.url),
         timestamp: new Date().toISOString(),
       };
 

@@ -30,7 +30,6 @@ export class AccountDeletionService {
     const trimmed = token.trim();
 
     let deletedUserId: string | null = null;
-    let deletedUserEmail: string | null = null;
 
     await this.prisma.$transaction(async (tx) => {
       const verification = await tx.verification.findFirst({
@@ -64,7 +63,6 @@ export class AccountDeletionService {
 
       const userEmail = user.email;
       deletedUserId = userId;
-      deletedUserEmail = userEmail;
 
       await tx.dataDeletionRequest.updateMany({
         where: { userId, status: "PENDING" },
@@ -92,7 +90,6 @@ export class AccountDeletionService {
     if (deletedUserId) {
       logEvent("account.deletion.confirmed", {
         userId: deletedUserId,
-        email: deletedUserEmail,
       });
     }
   }
