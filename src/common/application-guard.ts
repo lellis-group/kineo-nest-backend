@@ -6,9 +6,24 @@ import type {
 } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
 
-const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
+/**
+ * Statuses that must not be destroyed on someone else's behalf.
+ *
+ * `ACCEPTED` belongs here for the same reason as the active pair: `accept`
+ * writes a real placement, and the cascade that erases the account would take
+ * it — along with the message the candidate wrote and the decision the
+ * practice made — without either of them ever being asked. A `FILLED` listing
+ * carries exactly one of these, and it used to sail past the guard, which then
+ * deleted a confirmed placement at purge time.
+ *
+ * The trade-off is deliberate: a practice with an accepted replacement can no
+ * longer erase its account until that candidate withdraws, or the listing is
+ * closed. That is the correct reading of "do not erase third-party data".
+ */
+const PROTECTED_APPLICATION_STATUSES: ApplicationStatus[] = [
   "PENDING",
   "SHORTLISTED",
+  "ACCEPTED",
 ];
 
 /**
@@ -30,7 +45,7 @@ type ApplicationClient = PrismaService | Prisma.TransactionClient;
 const DEFAULT_CONFLICT_MESSAGE =
   "This resource has pending applications from other candidates. Close or cancel the linked listings before deleting it.";
 
-/** Active applications other candidates hold on the listings of a profile. */
+/** Applications from other candidates that must survive this account's deletion. */
 export function thirdPartyActiveApplicationsFilter(
   ownerProfileId: string,
   listingFilter: Prisma.ReplacementListingWhereInput = {},
@@ -41,7 +56,7 @@ export function thirdPartyActiveApplicationsFilter(
       status: { in: RECRUITING_LISTING_STATUSES },
     },
     applicantId: { not: ownerProfileId },
-    status: { in: ACTIVE_APPLICATION_STATUSES },
+    status: { in: PROTECTED_APPLICATION_STATUSES },
   };
 }
 

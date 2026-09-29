@@ -47,9 +47,26 @@ describe("assertNoThirdPartyApplications", () => {
     expect(captured[0]).toMatchObject({
       where: {
         applicantId: { not: "profile-1" },
-        status: { in: ["PENDING", "SHORTLISTED"] },
+        status: { in: ["PENDING", "SHORTLISTED", "ACCEPTED"] },
       },
     });
+  });
+
+  it("blocks deletion when a third-party placement was accepted", async () => {
+    const prisma = {
+      application: {
+        count: async () => 1,
+      },
+    } as unknown as PrismaService;
+
+    // `accept` writes a real placement, and the cascade would take it along
+    // with the candidate's message and the practice's decision. A FILLED
+    // listing used to pass the guard with a zero count.
+    await expect(
+      assertNoThirdPartyApplications(prisma, "profile-1", {
+        id: "listing-1",
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it("ignores applications left on listings that no longer recruit", async () => {
@@ -124,7 +141,7 @@ describe("countThirdPartyActiveApplications", () => {
     expect(captured[0]).toMatchObject({
       where: {
         applicantId: { not: "profile-1" },
-        status: { in: ["PENDING", "SHORTLISTED"] },
+        status: { in: ["PENDING", "SHORTLISTED", "ACCEPTED"] },
         listing: {
           OR: [
             { createdById: "profile-1" },
