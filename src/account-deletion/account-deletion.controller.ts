@@ -42,7 +42,7 @@ export class AccountDeletionController {
   @ApiResponse({
     status: 409,
     description:
-      "Listings still hold active applications from other candidates",
+      "Listings still hold applications from other candidates (pending, shortlisted, or accepted)",
   })
   @ApiResponse({
     status: 410,

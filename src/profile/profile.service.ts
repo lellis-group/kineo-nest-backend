@@ -5,7 +5,10 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { assertNoThirdPartyApplications } from "../common/application-guard";
+import {
+  assertNoThirdPartyApplications,
+  PROFILE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+} from "../common/application-guard";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
@@ -117,9 +120,12 @@ export class ProfileService {
       throw new ForbiddenException();
     }
 
-    await assertNoThirdPartyApplications(this.prisma, id, {
-      OR: [{ createdById: id }, { practice: { ownerId: id } }],
-    });
+    await assertNoThirdPartyApplications(
+      this.prisma,
+      id,
+      { OR: [{ createdById: id }, { practice: { ownerId: id } }] },
+      PROFILE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+    );
 
     return this.prisma.profile.delete({ where: { id } });
   }

@@ -6,12 +6,15 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { assertNoThirdPartyApplications } from "../common/application-guard";
-import { getOwnedProfileId } from "../common/profile-lookup";
 import {
   REASON_LISTING_CANCELLED,
   REASON_LISTING_CLOSED,
 } from "../applications/rejection-reasons";
+import {
+  assertNoThirdPartyApplications,
+  LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+} from "../common/application-guard";
+import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type {
@@ -371,7 +374,12 @@ export class ReplacementlistingsService {
 
     const profileId = await getOwnedProfileId(this.prisma, userId);
 
-    await assertNoThirdPartyApplications(this.prisma, profileId, { id });
+    await assertNoThirdPartyApplications(
+      this.prisma,
+      profileId,
+      { id },
+      LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+    );
 
     return this.prisma.replacementListing.delete({ where: { id } });
   }
@@ -399,11 +407,7 @@ export class ReplacementlistingsService {
           );
         }
 
-        await terminateActiveApplications(
-          tx,
-          id,
-          REASON_LISTING_CLOSED,
-        );
+        await terminateActiveApplications(tx, id, REASON_LISTING_CLOSED);
 
         return tx.replacementListing.update({
           where: { id },
@@ -439,11 +443,7 @@ export class ReplacementlistingsService {
           );
         }
 
-        await terminateActiveApplications(
-          tx,
-          id,
-          REASON_LISTING_CANCELLED,
-        );
+        await terminateActiveApplications(tx, id, REASON_LISTING_CANCELLED);
 
         return tx.replacementListing.update({
           where: { id },

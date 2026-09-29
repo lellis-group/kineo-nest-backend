@@ -3,7 +3,7 @@ import { ConflictException } from "@nestjs/common";
 import type { PrismaService } from "../prisma.service";
 import {
   assertNoThirdPartyApplications,
-  countThirdPartyActiveApplications,
+  countThirdPartyApplications,
 } from "./application-guard";
 
 function prismaWithCount(count: number) {
@@ -69,6 +69,34 @@ describe("assertNoThirdPartyApplications", () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it("still counts a FILLED listing, now that the erasure no longer asks it to", async () => {
+    const captured: unknown[] = [];
+    const prisma = {
+      application: {
+        count: async (args: unknown) => {
+          captured.push(args);
+          return 2;
+        },
+      },
+    } as unknown as PrismaService;
+
+    await expect(
+      assertNoThirdPartyApplications(prisma, "profile-1", { id: "listing-1" }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    // The counterweight to `confirmDeletion` dropping its guard: the direct
+    // deletions have no detachment step, so FILLED has to stay in the
+    // recruiting statuses or a placed replacement would be destroyed with the
+    // listing the moment its owner pressed delete.
+    expect(captured[0]).toMatchObject({
+      where: {
+        listing: {
+          status: { in: ["DRAFT", "OPEN", "IN_DISCUSSION", "FULL", "FILLED"] },
+        },
+      },
+    });
+  });
+
   it("ignores applications left on listings that no longer recruit", async () => {
     const captured: unknown[] = [];
     const prisma = {
@@ -111,7 +139,7 @@ describe("assertNoThirdPartyApplications", () => {
   });
 });
 
-describe("countThirdPartyActiveApplications", () => {
+describe("countThirdPartyApplications", () => {
   it("returns zero for a user without a profile", async () => {
     const prisma = {
       profile: { findUnique: async () => null },
@@ -122,10 +150,10 @@ describe("countThirdPartyActiveApplications", () => {
       },
     } as unknown as PrismaService;
 
-    expect(await countThirdPartyActiveApplications(prisma, "user-1")).toBe(0);
+    expect(await countThirdPartyApplications(prisma, "user-1")).toBe(0);
   });
 
-  it("counts the applications that would block the erasure", async () => {
+  it("counts every third-party application, settled ones included", async () => {
     const captured: unknown[] = [];
     const prisma = {
       profile: { findUnique: async () => ({ id: "profile-1" }) },
@@ -137,11 +165,13 @@ describe("countThirdPartyActiveApplications", () => {
       },
     } as unknown as PrismaService;
 
-    expect(await countThirdPartyActiveApplications(prisma, "user-1")).toBe(3);
+    expect(await countThirdPartyApplications(prisma, "user-1")).toBe(3);
+    // No `status` filter any more: the erasure email states how many
+    // applications are being kept for their authors, so a count limited to the
+    // recruiting statuses would understate it.
     expect(captured[0]).toMatchObject({
       where: {
         applicantId: { not: "profile-1" },
-        status: { in: ["PENDING", "SHORTLISTED", "ACCEPTED"] },
         listing: {
           OR: [
             { createdById: "profile-1" },
