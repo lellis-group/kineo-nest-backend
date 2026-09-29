@@ -262,6 +262,37 @@ stateDiagram-v2
     SHORTLISTED --> WITHDRAWN : applicant withdraws
 ```
 
+### 5.5 Account Erasure (art. 17 GDPR)
+
+Erasure is deliberately **not** a single hard delete. The account is anonymized as soon as the link is confirmed, and the physical purge happens later, so an art. 17(3) hold can still be applied in between.
+
+```mermaid
+sequenceDiagram
+    participant U as Account holder
+    participant A as API
+    participant D as DB
+
+    U->>A: POST /api/auth/delete-user (session + password)
+    A->>D: DataDeletionRequest PENDING (fingerprints only)
+    A-->>U: email, 24h token, warning if applications will block
+    U->>A: POST /account/confirm-deletion (token)
+    A->>D: serializable tx
+    Note over A,D: refuses with 409 if other candidates hold active applications
+    A->>D: ANONYMIZED, PII overwritten, sessions and accounts revoked
+    D-->>A: committed
+    A-->>U: 200, logged out everywhere
+    Note over A,D: ACCOUNT_PURGE_GRACE_DAYS later
+    A->>D: delete user -> cascade clears profile, practices, listings, applications
+```
+
+**What is erased at confirmation**: `user.name`/`image`/`email`, `profile.rppsNumber`/`city`/coordinates, practice name and address, listing titles and descriptions, the rejection reasons the account holder wrote, and the application messages and withdrawal reasons it wrote on other people's listings. Its own applications also leave the `PENDING`/`SHORTLISTED` pipeline, so nobody keeps a candidate they can no longer reach.
+
+**What is retained**: two keyed fingerprints (HMAC-SHA256 over `DELETION_PEPPER`) plus timestamps, for `DATA_DELETION_REQUEST_RETENTION_DAYS`. An operator can answer "was my request processed?" without the database holding a single identifier. A request that was never confirmed is dropped after `PENDING_DELETION_REQUEST_RETENTION_DAYS`, since it only ever recorded an intention.
+
+**The blocker**: an erasure is refused while another candidate holds an active application on one of the account's listings, because the cascade would destroy that candidate's data. The user is warned by email at request time and told to close or cancel those listings; closing and cancelling both terminate the active applications so the way out always exists.
+
+**Known limits**: there is no user-facing undo during the grace period (the email address is not recoverable without encrypting the original). Data portability (art. 15/20) and the consent register (art. 7) are not implemented.
+
 ---
 
 ## 6. Security & Reliability
@@ -270,7 +301,7 @@ Covered by an internal audit (`SECURITY-AUDIT.md`), mostly resolved:
 
 - **Access control**: ownership checks on every mutating route across all four modules; `404` (not `403`) returned for private resources to avoid enumeration.
 - **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades).
-- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, with stricter limits on `create` routes; proxy-aware IP tracking.
+- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, with stricter limits on `create` routes and a dedicated `deletion` tier (5 attempts / 15 min) on the anonymous account-erasure endpoint, which authenticates the caller with a bearer token from an email link; proxy-aware IP tracking.
 - **Input validation**: length/range constraints on every Zod DTO (text fields capped, coordinates bounded, RPPS format-checked); per-profile resource caps configurable via env vars (`MAX_PRACTICES_PER_PROFILE`, `MAX_ACTIVE_LISTINGS_PER_PROFILE`, `MAX_ACTIVE_APPLICATIONS_PER_PROFILE`).
 - **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`.
 - **Email**: no more plaintext token logging; real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction.
@@ -307,3 +338,6 @@ Not yet done: automated tests (unit/e2e) beyond a single transactional test on `
 - Any write that reads-then-writes a shared counter (application count, listing capacity) must go through `runSerializableTransaction` (`common/serializable-transaction.ts`) to avoid race conditions.
 - Zod entity schemas use `z.iso.datetime()` for date fields exposed to Swagger — plain `z.date()` breaks OpenAPI generation (`nestjs-zod` / Zod v4 limitation) and must not be reintroduced.
 - No payment or legal contract logic is implemented yet: to be handled in V2 with particular vigilance on compliance (GDPR, health data indirectly linked via RPPS).
+- `data_deletion_request` stores **keyed fingerprints, never plain identifiers**. Anything reading that table must go through `deletionHash(value, pepper)` (`lib/hash.ts`); computing a raw hash of an email to search it would defeat the purpose and, since an email has low entropy, would be reversible by dictionary.
+- `DELETION_PEPPER` is a separate secret on purpose. Do not reuse `BETTER_AUTH_SECRET`, and back it up with the database: rotating it does not lose the trail but does make it unsearchable.
+- A deletion token is a bearer secret carried in a URL. Never log it, and keep the `deletion` throttle tier on any route that accepts one.
