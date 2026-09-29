@@ -1,23 +1,23 @@
 import { escapeHtml, safeUrl } from "../escape";
 
 /**
- * Callout rendered above the action button, for a condition the recipient has
- * to resolve before the action can succeed. Keeping it inside the template
- * rather than in the message text means it cannot be lost in a copy-paste and
- * its action link cannot be confused with the main call to action.
+ * Callout rendered above the action button, for something the recipient has to
+ * know before acting. It used to mean strictly "a condition you must resolve
+ * first", which the account-erasure email no longer is: it now explains what
+ * will be kept and why, while the action goes through regardless. Keeping it in
+ * the template rather than in the message text means it cannot be lost in a
+ * copy-paste, and its link cannot be confused with the main call to action.
  */
-export interface NotificationWarning {
+export interface NotificationNotice {
   title: string;
   body: string;
   actionUrl?: string;
   actionLabel?: string;
 }
 
-function renderWarning(warning: NotificationWarning): string {
-  const actionUrl = warning.actionUrl ? safeUrl(warning.actionUrl) : undefined;
-  const actionLabel = warning.actionLabel
-    ? escapeHtml(warning.actionLabel)
-    : "";
+function renderNotice(notice: NotificationNotice): string {
+  const actionUrl = notice.actionUrl ? safeUrl(notice.actionUrl) : undefined;
+  const actionLabel = notice.actionLabel ? escapeHtml(notice.actionLabel) : "";
 
   return `
           <tr><td style="line-height:22px; font-size:0;" height="22">&nbsp;</td></tr>
@@ -26,8 +26,8 @@ function renderWarning(warning: NotificationWarning): string {
               <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse; background-color:#2C2A26; border-left:3px solid #D7D1B0;">
                 <tr>
                   <td style="padding:18px 20px; color:#D9D6D0; font-size:15px; line-height:1.6; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-                    <p style="padding:0; margin:0 0 8px 0; font-size:15px; font-weight:600; color:#FFFFFF;">${escapeHtml(warning.title)}</p>
-                    <p style="padding:0; margin:0;">${escapeHtml(warning.body).replace(/\n/g, "<br>")}</p>
+                    <p style="padding:0; margin:0 0 8px 0; font-size:15px; font-weight:600; color:#FFFFFF;">${escapeHtml(notice.title)}</p>
+                    <p style="padding:0; margin:0;">${escapeHtml(notice.body).replace(/\n/g, "<br>")}</p>
                     ${
                       actionUrl && actionLabel
                         ? `<p style="padding:14px 0 0 0; margin:0;"><a href="${actionUrl}" style="color:#D7D1B0; font-weight:600; font-size:15px; text-decoration:underline; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">${actionLabel}</a></p>`
@@ -46,21 +46,21 @@ export function notificationEmailTemplate({
   message,
   url,
   ctaLabel,
-  warning,
+  notice,
 }: {
   name?: string | null;
   title: string;
   message: string;
   url?: string;
   ctaLabel?: string;
-  warning?: NotificationWarning;
+  notice?: NotificationNotice;
 }) {
   const displayName = escapeHtml(name ?? "Cher utilisateur");
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message).replace(/\n/g, "<br>");
   const safeCta = ctaLabel ? escapeHtml(ctaLabel) : ctaLabel;
   const href = safeUrl(url);
-  const warningHtml = warning ? renderWarning(warning) : "";
+  const noticeHtml = notice ? renderNotice(notice) : "";
 
   return `
 <!DOCTYPE html>
@@ -138,7 +138,7 @@ export function notificationEmailTemplate({
               <p style="padding:0; margin:0;">${safeMessage}</p>
             </td>
           </tr>
-          ${warningHtml}
+          ${noticeHtml}
           ${
             href && safeCta
               ? `

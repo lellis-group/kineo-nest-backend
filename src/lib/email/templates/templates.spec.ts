@@ -61,45 +61,47 @@ describe("email templates", () => {
     expect(html).toContain("Supprimer mon compte");
   });
 
-  describe("warning callout", () => {
-    it("renders the blocking condition and its own action link", () => {
+  describe("notice callout", () => {
+    it("renders the notice and its own action link", () => {
       const html = notificationEmailTemplate({
         title: "Suppression de votre compte",
         message: "Message principal",
         ctaLabel: "Supprimer mon compte",
         url: "https://app.kineo.test/goodbye?token=abc",
-        warning: {
-          title: "Action requise avant de confirmer",
-          body: "3 candidatures en attente d'autres candidats reposent sur vos annonces.",
+        notice: {
+          title: "Les candidatures de vos candidats seront conservées (3)",
+          body: "3 candidatures d'autres candidats reposent sur vos annonces.",
           actionUrl: "https://app.kineo.test/mes-annonces",
-          actionLabel: "Gérer mes annonces",
+          actionLabel: "Relire mes annonces avant de confirmer",
         },
       });
 
-      expect(html).toContain("Action requise avant de confirmer");
-      expect(html).toContain("3 candidatures en attente");
+      expect(html).toContain(
+        "Les candidatures de vos candidats seront conservées",
+      );
+      expect(html).toContain("3 candidatures d");
       expect(html).toContain('href="https://app.kineo.test/mes-annonces"');
-      expect(html).toContain("Gérer mes annonces");
-      // The main call to action is preserved alongside the warning.
+      expect(html).toContain("Relire mes annonces avant de confirmer");
+      // The main call to action is preserved alongside the notice.
       expect(html).toContain('href="https://app.kineo.test/goodbye?token=abc"');
     });
 
-    it("escapes the warning content", () => {
+    it("escapes the notice content", () => {
       const html = notificationEmailTemplate({
         title: "Test",
         message: "Test",
-        warning: { title: XSS, body: XSS, actionLabel: XSS },
+        notice: { title: XSS, body: XSS, actionLabel: XSS },
       });
 
       expect(html).not.toContain("<img");
       expect(html).not.toContain('onerror="');
     });
 
-    it("drops a javascript warning action", () => {
+    it("drops a javascript notice action", () => {
       const html = notificationEmailTemplate({
         title: "Test",
         message: "Test",
-        warning: {
+        notice: {
           title: "Alerte",
           body: "Corps",
           actionUrl: "javascript:alert(1)",
@@ -111,13 +113,13 @@ describe("email templates", () => {
       expect(html).not.toContain("Ne pas cliquer");
     });
 
-    it("renders no callout at all when there is no warning", () => {
+    it("renders no callout at all when there is no notice", () => {
       const html = notificationEmailTemplate({
         title: "Test",
         message: "Test",
       });
 
-      expect(html).not.toContain("Action requise");
+      expect(html).not.toContain("seront conservées");
     });
   });
 });
