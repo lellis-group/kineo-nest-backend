@@ -13,9 +13,18 @@ const ANONYMIZED_EMAIL_LOCAL_SUFFIX_LENGTH = 16;
  * environment and never reaches the database, which also means a database dump
  * alone cannot be used to confirm whether a given person asked for erasure.
  *
- * Losing the pepper does not lose the audit trail, it only makes it
- * unsearchable: back it up alongside the database.
- */
+  * Losing the pepper does not lose the audit trail, it makes it
+  * unreachable. Not "unsearchable": the confirmation matches on
+  * `deletionHash(userId, pepper)`, so a rotated or absent pepper stops every
+  * future confirmation from finding its pending request, and each one fails
+  * with a conflict until the person requests erasure again. The trail rows
+  * survive; the flow that consumes them does not. Back the pepper up
+  * alongside the database, and treat losing it as a production incident.
+  *
+  * An empty pepper is rejected upstream, at the call sites: `createHmac` would
+  * happily accept one and produce a well-formed but unkeyed digest, which is
+  * exactly the dictionary-reversible case this function exists to prevent.
+  */
 export function deletionHash(value: string, pepper: string): string {
   return createHmac("sha256", pepper)
     .update(value.trim().toLowerCase())

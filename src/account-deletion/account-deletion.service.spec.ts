@@ -3,6 +3,7 @@ import {
   ConflictException,
   GoneException,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import type { PrismaService } from "../prisma.service";
@@ -15,9 +16,10 @@ type Scenario = {
   user?: { id: string; email: string; deletedAt: Date | null } | null;
   activeThirdPartyApplications?: number;
   pendingAuditRows?: number;
+  /** Empty string models a misconfigured deployment with no key at all. */
+  pepper?: string;
   /** Active applications the person holds on other people's listings. */
-  activeApplicationsElsewhere?: { listingId: string }[];
-  /** Applications where the person had been accepted. */
+  activeApplicationsElsewhere?: { listingId: string }[];  /** Applications where the person had been accepted. */
   acceptedPlacements?: { id: string; listingId: string }[];
   /** Listing statuses, keyed by id, as the recalculation reads them. */
   listings?: Record<
@@ -168,7 +170,8 @@ function makeService(scenario: Scenario) {
   } as unknown as PrismaService;
 
   const config = {
-    get: (key: string) => (key === "deletionPepper" ? pepper : undefined),
+    get: (key: string) =>
+      key === "deletionPepper" ? (scenario.pepper ?? pepper) : undefined,
   } as unknown as ConfigService;
 
   return {
@@ -266,6 +269,21 @@ describe("AccountDeletionService", () => {
     });
     expect(updates.practice).toMatchObject({ isPublic: false, latitude: null });
     expect(updates.listing).toMatchObject({ description: null });
+  });
+
+  it("refuses to run without a pepper instead of writing unkeyed hashes", async () => {
+    const { service, calls } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      pepper: "",
+    });
+
+    // An empty key still yields a well-formed HMAC, which is a plain digest
+    // over a lowercased email and reversible with a dictionary.
+    await expect(service.confirmDeletion("abc")).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(calls).not.toContain("user.update");
   });
 
   it("takes the published listings out of circulation", async () => {
@@ -393,7 +411,8 @@ describe("AccountDeletionService", () => {
         }),
     } as unknown as PrismaService;
     const config = {
-      get: (key: string) => (key === "deletionPepper" ? pepper : undefined),
+      get: (key: string) =>
+      key === "deletionPepper" ? (scenario.pepper ?? pepper) : undefined,
     } as unknown as ConfigService;
 
     await expect(

@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { assertNoThirdPartyApplications } from "../common/application-guard";
@@ -75,8 +76,27 @@ export class AccountDeletionService {
     @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
+  /**
+   * The key backing every fingerprint this service writes.
+   *
+   * Resolved per call and validated, rather than cached in the constructor: a
+   * missing key must fail loudly here instead of degrading into an empty
+   * pepper. `createHmac` accepts one without complaint and returns a
+   * well-formed but unkeyed digest, which is a plain SHA-256 over a
+   * lowercased email — reversible with a dictionary, and precisely what
+   * `lib/hash` exists to prevent. Failing here also stops the trail rows being
+   * written under a key the deployment cannot reproduce.
+   */
   private get pepper(): string {
-    return this.config.get<string>("deletionPepper", "") ?? "";
+    const pepper = this.config.get<string>("deletionPepper");
+
+    if (!pepper) {
+      throw new ServiceUnavailableException(
+        "Account erasure is unavailable: DELETION_PEPPER is not configured",
+      );
+    }
+
+    return pepper;
   }
 
   async confirmDeletion(token: string): Promise<void> {
