@@ -300,6 +300,24 @@ export function createAuth(
       cookieCache: {
         enabled: authEnv.cookieCacheEnabled,
         maxAge: authEnv.cookieCacheMaxAge,
+        /**
+         * Bump the cache version whenever the user row changes.
+         *
+         * The session cookie cache is served straight from a signed cookie:
+         * better-auth never reaches the database on that path, and its own
+         * expiry check compares two cookies, not the stored session. Deleting
+         * the `Session` rows therefore does NOT invalidate it, and for
+         * `cookieCache.maxAge` the API keeps answering with the user as it was
+         * at cache time.
+         *
+         * That is a correctness problem well beyond the account erasure, which
+         * is what made it visible: anonymization overwrites `name` and `image`
+         * and claims the personal data is gone, while `get-session` still
+         * served both for the rest of the cache window. Keying the version on
+         * `user.updatedAt` closes that window and, more generally, stops any
+         * profile change from being shadowed by a stale session payload.
+         */
+        version: (_session, user) => String(new Date(user.updatedAt).getTime()),
       },
     },
 
