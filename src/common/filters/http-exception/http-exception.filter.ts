@@ -75,6 +75,15 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       const sanitizedResponse = {
         statusCode: status,
         message: status >= 500 ? "Internal server error" : exception.message,
+        // Preserved from an exception that carries one. A single status can
+        // mean several unrelated things — 409 covers both "a third party
+        // blocks this" and "no matching pending request exists" — and without a
+        // discriminator the client can only guess, and guesses wrong. Only
+        // echoed when the exception supplies it, so the body shape is
+        // unchanged for every existing route.
+        ...(typeof codeOf(exceptionResponse) === "string"
+          ? { code: codeOf(exceptionResponse) }
+          : {}),
         path: pathOnly(request?.url),
         timestamp: new Date().toISOString(),
       };
@@ -84,4 +93,12 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
 
     super.catch(exception, host);
   }
+}
+
+/** Reads a `code` off an exception response, whether it is a string or an object. */
+function codeOf(exceptionResponse: string | object): unknown {
+  if (typeof exceptionResponse === "object" && exceptionResponse !== null) {
+    return (exceptionResponse as { code?: unknown }).code;
+  }
+  return undefined;
 }

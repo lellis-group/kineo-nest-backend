@@ -45,6 +45,26 @@ const REPLACEMENT_UNAVAILABLE_REASON =
 /** Reason recorded on the accepted application that can no longer be honoured. */
 const ACCEPTED_ERASED_REASON = "This candidate is no longer available";
 
+/**
+ * Machine-readable discriminators for the failures this endpoint can return.
+ *
+ * Every one of these rides on a status code shared with an unrelated failure
+ * — 409 covers both the listings blocker and a missing audit row, 410 covers
+ * both an expired link and an account that is already gone — and a client
+ * that cannot tell them apart shows the wrong screen and offers advice that
+ * cannot work. Mirrored by the frontend's `DeletionFailure` union.
+ */
+export const ERASURE_ERROR_CODES = {
+  /** 409: other candidates hold applications the cascade would destroy. */
+  THIRD_PARTY_APPLICATIONS: "THIRD_PARTY_APPLICATIONS",
+  /** 409: no PENDING trail row matches this confirmation. */
+  NO_PENDING_REQUEST: "NO_PENDING_REQUEST",
+  /** 410: the 24h single-use token is past its expiry. */
+  TOKEN_EXPIRED: "TOKEN_EXPIRED",
+  /** 410: the account was already anonymized by an earlier confirmation. */
+  ALREADY_ERASED: "ALREADY_ERASED",
+} as const;
+
 type Transaction = Prisma.TransactionClient;
 
 /**
@@ -124,9 +144,11 @@ export class AccountDeletionService {
         }
 
         if (token.expiresAt.getTime() < now.getTime()) {
-          throw new GoneException(
-            "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
-          );
+          throw new GoneException({
+            code: ERASURE_ERROR_CODES.TOKEN_EXPIRED,
+            message:
+              "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
+          });
         }
 
         const consumed = await tx.verification.deleteMany({
@@ -134,16 +156,23 @@ export class AccountDeletionService {
         });
 
         if (consumed.count === 0) {
-          throw new GoneException(
-            "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
-          );
+          throw new GoneException({
+            code: ERASURE_ERROR_CODES.TOKEN_EXPIRED,
+            message:
+              "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
+          });
         }
 
         const userId = token.value;
         const user = await tx.user.findUnique({ where: { id: userId } });
 
         if (!user || user.deletedAt) {
-          throw new GoneException("Ce compte a déjà été supprimé.");
+          // Distinct from an expired link: the erasure already happened, and
+          // the right advice is "nothing left to do", not "try again".
+          throw new GoneException({
+            code: ERASURE_ERROR_CODES.ALREADY_ERASED,
+            message: "Ce compte a déjà été supprimé.",
+          });
         }
 
         const profileId = await getOwnedProfileIdSafe(tx, userId);
@@ -174,9 +203,14 @@ export class AccountDeletionService {
         });
 
         if (audited.count === 0) {
-          throw new ConflictException(
-            "No pending erasure request matches this confirmation. Please request the deletion again.",
-          );
+          // Shares 409 with the listings blocker, and means something entirely
+          // different: nothing is holding the account, no listing needs
+          // closing, and retrying will not help. The code lets the client say so.
+          throw new ConflictException({
+            code: ERASURE_ERROR_CODES.NO_PENDING_REQUEST,
+            message:
+              "No pending erasure request matches this confirmation. Please request the deletion again.",
+          });
         }
 
         await this.anonymize(tx, {

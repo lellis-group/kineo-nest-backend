@@ -271,6 +271,54 @@ describe("AccountDeletionService", () => {
     expect(updates.listing).toMatchObject({ description: null });
   });
 
+  it("tags each failure with a code the client can branch on", async () => {
+    const cases = [
+      {
+        scenario: { token: null },
+        type: NotFoundException,
+        code: undefined,
+      },
+      {
+        scenario: { token: expiredToken, user: pendingUser },
+        type: GoneException,
+        code: "TOKEN_EXPIRED",
+      },
+      {
+        scenario: { token: liveToken, user: { ...pendingUser, deletedAt: new Date() } },
+        type: GoneException,
+        code: "ALREADY_ERASED",
+      },
+      {
+        scenario: { token: liveToken, user: pendingUser, pendingAuditRows: 0 },
+        type: ConflictException,
+        code: "NO_PENDING_REQUEST",
+      },
+    ];
+
+    for (const { scenario, type, code } of cases) {
+      const { service } = makeService({
+        token: liveToken,
+        user: pendingUser,
+        ...scenario,
+      });
+
+      const error = await service
+        .confirmDeletion("abc")
+        .then(() => null)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(type);
+      // The code is the only way the client can tell these apart: 410 covers an
+      // expired link and an already-erased account, 409 covers the listings
+      // blocker and a missing audit row.
+      if (code) {
+        expect(
+          (error as { getResponse: () => { code?: string } }).getResponse(),
+        ).toMatchObject({ code });
+      }
+    }
+  });
+
   it("refuses to run without a pepper instead of writing unkeyed hashes", async () => {
     const { service, calls } = makeService({
       token: liveToken,
