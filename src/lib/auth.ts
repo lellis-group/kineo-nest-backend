@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
+import { countThirdPartyActiveApplications } from "../common/application-guard";
 import { durationSeconds } from "../config/configuration";
 import { isHardenedEnv } from "../config/env";
 import { emailVerificationStatusPlugin } from "./auth/email-verification-status";
@@ -33,6 +34,8 @@ export interface AuthEnv {
   frontendUrl: string;
   nodeEnv: string;
   deletionPepper: string;
+  accountPurgeGraceDays: number;
+  deletionRequestRetentionDays: number;
 }
 
 type EnvSource = NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -91,6 +94,16 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
     nodeEnv: env.NODE_ENV || "development",
     deletionPepper: env.DELETION_PEPPER || secret,
+    accountPurgeGraceDays: positiveInt(
+      env.ACCOUNT_PURGE_GRACE_DAYS,
+      30,
+      "ACCOUNT_PURGE_GRACE_DAYS",
+    ),
+    deletionRequestRetentionDays: positiveInt(
+      env.DATA_DELETION_REQUEST_RETENTION_DAYS,
+      365,
+      "DATA_DELETION_REQUEST_RETENTION_DAYS",
+    ),
   };
 }
 
@@ -141,6 +154,10 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     frontendUrl,
     nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
     deletionPepper: config.get<string>("deletionPepper", secret) ?? secret,
+    accountPurgeGraceDays:
+      config.get<number>("accountPurgeGraceDays", 30) ?? 30,
+    deletionRequestRetentionDays:
+      config.get<number>("dataDeletionRequestRetentionDays", 365) ?? 365,
   };
 }
 
@@ -151,6 +168,8 @@ export function createAuth(
   const prisma = prismaClient ?? createPrismaClient();
   const frontendUrl = authEnv.frontendUrl;
   const pepper = authEnv.deletionPepper;
+  const accountPurgeGraceDays = authEnv.accountPurgeGraceDays;
+  const deletionRequestRetentionDays = authEnv.deletionRequestRetentionDays;
 
   return betterAuth({
     database: prismaAdapter(prisma, {
@@ -251,6 +270,13 @@ export function createAuth(
             email: user.email,
             name: user.name,
             url: buildFrontendAuthUrl(url, "/goodbye", undefined, frontendUrl),
+            listingsUrl: `${frontendUrl}/mes-annonces`,
+            pendingApplications: await countThirdPartyActiveApplications(
+              prisma,
+              user.id,
+            ),
+            purgeGraceDays: accountPurgeGraceDays,
+            trailRetentionDays: deletionRequestRetentionDays,
           });
         },
       },

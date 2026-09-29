@@ -60,4 +60,64 @@ describe("email templates", () => {
     );
     expect(html).toContain("Supprimer mon compte");
   });
+
+  describe("warning callout", () => {
+    it("renders the blocking condition and its own action link", () => {
+      const html = notificationEmailTemplate({
+        title: "Suppression de votre compte",
+        message: "Message principal",
+        ctaLabel: "Supprimer mon compte",
+        url: "https://app.kineo.test/goodbye?token=abc",
+        warning: {
+          title: "Action requise avant de confirmer",
+          body: "3 candidatures en attente d'autres candidats reposent sur vos annonces.",
+          actionUrl: "https://app.kineo.test/mes-annonces",
+          actionLabel: "Gérer mes annonces",
+        },
+      });
+
+      expect(html).toContain("Action requise avant de confirmer");
+      expect(html).toContain("3 candidatures en attente");
+      expect(html).toContain('href="https://app.kineo.test/mes-annonces"');
+      expect(html).toContain("Gérer mes annonces");
+      // The main call to action is preserved alongside the warning.
+      expect(html).toContain('href="https://app.kineo.test/goodbye?token=abc"');
+    });
+
+    it("escapes the warning content", () => {
+      const html = notificationEmailTemplate({
+        title: "Test",
+        message: "Test",
+        warning: { title: XSS, body: XSS, actionLabel: XSS },
+      });
+
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain('onerror="');
+    });
+
+    it("drops a javascript warning action", () => {
+      const html = notificationEmailTemplate({
+        title: "Test",
+        message: "Test",
+        warning: {
+          title: "Alerte",
+          body: "Corps",
+          actionUrl: "javascript:alert(1)",
+          actionLabel: "Ne pas cliquer",
+        },
+      });
+
+      expect(html).not.toContain("javascript:");
+      expect(html).not.toContain("Ne pas cliquer");
+    });
+
+    it("renders no callout at all when there is no warning", () => {
+      const html = notificationEmailTemplate({
+        title: "Test",
+        message: "Test",
+      });
+
+      expect(html).not.toContain("Action requise");
+    });
+  });
 });

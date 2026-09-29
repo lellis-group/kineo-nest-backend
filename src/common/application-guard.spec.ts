@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { ConflictException } from "@nestjs/common";
 import type { PrismaService } from "../prisma.service";
-import { assertNoThirdPartyApplications } from "./application-guard";
+import {
+  assertNoThirdPartyApplications,
+  countThirdPartyActiveApplications,
+} from "./application-guard";
 
 function prismaWithCount(count: number) {
   return {
@@ -88,5 +91,47 @@ describe("assertNoThirdPartyApplications", () => {
     await expect(
       assertNoThirdPartyApplications(prisma, "profile-1", {}, "Custom reason"),
     ).rejects.toThrow("Custom reason");
+  });
+});
+
+describe("countThirdPartyActiveApplications", () => {
+  it("returns zero for a user without a profile", async () => {
+    const prisma = {
+      profile: { findUnique: async () => null },
+      application: {
+        count: async () => {
+          throw new Error("should not be called");
+        },
+      },
+    } as unknown as PrismaService;
+
+    expect(await countThirdPartyActiveApplications(prisma, "user-1")).toBe(0);
+  });
+
+  it("counts the applications that would block the erasure", async () => {
+    const captured: unknown[] = [];
+    const prisma = {
+      profile: { findUnique: async () => ({ id: "profile-1" }) },
+      application: {
+        count: async (args: unknown) => {
+          captured.push(args);
+          return 3;
+        },
+      },
+    } as unknown as PrismaService;
+
+    expect(await countThirdPartyActiveApplications(prisma, "user-1")).toBe(3);
+    expect(captured[0]).toMatchObject({
+      where: {
+        applicantId: { not: "profile-1" },
+        status: { in: ["PENDING", "SHORTLISTED"] },
+        listing: {
+          OR: [
+            { createdById: "profile-1" },
+            { practice: { ownerId: "profile-1" } },
+          ],
+        },
+      },
+    });
   });
 });
