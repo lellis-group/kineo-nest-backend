@@ -7,14 +7,16 @@
     "dev": "bun --watch src/main.ts",
     "build": "bun x tsc",
     "start": "bun dist/main.js",
-    "test": "bun test src",
-    "test:watch": "bun test src --watch",
+    "test": "bun test src --path-ignore-patterns '**/e2e/**'",
+    "test:watch": "bun test src --watch --path-ignore-patterns '**/e2e/**'",
     "lint": "bunx biome check src prisma",
     "lint:fix": "bunx biome check --write src prisma",
     "db:generate": "bunx --bun prisma generate",
     "db:push": "bunx --bun prisma db push",
     "db:migrate": "bunx --bun prisma migrate dev",
-    "db:seed": "bunx --bun prisma db seed"
+    "db:seed": "bunx --bun prisma db seed",
+    "test:e2e": "bun test src/account-deletion/e2e",
+    "test:all": "bun run test && bun run test:e2e"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.3",
@@ -51,9 +53,11 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^26.2.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/supertest": "^7.2.1",
     "jest": "^30.4.2",
     "next": "^16.3.4",
     "prisma": "^7.9.1",
+    "supertest": "^7.3.0",
     "tsx": "^4.23.11",
     "typescript": "^6.0.3"
   }
