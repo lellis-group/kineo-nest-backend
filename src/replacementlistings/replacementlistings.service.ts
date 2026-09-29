@@ -9,6 +9,7 @@ import { ConfigService } from "@nestjs/config";
 import { assertNoThirdPartyApplications } from "../common/application-guard";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
+import { Prisma } from "../generated/prisma/client";
 import type {
   ApplicationStatus,
   ListingStatus,
@@ -38,6 +39,32 @@ const APPLICATIONS_COUNT_INCLUDE = {
     },
   },
 };
+
+/**
+ * Terminates every active application on a listing that stops recruiting.
+ *
+ * Both `close` and `cancel` must go through this: the deletion guard counts
+ * active applications from other candidates, so a listing left with `PENDING`
+ * or `SHORTLISTED` rows keeps its owner permanently blocked from deleting
+ * their account.
+ */
+async function terminateActiveApplications(
+  tx: Prisma.TransactionClient,
+  listingId: string,
+  reason: string,
+): Promise<void> {
+  await tx.application.updateMany({
+    where: {
+      listingId,
+      status: { in: ACTIVE_APPLICATION_STATUSES },
+    },
+    data: {
+      status: "REJECTED",
+      rejectionReason: reason,
+      respondedAt: new Date(),
+    },
+  });
+}
 
 @Injectable()
 export class ReplacementlistingsService {
@@ -295,19 +322,41 @@ export class ReplacementlistingsService {
   }
 
   async close(id: string, userId: string) {
-    const listing = await this.assertOwnership(id, userId);
+    const updated = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const listing = await tx.replacementListing.findUnique({
+          where: { id },
+        });
+        if (!listing) {
+          throw new NotFoundException(`Replacement listing ${id} not found`);
+        }
 
-    if (listing.status !== "OPEN" && listing.status !== "FILLED") {
-      throw new BadRequestException(
-        "Only open or filled listings can be closed",
-      );
-    }
+        const profileId = await getOwnedProfileId(tx, userId);
 
-    const updated = await this.prisma.replacementListing.update({
-      where: { id },
-      data: { status: "CLOSED" },
-      include: APPLICATIONS_COUNT_INCLUDE,
-    });
+        if (listing.createdById !== profileId) {
+          throw new ForbiddenException();
+        }
+
+        if (listing.status !== "OPEN" && listing.status !== "FILLED") {
+          throw new BadRequestException(
+            "Only open or filled listings can be closed",
+          );
+        }
+
+        await terminateActiveApplications(
+          tx,
+          id,
+          "The listing has been closed",
+        );
+
+        return tx.replacementListing.update({
+          where: { id },
+          data: { status: "CLOSED" },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
+      },
+    );
 
     return toReplacementListingDto(this.withCount(updated));
   }
@@ -335,19 +384,11 @@ export class ReplacementlistingsService {
           );
         }
 
-        const now = new Date();
-
-        await tx.application.updateMany({
-          where: {
-            listingId: id,
-            status: { in: ACTIVE_APPLICATION_STATUSES },
-          },
-          data: {
-            status: "REJECTED",
-            rejectionReason: "The listing has been cancelled",
-            respondedAt: now,
-          },
-        });
+        await terminateActiveApplications(
+          tx,
+          id,
+          "The listing has been cancelled",
+        );
 
         return tx.replacementListing.update({
           where: { id },

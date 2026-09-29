@@ -163,4 +163,92 @@ describe("ReplacementlistingsService", () => {
       NotFoundException,
     );
   });
+
+  describe.each([
+    ["close", "closed"],
+    ["cancel", "cancelled"],
+  ] as const)("%s", (method, reason) => {
+    function makeService(status: string) {
+      const calls: string[] = [];
+      const transactionClient = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => ({ ...listing, status }),
+          update: async ({ data }: { data: Record<string, unknown> }) => {
+            calls.push("listing.update");
+            return { ...listing, ...data, _count: { applications: 0 } };
+          },
+        },
+        application: {
+          updateMany: async ({ data }: { data: Record<string, unknown> }) => {
+            calls.push("application.updateMany");
+            applicationData = data;
+            return { count: 2 };
+          },
+        },
+      };
+      const prisma = {
+        $transaction: async (
+          operation: (tx: typeof transactionClient) => unknown,
+        ) => operation(transactionClient),
+      } as unknown as PrismaService;
+      const config = { get: () => undefined } as unknown as ConfigService;
+
+      return {
+        calls,
+        service: new ReplacementlistingsService(prisma, config),
+      };
+    }
+
+    let applicationData: Record<string, unknown> | undefined;
+
+    it("terminates active applications so the owner is not blocked from deleting", async () => {
+      const { calls, service } = makeService("OPEN");
+
+      await service[method]("listing-1", "user-1");
+
+      expect(calls).toEqual(["application.updateMany", "listing.update"]);
+      expect(applicationData).toMatchObject({
+        status: "REJECTED",
+        rejectionReason: `The listing has been ${reason}`,
+      });
+    });
+  });
+
+  it("rejects closing a listing that does not exist", async () => {
+    const transactionClient = {
+      profile: { findUnique: async () => profile },
+      replacementListing: { findUnique: async () => null },
+    };
+    const prisma = {
+      $transaction: async (
+        operation: (tx: typeof transactionClient) => unknown,
+      ) => operation(transactionClient),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    await expect(
+      service.close("nonexistent-id", "user-1"),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("rejects closing a listing that is not open or filled", async () => {
+    const transactionClient = {
+      profile: { findUnique: async () => profile },
+      replacementListing: { findUnique: async () => listing },
+      application: { updateMany: async () => ({ count: 0 }) },
+    };
+    const prisma = {
+      $transaction: async (
+        operation: (tx: typeof transactionClient) => unknown,
+      ) => operation(transactionClient),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    await expect(service.close("listing-1", "user-1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
 });

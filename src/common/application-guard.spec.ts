@@ -43,10 +43,50 @@ describe("assertNoThirdPartyApplications", () => {
 
     expect(captured[0]).toMatchObject({
       where: {
-        listing: { id: "listing-1" },
         applicantId: { not: "profile-1" },
         status: { in: ["PENDING", "SHORTLISTED"] },
       },
     });
+  });
+
+  it("ignores applications left on listings that no longer recruit", async () => {
+    const captured: unknown[] = [];
+    const prisma = {
+      application: {
+        count: async (args: unknown) => {
+          captured.push(args);
+          return 0;
+        },
+      },
+    } as unknown as PrismaService;
+
+    await assertNoThirdPartyApplications(prisma, "profile-1", {
+      OR: [
+        { createdById: "profile-1" },
+        { practice: { ownerId: "profile-1" } },
+      ],
+    });
+
+    expect(captured[0]).toMatchObject({
+      where: {
+        listing: {
+          OR: [
+            { createdById: "profile-1" },
+            { practice: { ownerId: "profile-1" } },
+          ],
+          status: {
+            in: ["DRAFT", "OPEN", "IN_DISCUSSION", "FULL", "FILLED"],
+          },
+        },
+      },
+    });
+  });
+
+  it("reports the caller supplied conflict message", async () => {
+    const prisma = prismaWithCount(3);
+
+    await expect(
+      assertNoThirdPartyApplications(prisma, "profile-1", {}, "Custom reason"),
+    ).rejects.toThrow("Custom reason");
   });
 });
