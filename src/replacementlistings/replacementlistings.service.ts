@@ -381,7 +381,19 @@ export class ReplacementlistingsService {
       LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
     );
 
-    return this.prisma.replacementListing.delete({ where: { id } });
+    const deleted = await this.prisma.replacementListing.delete({
+      where: { id },
+    });
+
+    // Mapped like every other listing this service returns. The delete handler
+    // is annotated with the listing DTO, whose dates are strings and which
+    // requires `applicationsCount`; returning the raw row serialised a `Date`
+    // where a string was declared and omitted the count, so the
+    // `ZodSerializerInterceptor` threw a `ZodSerializationException` — a 500 —
+    // on a request that had already done its job. The row was gone and the
+    // caller was told it had failed. An e2e test over HTTP is what surfaced
+    // it; no unit test could, because the fake was never serialised.
+    return toReplacementListingDto({ ...deleted, applicationsCount: 0 });
   }
 
   async close(id: string, userId: string) {
