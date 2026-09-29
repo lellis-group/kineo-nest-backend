@@ -15,11 +15,24 @@ type Scenario = {
   user?: { id: string; email: string; deletedAt: Date | null } | null;
   activeThirdPartyApplications?: number;
   pendingAuditRows?: number;
+  /** Active applications the person holds on other people's listings. */
+  activeApplicationsElsewhere?: { listingId: string }[];
+  /** Applications where the person had been accepted. */
+  acceptedPlacements?: { id: string; listingId: string }[];
+  /** Listing statuses, keyed by id, as the recalculation reads them. */
+  listings?: Record<
+    string,
+    { status: string; maxApplications?: number | null }
+  >;
+  /** Active application count per listing id. */
+  activeCountPerListing?: Record<string, number>;
 };
 
 function makeService(scenario: Scenario) {
   const calls: string[] = [];
   const updates: Record<string, unknown>[] = [];
+  const listingUpdates: { id: string }[] = [];
+  const applicationUpdates: { id: string }[] = [];
 
   const tx = {
     verification: {
@@ -64,12 +77,66 @@ function makeService(scenario: Scenario) {
         updates.listing = data;
         return { count: 1 };
       },
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        calls.push("replacementListing.findUnique");
+        return scenario.listings?.[where.id] ?? null;
+      },
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Record<string, unknown>;
+      }) => {
+        calls.push("replacementListing.update");
+        listingUpdates.push({ id: where.id, ...data });
+        return {};
+      },
     },
     application: {
-      count: async () => scenario.activeThirdPartyApplications ?? 0,
-      updateMany: async ({ data }: { data: Record<string, unknown> }) => {
+      count: async ({ where }: { where?: { listingId?: string } } = {}) => {
+        if (where?.listingId && scenario.activeCountPerListing) {
+          return scenario.activeCountPerListing[where.listingId] ?? 0;
+        }
+        return scenario.activeThirdPartyApplications ?? 0;
+      },
+      findMany: async ({
+        where,
+        select,
+      }: {
+        where: { applicantId?: string; status?: unknown };
+        select?: { listingId?: boolean };
+      }) => {
+        calls.push("application.findMany");
+        if (where.status === "ACCEPTED") {
+          return scenario.acceptedPlacements ?? [];
+        }
+        return select?.listingId
+          ? (scenario.activeApplicationsElsewhere ?? []).map((row) => ({
+              listingId: row.listingId,
+            }))
+          : (scenario.activeApplicationsElsewhere ?? []);
+      },
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Record<string, unknown>;
+      }) => {
+        calls.push("application.update");
+        applicationUpdates.push({ id: where.id, ...data });
+        return {};
+      },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: Record<string, unknown>;
+        data: Record<string, unknown>;
+      }) => {
         calls.push("application.updateMany");
-        (updates.applications ??= []).push(data);
+        (updates.applications ??= []).push({ where, ...data });
         return { count: 1 };
       },
     },
@@ -108,6 +175,8 @@ function makeService(scenario: Scenario) {
     service: new AccountDeletionService(prisma, config),
     calls,
     updates,
+    listingUpdates,
+    applicationUpdates,
   };
 }
 
@@ -145,8 +214,12 @@ describe("AccountDeletionService", () => {
       "profile.update",
       "practice.updateMany",
       "replacementListing.updateMany",
+      // Read first: the listings to recompute are collected before the flip.
+      "application.findMany",
       "application.updateMany",
       "application.updateMany",
+      // And again for the accepted placements, if any.
+      "application.findMany",
       "application.updateMany",
       "session.deleteMany",
       "account.deleteMany",
@@ -293,5 +366,97 @@ describe("AccountDeletionService", () => {
     expect(looked[0]).toMatchObject({
       where: { identifier: "delete-account-abc" },
     });
+  });
+
+  it("reopens a listing that only looked full because of the person", async () => {
+    const { service, listingUpdates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      activeApplicationsElsewhere: [{ listingId: "listing-42" }],
+      listings: { "listing-42": { status: "FULL" } },
+      // The withdrawn application was the only active one left.
+      activeCountPerListing: { "listing-42": 0 },
+    });
+
+    await service.confirmDeletion("abc");
+
+    // Left in FULL, the listing stays hidden from findAll (which filters on
+    // OPEN) and refuses new candidates, with nothing telling the owner why.
+    expect(listingUpdates).toEqual([{ id: "listing-42", status: "OPEN" }]);
+  });
+
+  it("keeps a listing at capacity when other candidates remain", async () => {
+    const { service, listingUpdates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      activeApplicationsElsewhere: [{ listingId: "listing-42" }],
+      listings: { "listing-42": { status: "FULL", maxApplications: 2 } },
+      activeCountPerListing: { "listing-42": 2 },
+    });
+
+    await service.confirmDeletion("abc");
+
+    expect(listingUpdates).toEqual([]);
+  });
+
+  it("reopens a filled listing and restores the candidates it had auto-rejected", async () => {
+    const { service, updates, listingUpdates, applicationUpdates } =
+      makeService({
+        token: liveToken,
+        user: pendingUser,
+        acceptedPlacements: [{ id: "app-accepted", listingId: "listing-7" }],
+        listings: { "listing-7": { status: "FILLED" } },
+        // The two candidates `accept` had turned down are the active set again.
+        activeCountPerListing: { "listing-7": 2 },
+      });
+
+    await service.confirmDeletion("abc");
+
+    // The accepted application is the one row demoted individually...
+    expect(applicationUpdates).toEqual([
+      {
+        id: "app-accepted",
+        status: "REJECTED",
+        rejectionReason: "This candidate is no longer available",
+        respondedAt: expect.any(Date),
+      },
+    ]);
+
+    // ...and the auto-rejections go back to the pipeline, so the practice
+    // finds the pool it started with instead of a FILLED listing with nobody
+    // in it. Only the auto-written reason is targeted: a rejection a human
+    // typed stays rejected.
+    const restore = updates.applications?.find(
+      (update) => update.status === "PENDING",
+    );
+    expect(restore).toMatchObject({
+      where: {
+        listingId: "listing-7",
+        id: { not: "app-accepted" },
+        status: "REJECTED",
+        rejectionReason: "Another candidate was selected for this listing",
+      },
+      status: "PENDING",
+      rejectionReason: null,
+      respondedAt: null,
+    });
+
+    expect(listingUpdates).toEqual([{ id: "listing-7", status: "IN_DISCUSSION" }]);
+  });
+
+  it("never reopens a listing its owner closed or cancelled", async () => {
+    for (const status of ["CLOSED", "CANCELLED"]) {
+      const { service, listingUpdates } = makeService({
+        token: liveToken,
+        user: pendingUser,
+        acceptedPlacements: [{ id: "app-accepted", listingId: "listing-7" }],
+        listings: { "listing-7": { status } },
+        activeCountPerListing: { "listing-7": 2 },
+      });
+
+      await service.confirmDeletion("abc");
+
+      expect(listingUpdates).toEqual([]);
+    }
   });
 });

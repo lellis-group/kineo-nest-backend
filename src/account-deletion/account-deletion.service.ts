@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { assertNoThirdPartyApplications } from "../common/application-guard";
+import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfileIdSafe } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import type { Prisma } from "../generated/prisma/client";
@@ -22,6 +23,26 @@ const ANONYMIZED_PRACTICE_FIELD = "—";
 
 const THIRD_PARTY_APPLICATIONS_MESSAGE =
   "Your listings still have active applications from other candidates. Close or cancel them before deleting your account.";
+
+/**
+ * Reason written on the applications `accept` auto-rejected when it filled a
+ * listing. Anonymizing that accepted candidate invalidates the reason, so the
+ * rows have to be identified to put them back in the pipeline.
+ *
+ * Matching on the literal is the only handle available: `reject` takes a free
+ * text reason, so nothing in the schema distinguishes an auto-rejection from a
+ * manual one. A practice that typed this exact sentence by hand would see its
+ * candidate restored — an acceptable price for not adding a column to every
+ * application row to serve a case that is itself rare.
+ */
+const AUTO_REJECTION_REASON = "Another candidate was selected for this listing";
+
+/** Reason shown to the applicants left without a replacement. */
+const REPLACEMENT_UNAVAILABLE_REASON =
+  "The selected candidate is no longer available for this listing";
+
+/** Reason recorded on the accepted application that can no longer be honoured. */
+const ACCEPTED_ERASED_REASON = "This candidate is no longer available";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -223,6 +244,20 @@ export class AccountDeletionService {
     // and stays readable by the receiving practice otherwise. Active ones also
     // leave the pipeline, so no colleague keeps a pending or shortlisted
     // candidate they can no longer reach.
+    //
+    // The listings are collected first: the status of a listing is derived
+    // from the applications it holds, so freeing capacity without recomputing
+    // would leave an owner advertising a `FULL` slot they no longer need, and
+    // `findAll` would keep hiding their listing.
+    const listingsToRecalculate = await tx.application.findMany({
+      where: {
+        applicantId: profileId,
+        status: { in: ["PENDING", "SHORTLISTED"] },
+      },
+      select: { listingId: true },
+      distinct: ["listingId"],
+    });
+
     await tx.application.updateMany({
       where: {
         applicantId: profileId,
@@ -236,6 +271,12 @@ export class AccountDeletionService {
       data: { message: null, withdrawnReason: null },
     });
 
+    for (const { listingId } of listingsToRecalculate) {
+      await recalcListingStatus(tx, listingId);
+    }
+
+    await this.releaseAcceptedPlacements(tx, profileId, now);
+
     // Applications the person received. The rejection reason is written by the
     // account holder and read by the applicant; the status is kept so the
     // applicant still sees a coherent history.
@@ -243,6 +284,56 @@ export class AccountDeletionService {
       where: { listing: listingFilter, applicantId: { not: profileId } },
       data: { rejectionReason: null },
     });
+  }
+
+  /**
+   * Frees the listings this person had been accepted on.
+   *
+   * `accept` fills a listing, rejects every other candidate with
+   * `AUTO_REJECTION_REASON`, and from then on the owner has no reason to look
+   * at that listing again. If the accepted candidate then erases their
+   * account, the practice is left with a `FILLED` listing, nobody in the post,
+   * and a pool it had already turned down on a premise that no longer holds.
+   *
+   * The listing is therefore reopened and the auto-rejected candidates put
+   * back in the pipeline, so the owner finds the same pool it started with and
+   * can pick again. Their own free-text rejections are left alone: those were
+   * a considered decision, not a side effect of the selection.
+   */
+  private async releaseAcceptedPlacements(
+    tx: Transaction,
+    profileId: string,
+    now: Date,
+  ): Promise<void> {
+    const accepted = await tx.application.findMany({
+      where: { applicantId: profileId, status: "ACCEPTED" },
+      select: { id: true, listingId: true },
+    });
+
+    for (const application of accepted) {
+      await tx.application.update({
+        where: { id: application.id },
+        data: {
+          status: "REJECTED",
+          rejectionReason: ACCEPTED_ERASED_REASON,
+          respondedAt: now,
+        },
+      });
+
+      await tx.application.updateMany({
+        where: {
+          listingId: application.listingId,
+          id: { not: application.id },
+          status: "REJECTED",
+          rejectionReason: AUTO_REJECTION_REASON,
+        },
+        data: { status: "PENDING", rejectionReason: null, respondedAt: null },
+      });
+
+      await recalcListingStatus(tx, application.listingId, {
+        includeFilled: true,
+      });
+    }
   }
 
   /** Cuts every way back in: session cookies, password hash, OAuth tokens. */
