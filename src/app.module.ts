@@ -1,3 +1,4 @@
+import type { ExecutionContext } from "@nestjs/common";
 import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
@@ -40,22 +41,50 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
           {
             name: "short",
             ttl: config.get<number>("throttle.short.ttl", 1000),
-            limit: config.get<number>("throttle.short.limit", 5),
+            limit: config.get<number>("throttle.short.limit", 500),
           },
           {
             name: "medium",
             ttl: config.get<number>("throttle.medium.ttl", 10000),
-            limit: config.get<number>("throttle.medium.limit", 30),
+            limit: config.get<number>("throttle.medium.limit", 1500),
           },
           {
             name: "long",
             ttl: config.get<number>("throttle.long.ttl", 60000),
-            limit: config.get<number>("throttle.long.limit", 150),
+            limit: config.get<number>("throttle.long.limit", 3500),
           },
           {
             name: "deletion",
             ttl: config.get<number>("throttle.deletion.ttl", 900000),
             limit: config.get<number>("throttle.deletion.limit", 5),
+            // The deletion tier (5 attempts / 15 min) protects the anonymous
+            // account-erasure endpoint only. Without this, the global guard
+            // would apply it to every undecorated route (GET /profile, health,
+            // /api/auth/*, ...) and lock them after 5 hits.
+            skipIf: (context: ExecutionContext) => {
+              const handler = context.getHandler?.()?.name;
+              const className = context.getClass?.()?.name;
+              if (
+                className === "AccountDeletionController" &&
+                handler === "confirmDeletion"
+              ) {
+                return false;
+              }
+              try {
+                const req = context.switchToHttp().getRequest();
+                const url: unknown = req?.url ?? req?.originalUrl;
+                if (
+                  req?.method === "POST" &&
+                  typeof url === "string" &&
+                  url.includes("confirm-deletion")
+                ) {
+                  return false;
+                }
+              } catch {
+                return false;
+              }
+              return true;
+            },
           },
         ],
       }),

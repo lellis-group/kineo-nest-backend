@@ -98,7 +98,7 @@ function configuration() {
         ttl: 1_000,
         limit: positiveInteger(
           process.env.THROTTLE_SHORT_LIMIT,
-          5,
+          500,
           "THROTTLE_SHORT_LIMIT",
         ),
       },
@@ -106,7 +106,7 @@ function configuration() {
         ttl: 10_000,
         limit: positiveInteger(
           process.env.THROTTLE_MEDIUM_LIMIT,
-          30,
+          1500,
           "THROTTLE_MEDIUM_LIMIT",
         ),
       },
@@ -114,7 +114,7 @@ function configuration() {
         ttl: 60_000,
         limit: positiveInteger(
           process.env.THROTTLE_LONG_LIMIT,
-          150,
+          3500,
           "THROTTLE_LONG_LIMIT",
         ),
       },
@@ -332,9 +332,9 @@ export const envValidationSchema = z
     TRUST_PROXY: BoolEnum.default("false"),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
-    THROTTLE_SHORT_LIMIT: z.coerce.number().int().positive().default(5),
-    THROTTLE_MEDIUM_LIMIT: z.coerce.number().int().positive().default(30),
-    THROTTLE_LONG_LIMIT: z.coerce.number().int().positive().default(150),
+    THROTTLE_SHORT_LIMIT: z.coerce.number().int().positive().default(500),
+    THROTTLE_MEDIUM_LIMIT: z.coerce.number().int().positive().default(1500),
+    THROTTLE_LONG_LIMIT: z.coerce.number().int().positive().default(3500),
     THROTTLE_DELETION_TTL: z.coerce.number().int().positive().default(900_000),
     THROTTLE_DELETION_LIMIT: z.coerce.number().int().positive().default(5),
 
