@@ -7,6 +7,10 @@ import {
 } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import type { PrismaService } from "../prisma.service";
+import {
+  REASON_ANOTHER_CANDIDATE_SELECTED,
+  REASON_CANDIDATE_UNAVAILABLE,
+} from "../applications/rejection-reasons";
 import { AccountDeletionService } from "./account-deletion.service";
 
 const pepper = "p".repeat(32);
@@ -521,7 +525,7 @@ describe("AccountDeletionService", () => {
       {
         id: "app-accepted",
         status: "REJECTED",
-        rejectionReason: "This candidate is no longer available",
+        rejectionReason: REASON_CANDIDATE_UNAVAILABLE,
         respondedAt: expect.any(Date),
       },
     ]);
@@ -538,7 +542,14 @@ describe("AccountDeletionService", () => {
         listingId: "listing-7",
         id: { not: "app-accepted" },
         status: "REJECTED",
-        rejectionReason: "Another candidate was selected for this listing",
+        // Both spellings: rows written before the reasons were translated
+        // still carry the English one, and those candidates must come back too.
+        rejectionReason: {
+          in: [
+            REASON_ANOTHER_CANDIDATE_SELECTED,
+            "Another candidate was selected for this listing",
+          ],
+        },
       },
       status: "PENDING",
       rejectionReason: null,

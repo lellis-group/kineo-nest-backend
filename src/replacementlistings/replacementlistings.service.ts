@@ -8,6 +8,10 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { assertNoThirdPartyApplications } from "../common/application-guard";
 import { getOwnedProfileId } from "../common/profile-lookup";
+import {
+  REASON_LISTING_CANCELLED,
+  REASON_LISTING_CLOSED,
+} from "../applications/rejection-reasons";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type {
@@ -398,7 +402,7 @@ export class ReplacementlistingsService {
         await terminateActiveApplications(
           tx,
           id,
-          "The listing has been closed",
+          REASON_LISTING_CLOSED,
         );
 
         return tx.replacementListing.update({
@@ -438,7 +442,7 @@ export class ReplacementlistingsService {
         await terminateActiveApplications(
           tx,
           id,
-          "The listing has been cancelled",
+          REASON_LISTING_CANCELLED,
         );
 
         return tx.replacementListing.update({

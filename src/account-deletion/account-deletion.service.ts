@@ -7,6 +7,10 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import {
+  REASON_ANOTHER_CANDIDATE_SELECTED,
+  REASON_CANDIDATE_UNAVAILABLE,
+} from "../applications/rejection-reasons";
 import { assertNoThirdPartyApplications } from "../common/application-guard";
 import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfileIdSafe } from "../common/profile-lookup";
@@ -26,24 +30,25 @@ const THIRD_PARTY_APPLICATIONS_MESSAGE =
   "Your listings still have active applications from other candidates. Close or cancel them before deleting your account.";
 
 /**
- * Reason written on the applications `accept` auto-rejected when it filled a
- * listing. Anonymizing that accepted candidate invalidates the reason, so the
- * rows have to be identified to put them back in the pipeline.
+ * Every reason `accept` may have written when it auto-rejected the other
+ * candidates of a listing. Anonymizing that accepted candidate invalidates
+ * those reasons, so the rows have to be identified to go back into the
+ * pipeline.
  *
  * Matching on the literal is the only handle available: `reject` takes a free
  * text reason, so nothing in the schema distinguishes an auto-rejection from a
- * manual one. A practice that typed this exact sentence by hand would see its
- * candidate restored — an acceptable price for not adding a column to every
- * application row to serve a case that is itself rare.
+ * manual one. A practice that typed one of these exact sentences by hand would
+ * have its candidate restored — an acceptable price for not adding a column to
+ * every application row to serve a case that is itself rare.
+ *
+ * The English spelling is listed because rows written before the reasons were
+ * translated still carry it; without it an erasure would leave those candidates
+ * rejected on a premise that no longer holds.
  */
-const AUTO_REJECTION_REASON = "Another candidate was selected for this listing";
-
-/** Reason shown to the applicants left without a replacement. */
-const REPLACEMENT_UNAVAILABLE_REASON =
-  "The selected candidate is no longer available for this listing";
-
-/** Reason recorded on the accepted application that can no longer be honoured. */
-const ACCEPTED_ERASED_REASON = "This candidate is no longer available";
+const AUTO_REJECTION_REASONS: string[] = [
+  REASON_ANOTHER_CANDIDATE_SELECTED,
+  "Another candidate was selected for this listing",
+];
 
 /**
  * Machine-readable discriminators for the failures this endpoint can return.
@@ -393,7 +398,7 @@ export class AccountDeletionService {
         where: { id: application.id },
         data: {
           status: "REJECTED",
-          rejectionReason: ACCEPTED_ERASED_REASON,
+          rejectionReason: REASON_CANDIDATE_UNAVAILABLE,
           respondedAt: now,
         },
       });
@@ -403,7 +408,7 @@ export class AccountDeletionService {
           listingId: application.listingId,
           id: { not: application.id },
           status: "REJECTED",
-          rejectionReason: AUTO_REJECTION_REASON,
+          rejectionReason: { in: AUTO_REJECTION_REASONS },
         },
         data: { status: "PENDING", rejectionReason: null, respondedAt: null },
       });

@@ -3,6 +3,10 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 import { PrismaService } from "../prisma.service";
+import {
+  REASON_LISTING_CANCELLED,
+  REASON_LISTING_CLOSED,
+} from "../applications/rejection-reasons";
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 const profile = { id: "profile-1", userId: "user-1" };
@@ -165,8 +169,8 @@ describe("ReplacementlistingsService", () => {
   });
 
   describe.each([
-    ["close", "closed"],
-    ["cancel", "cancelled"],
+    ["close", REASON_LISTING_CLOSED],
+    ["cancel", REASON_LISTING_CANCELLED],
   ] as const)("%s", (method, reason) => {
     function makeService(status: string) {
       const calls: string[] = [];
@@ -210,7 +214,7 @@ describe("ReplacementlistingsService", () => {
       expect(calls).toEqual(["application.updateMany", "listing.update"]);
       expect(applicationData).toMatchObject({
         status: "REJECTED",
-        rejectionReason: `The listing has been ${reason}`,
+        rejectionReason: reason,
       });
     });
   });

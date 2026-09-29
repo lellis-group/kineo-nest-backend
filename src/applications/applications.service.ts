@@ -13,6 +13,7 @@ import { runSerializableTransaction } from "../common/serializable-transaction";
 import { ApplicationStatus, Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { toApplicationDto } from "./application.mapper";
+import { REASON_ANOTHER_CANDIDATE_SELECTED } from "./rejection-reasons";
 import { CreateApplicationDto } from "./dto/create-application.dto";
 import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
@@ -389,7 +390,7 @@ export class ApplicationsService {
           },
           data: {
             status: "REJECTED",
-            rejectionReason: "Another candidate was selected for this listing",
+            rejectionReason: REASON_ANOTHER_CANDIDATE_SELECTED,
             respondedAt: now,
           },
         });
