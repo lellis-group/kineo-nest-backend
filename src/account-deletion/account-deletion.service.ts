@@ -1,96 +1,276 @@
-import { GoneException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  GoneException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { assertNoThirdPartyApplications } from "../common/application-guard";
+import { getOwnedProfileIdSafe } from "../common/profile-lookup";
+import { runSerializableTransaction } from "../common/serializable-transaction";
+import type { Prisma } from "../generated/prisma/client";
+import { anonymizedEmailFor, deletionHash } from "../lib/hash";
 import { logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 
 /** Prefix of the single-use deletion token rows in the `verification` table. */
 const DELETE_ACCOUNT_IDENTIFIER_PREFIX = "delete-account-";
 
-function deleteAccountIdentifier(token: string): string {
-  return `${DELETE_ACCOUNT_IDENTIFIER_PREFIX}${token}`;
-}
+const ANONYMIZED_LISTING_TITLE = "Offre retirée";
+const ANONYMIZED_PRACTICE_FIELD = "—";
+
+const THIRD_PARTY_APPLICATIONS_MESSAGE =
+  "Your listings still have active applications from other candidates. Close or cancel them before deleting your account.";
+
+type Transaction = Prisma.TransactionClient;
 
 /**
- * Totale suppression identique à better-auth `POST /delete-user { token }`
- * MAIS sans exiger de session : le lien email suffit (RGPD art. 17).
+ * Executes an account erasure request (art. 17 GDPR) without requiring a
+ * session: the emailed single-use token is the proof of identity, which keeps
+ * the flow usable from another browser or after the session expired.
  *
- * Exécuté dans une transaction :
- * 1. lecture + consommation atomique du token `delete-account-*` (single-use,
- *    vérification d'expiration incluse) ;
- * 2. suppression du `User` — la cascade Prisma/Postgres (`User → Profile →
- *    Practice → ReplacementListing → Application`, plus `Account`/`Session`)
- *    purge tout le périmètre métier ;
- * 3. purge des lignes `verification` orphelines (pas de FK vers `user`) ;
- * 4. marquage de la demande d'audit `DataDeletionRequest` → EXECUTED.
+ * art. 17(1) demands erasure without undue delay, and art. 17(3) still leaves
+ * room for legal claims, so the two steps are separated:
+ *
+ * 1. the request phase (better-auth) emails a 24h token and opens a
+ *    `DataDeletionRequest` trail;
+ * 2. this confirmation, in one serializable transaction, consumes the token
+ *    atomically, refuses the deletion when it would destroy another
+ *    candidate's application, anonymizes every personal field and revokes
+ *    access;
+ * 3. a scheduled sweep drops the anonymized rows once the grace period lapses,
+ *    and the `User -> Profile -> Practice -> ReplacementListing ->
+ *    Application` cascade takes the business data with it.
+ *
+ * Anonymizing rather than deleting outright is what keeps step 3 recoverable
+ * during the grace period (legal hold, support request) while leaving nothing
+ * personal in the database and nothing usable by the account holder.
  */
 @Injectable()
 export class AccountDeletionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(ConfigService) private readonly config: ConfigService,
+  ) {}
+
+  private get pepper(): string {
+    return this.config.get<string>("deletionPepper", "") ?? "";
+  }
 
   async confirmDeletion(token: string): Promise<void> {
-    const trimmed = token.trim();
+    const identifier = `${DELETE_ACCOUNT_IDENTIFIER_PREFIX}${token.trim()}`;
+    const now = new Date();
 
-    let deletedUserId: string | null = null;
-
-    await this.prisma.$transaction(async (tx) => {
-      const verification = await tx.verification.findFirst({
-        where: { identifier: deleteAccountIdentifier(trimmed) },
-      });
-
-      if (!verification) {
-        throw new NotFoundException(
-          "Ce lien de confirmation est invalide ou a déjà été utilisé.",
-        );
-      }
-
-      if (verification.expiresAt.getTime() < Date.now()) {
-        await tx.verification.delete({
-          where: { id: verification.id },
+    const anonymizedUserId = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        // The token is resolved and then consumed by a conditional delete whose
+        // predicate is the expiry. Under the serializable isolation below, two
+        // concurrent confirmations of the same link (double click, two open
+        // tabs) cannot both commit: the loser aborts, retries, and by then
+        // finds no token at all. A plain read-then-write would instead let both
+        // pass the check and the loser would surface as a P2025 on the
+        // anonymization, i.e. a 500 on a request the user made correctly.
+        const token = await tx.verification.findFirst({
+          where: { identifier },
         });
-        throw new GoneException(
-          "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
-        );
-      }
 
-      const userId = verification.value;
-      const user = await tx.user.findUnique({ where: { id: userId } });
+        if (!token) {
+          throw new NotFoundException(
+            "Ce lien de confirmation est invalide ou a déjà été utilisé.",
+          );
+        }
 
-      if (!user) {
-        await tx.verification.delete({
-          where: { id: verification.id },
+        if (token.expiresAt.getTime() < now.getTime()) {
+          throw new GoneException(
+            "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
+          );
+        }
+
+        const consumed = await tx.verification.deleteMany({
+          where: { identifier, expiresAt: { gt: now } },
         });
-        throw new GoneException("Ce compte a déjà été supprimé.");
-      }
 
-      const userEmail = user.email;
-      deletedUserId = userId;
+        if (consumed.count === 0) {
+          throw new GoneException(
+            "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
+          );
+        }
 
-      await tx.dataDeletionRequest.updateMany({
-        where: { userId, status: "PENDING" },
-        data: { status: "EXECUTED", executedAt: new Date() },
-      });
+        const userId = token.value;
+        const user = await tx.user.findUnique({ where: { id: userId } });
 
-      await tx.user.delete({ where: { id: userId } });
+        if (!user || user.deletedAt) {
+          throw new GoneException("Ce compte a déjà été supprimé.");
+        }
 
-      // `verification` n'a pas de FK vers `user` : sans cette purge, les jetons
-      // liés à l'identité supprimée (vérification d'email, reset password
-      // indexés par email) survivraient au compte.
-      await tx.verification.deleteMany({
-        where: {
-          OR: [
-            { identifier: userEmail },
+        const profileId = await getOwnedProfileIdSafe(tx, userId);
+
+        if (profileId) {
+          await assertNoThirdPartyApplications(
+            tx,
+            profileId,
             {
-              identifier: { startsWith: DELETE_ACCOUNT_IDENTIFIER_PREFIX },
-              value: userId,
+              OR: [
+                { createdById: profileId },
+                { practice: { ownerId: profileId } },
+              ],
             },
-          ],
-        },
-      });
+            THIRD_PARTY_APPLICATIONS_MESSAGE,
+          );
+        }
+
+        // The trail must move to ANONYMIZED in the same transaction as the
+        // anonymization itself. If it cannot, the account would be erased with
+        // no provable record of it, so the transaction rolls back instead.
+        const audited = await tx.dataDeletionRequest.updateMany({
+          where: {
+            userIdHash: deletionHash(userId, this.pepper),
+            status: "PENDING",
+          },
+          data: { status: "ANONYMIZED", executedAt: now },
+        });
+
+        if (audited.count === 0) {
+          throw new ConflictException(
+            "No pending erasure request matches this confirmation. Please request the deletion again.",
+          );
+        }
+
+        await this.anonymize(tx, {
+          userId,
+          email: user.email,
+          profileId,
+          now,
+        });
+        await this.revokeAccess(tx, userId);
+        await this.purgeVerificationRows(tx, userId, user.email);
+
+        return userId;
+      },
+    );
+
+    logEvent("account.deletion.anonymized", {
+      userIdHash: deletionHash(anonymizedUserId, this.pepper),
+    });
+  }
+
+  /**
+   * Overwrites every field that identifies a person, in both directions: what
+   * the account holder published, and what other people wrote about them.
+   */
+  private async anonymize(
+    tx: Transaction,
+    context: {
+      userId: string;
+      email: string;
+      profileId: string | undefined;
+      now: Date;
+    },
+  ): Promise<void> {
+    const { userId, profileId, now } = context;
+
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        email: anonymizedEmailFor(userId, this.pepper),
+        name: null,
+        image: null,
+        emailVerified: false,
+        deletedAt: now,
+      },
     });
 
-    if (deletedUserId) {
-      logEvent("account.deletion.confirmed", {
-        userId: deletedUserId,
-      });
+    if (!profileId) {
+      return;
     }
+
+    const listingFilter: Prisma.ReplacementListingWhereInput = {
+      OR: [{ createdById: profileId }, { practice: { ownerId: profileId } }],
+    };
+
+    await tx.profile.update({
+      where: { id: profileId },
+      data: {
+        rppsNumber: null,
+        city: null,
+        latitude: null,
+        longitude: null,
+        isPublic: false,
+        verified: false,
+      },
+    });
+
+    await tx.practice.updateMany({
+      where: { ownerId: profileId },
+      data: {
+        name: ANONYMIZED_PRACTICE_FIELD,
+        address: ANONYMIZED_PRACTICE_FIELD,
+        city: ANONYMIZED_PRACTICE_FIELD,
+        latitude: null,
+        longitude: null,
+        isPublic: false,
+      },
+    });
+
+    await tx.replacementListing.updateMany({
+      where: listingFilter,
+      data: { title: ANONYMIZED_LISTING_TITLE, description: null },
+    });
+
+    // Applications the person sent. The free text is their own personal data
+    // and stays readable by the receiving practice otherwise. Active ones also
+    // leave the pipeline, so no colleague keeps a pending or shortlisted
+    // candidate they can no longer reach.
+    await tx.application.updateMany({
+      where: {
+        applicantId: profileId,
+        status: { in: ["PENDING", "SHORTLISTED"] },
+      },
+      data: { status: "WITHDRAWN", respondedAt: now },
+    });
+
+    await tx.application.updateMany({
+      where: { applicantId: profileId },
+      data: { message: null, withdrawnReason: null },
+    });
+
+    // Applications the person received. The rejection reason is written by the
+    // account holder and read by the applicant; the status is kept so the
+    // applicant still sees a coherent history.
+    await tx.application.updateMany({
+      where: { listing: listingFilter, applicantId: { not: profileId } },
+      data: { rejectionReason: null },
+    });
+  }
+
+  /** Cuts every way back in: session cookies, password hash, OAuth tokens. */
+  private async revokeAccess(tx: Transaction, userId: string): Promise<void> {
+    await tx.session.deleteMany({ where: { userId } });
+    await tx.account.deleteMany({ where: { userId } });
+  }
+
+  /**
+   * `verification` has no foreign key to `user`, so the rows keyed by the
+   * account (email verification, password reset, leftover deletion links) are
+   * cleared explicitly. The hourly expiry sweep is the safety net.
+   */
+  private async purgeVerificationRows(
+    tx: Transaction,
+    userId: string,
+    email: string,
+  ): Promise<void> {
+    await tx.verification.deleteMany({
+      where: {
+        OR: [
+          { identifier: email },
+          {
+            identifier: { startsWith: DELETE_ACCOUNT_IDENTIFIER_PREFIX },
+            value: userId,
+          },
+        ],
+      },
+    });
   }
 }

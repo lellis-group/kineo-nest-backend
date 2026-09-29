@@ -52,6 +52,11 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
             ttl: config.get<number>("throttle.long.ttl", 60000),
             limit: config.get<number>("throttle.long.limit", 150),
           },
+          {
+            name: "deletion",
+            ttl: config.get<number>("throttle.deletion.ttl", 900000),
+            limit: config.get<number>("throttle.deletion.limit", 5),
+          },
         ],
       }),
     }),

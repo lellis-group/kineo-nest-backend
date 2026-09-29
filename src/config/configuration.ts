@@ -118,6 +118,21 @@ function configuration() {
           "THROTTLE_LONG_LIMIT",
         ),
       },
+      // Anonymous endpoint authenticating a caller with a bearer token from an
+      // email link: far tighter than the generic tiers, and per window rather
+      // than per second, so guessing a token is not a viable strategy.
+      deletion: {
+        ttl: positiveInteger(
+          process.env.THROTTLE_DELETION_TTL,
+          900_000,
+          "THROTTLE_DELETION_TTL",
+        ),
+        limit: positiveInteger(
+          process.env.THROTTLE_DELETION_LIMIT,
+          5,
+          "THROTTLE_DELETION_LIMIT",
+        ),
+      },
     },
 
     // ---- Rate limiting (better-auth internal, separate from ThrottlerModule) ----
@@ -320,6 +335,8 @@ export const envValidationSchema = z
     THROTTLE_SHORT_LIMIT: z.coerce.number().int().positive().default(5),
     THROTTLE_MEDIUM_LIMIT: z.coerce.number().int().positive().default(30),
     THROTTLE_LONG_LIMIT: z.coerce.number().int().positive().default(150),
+    THROTTLE_DELETION_TTL: z.coerce.number().int().positive().default(900_000),
+    THROTTLE_DELETION_LIMIT: z.coerce.number().int().positive().default(5),
 
     // ---- Rate limiting (better-auth) ----
     RATE_LIMIT_WINDOW: z.coerce.number().int().positive().default(60),

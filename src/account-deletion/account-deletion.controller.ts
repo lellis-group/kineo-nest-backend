@@ -26,21 +26,27 @@ export class AccountDeletionController {
   @Post("confirm-deletion")
   @AllowAnonymous()
   @HttpCode(200)
-  @ThrottleWithConfig("short")
+  @ThrottleWithConfig("deletion")
   @ApiOperation({
     summary: "Confirm account deletion with the email link token (no session)",
   })
   @ApiResponse({
     status: 200,
-    description: "Account and all its data hard-deleted",
+    description:
+      "Account anonymized, access revoked, data purged after the grace period",
   })
   @ApiResponse({
     status: 404,
     description: "Invalid or already used confirmation link",
   })
   @ApiResponse({
+    status: 409,
+    description:
+      "Listings still hold active applications from other candidates",
+  })
+  @ApiResponse({
     status: 410,
-    description: "Expired link or already deleted account",
+    description: "Expired link or already anonymized account",
   })
   @ZodSerializerDto(AccountDeletionResult)
   async confirmDeletion(@Body() dto: ConfirmAccountDeletionDto) {

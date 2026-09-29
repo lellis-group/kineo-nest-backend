@@ -25,6 +25,8 @@ const RECRUITING_LISTING_STATUSES: ListingStatus[] = [
   "FILLED",
 ];
 
+type ApplicationClient = PrismaService | Prisma.TransactionClient;
+
 const DEFAULT_CONFLICT_MESSAGE =
   "This resource has pending applications from other candidates. Close or cancel the linked listings before deleting it.";
 
@@ -37,7 +39,7 @@ const DEFAULT_CONFLICT_MESSAGE =
  * not ours to erase on someone else's behalf.
  */
 export async function assertNoThirdPartyApplications(
-  prisma: PrismaService,
+  prisma: ApplicationClient,
   ownerProfileId: string,
   listingFilter: Prisma.ReplacementListingWhereInput,
   message: string = DEFAULT_CONFLICT_MESSAGE,
