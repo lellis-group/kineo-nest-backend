@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
-import { countThirdPartyActiveApplications } from "../common/application-guard";
+import { countThirdPartyApplications } from "../common/application-guard";
 import { durationSeconds } from "../config/configuration";
 import { isHardenedEnv } from "../config/env";
 import { emailVerificationStatusPlugin } from "./auth/email-verification-status";
@@ -271,7 +271,7 @@ export function createAuth(
             name: user.name,
             url: buildFrontendAuthUrl(url, "/goodbye", undefined, frontendUrl),
             listingsUrl: `${frontendUrl}/listings/mine`,
-            pendingApplications: await countThirdPartyActiveApplications(
+            thirdPartyApplications: await countThirdPartyApplications(
               prisma,
               user.id,
             ),

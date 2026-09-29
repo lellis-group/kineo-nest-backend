@@ -8,10 +8,11 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
-  REASON_ANOTHER_CANDIDATE_SELECTED,
+  ALL_PLATFORM_REJECTION_REASONS,
+  AUTO_REJECTION_PLATFORM_REASONS,
   REASON_CANDIDATE_UNAVAILABLE,
 } from "../applications/rejection-reasons";
-import { assertNoThirdPartyApplications } from "../common/application-guard";
+import { detachThirdPartyApplications } from "../common/ghost-listing";
 import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfileIdSafe } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
@@ -29,9 +30,6 @@ const RESET_PASSWORD_IDENTIFIER_PREFIX = "reset-password:";
 const ANONYMIZED_LISTING_TITLE = "Offre retirée";
 const ANONYMIZED_PRACTICE_FIELD = "—";
 
-const THIRD_PARTY_APPLICATIONS_MESSAGE =
-  "Your listings still have active applications from other candidates. Close or cancel them before deleting your account.";
-
 /**
  * Every reason `accept` may have written when it auto-rejected the other
  * candidates of a listing. Anonymizing that accepted candidate invalidates
@@ -44,14 +42,16 @@ const THIRD_PARTY_APPLICATIONS_MESSAGE =
  * have its candidate restored — an acceptable price for not adding a column to
  * every application row to serve a case that is itself rare.
  *
- * The English spelling is listed because rows written before the reasons were
+ * Sourced from `rejection-reasons.ts` rather than spelled out here. This list
+ * and `ALL_PLATFORM_REJECTION_REASONS` answer the same question from opposite
+ * sides — is this string ours? — so two literals would drift the moment a
+ * reason is reworded, and one side would quietly stop matching.
+ *
+ * The English spelling is included because rows written before the reasons were
  * translated still carry it; without it an erasure would leave those candidates
  * rejected on a premise that no longer holds.
  */
-const AUTO_REJECTION_REASONS: string[] = [
-  REASON_ANOTHER_CANDIDATE_SELECTED,
-  "Another candidate was selected for this listing",
-];
+const AUTO_REJECTION_REASONS: string[] = [...AUTO_REJECTION_PLATFORM_REASONS];
 
 /**
  * Machine-readable discriminators for the failures this endpoint can return.
@@ -185,19 +185,28 @@ export class AccountDeletionService {
 
         const profileId = await getOwnedProfileIdSafe(tx, userId);
 
-        if (profileId) {
-          await assertNoThirdPartyApplications(
-            tx,
-            profileId,
-            {
-              OR: [
-                { createdById: profileId },
-                { practice: { ownerId: profileId } },
-              ],
-            },
-            THIRD_PARTY_APPLICATIONS_MESSAGE,
-          );
-        }
+        // No `assertNoThirdPartyApplications` here, unlike the three endpoints
+        // that delete a listing, a practice or a profile directly.
+        //
+        // Those run the deletion immediately, so a third-party application on
+        // the row would be cascaded away with nothing to preserve it: the
+        // guard is the only thing standing between them and that. An erasure
+        // is different — `anonymize` runs inside the same transaction and
+        // detaches those applications onto ghost listings first, so the
+        // cascade no longer reaches them.
+        //
+        // Guarding here instead made the detachment unreachable: it lives
+        // after this point, so it could only ever run when there was nothing to
+        // preserve. A practice with a filled listing, which by definition
+        // carries an ACCEPTED row, could not erase their account at all, and
+        // the 409 told them to close their listings — which cannot un-fill
+        // one. An article 17 request has to be answerable, and it is: the
+        // erasure goes through and the candidate keeps their application, its
+        // status, the practice's decision and the timestamps.
+        //
+        // The audit trail below is what makes this accountable rather than
+        // silent: if the trail cannot be updated the whole transaction rolls
+        // back, so the erasure is never carried out unrecorded.
 
         // The trail must move to ANONYMIZED in the same transaction as the
         // anonymization itself. If it cannot, the account would be erased with
@@ -272,6 +281,33 @@ export class AccountDeletionService {
     const listingFilter: Prisma.ReplacementListingWhereInput = {
       OR: [{ createdById: profileId }, { practice: { ownerId: profileId } }],
     };
+
+    // The practice's own words about the candidates who applied. Runs BEFORE
+    // the detachment below, and that ordering is load-bearing: the scrub is
+    // scoped to `listing: listingFilter`, so detaching first would move the
+    // rows onto ghost listings and put them permanently out of reach — a
+    // candidate then kept a practice's free-text rejection reason on a row the
+    // erasure had preserved.
+    //
+    // Only the practice's prose goes. A reason this platform wrote describes a
+    // transition of the listing rather than a judgement about a person, and
+    // clearing it would leave the candidate with a bare « Rejetée » and no way
+    // to tell a decision that was never taken from one that was.
+    await tx.application.updateMany({
+      where: {
+        listing: listingFilter,
+        applicantId: { not: profileId },
+        rejectionReason: { notIn: ALL_PLATFORM_REJECTION_REASONS },
+      },
+      data: { rejectionReason: null },
+    });
+
+    // Before anything below overwrites the listings. The applications pointing
+    // at them belong to other candidates, and the cascade that removes this
+    // account would take them with it; the ghosts have to be created while those
+    // listings are still the ones the rows reference. It also settles the rows
+    // it moves, after the scrub above, so `REASON_LISTING_ERASED` survives it.
+    await detachThirdPartyApplications(tx, profileId, listingFilter, now);
 
     await tx.profile.update({
       where: { id: profileId },
@@ -362,14 +398,6 @@ export class AccountDeletionService {
     }
 
     await this.releaseAcceptedPlacements(tx, profileId, now);
-
-    // Applications the person received. The rejection reason is written by the
-    // account holder and read by the applicant; the status is kept so the
-    // applicant still sees a coherent history.
-    await tx.application.updateMany({
-      where: { listing: listingFilter, applicantId: { not: profileId } },
-      data: { rejectionReason: null },
-    });
   }
 
   /**
