@@ -268,6 +268,43 @@ describe("AccountDeletionService", () => {
     expect(updates.listing).toMatchObject({ description: null });
   });
 
+  it("takes the published listings out of circulation", async () => {
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+    });
+
+    await service.confirmDeletion("abc");
+
+    // An OPEN listing keeps showing up in the public search and keeps
+    // accepting candidates, and the purge would cascade away any application
+    // created in between. Terminal, so `recalcListingStatus` will not reopen.
+    expect(updates.listing).toMatchObject({ status: "CANCELLED" });
+  });
+
+  it("nulls the rejection reason a practice wrote about the person", async () => {
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+    });
+
+    await service.confirmDeletion("abc");
+
+    // Sent applications: the text was authored by the practice, and the
+    // practice could read it back through `findMine` for the whole grace
+    // period. The reverse direction has its own scrub.
+    const sent = updates.applications?.find(
+      (update) => update.message === null && update.withdrawnReason === null,
+    );
+    expect(sent).toMatchObject({ rejectionReason: null });
+
+    // Received applications: the reason the person wrote is removed there too.
+    const received = updates.applications?.find(
+      (update) => update.rejectionReason === null && update.message === undefined,
+    );
+    expect(received).toBeDefined();
+  });
+
   it("redacts the free text the account holder wrote on both sides", async () => {
     const { service, updates } = makeService({
       token: liveToken,

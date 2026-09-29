@@ -237,7 +237,21 @@ export class AccountDeletionService {
 
     await tx.replacementListing.updateMany({
       where: listingFilter,
-      data: { title: ANONYMIZED_LISTING_TITLE, description: null },
+      data: {
+        title: ANONYMIZED_LISTING_TITLE,
+        description: null,
+        // Out of circulation. `findAll` pins `status: "OPEN"` and filters no
+        // other way, and `create` only refuses applications to anything but
+        // OPEN / IN_DISCUSSION, so a listing left OPEN would keep appearing in
+        // the public search and keep accepting candidates for the whole grace
+        // period — applications the purge would then cascade away, with no
+        // warning to the practice or to the new candidate.
+        //
+        // CANCELLED rather than CLOSED: nobody closed this listing, it stopped
+        // existing with its owner. Both are terminal, so `recalcListingStatus`
+        // will not reopen them.
+        status: "CANCELLED",
+      },
     });
 
     // Applications the person sent. The free text is their own personal data
@@ -266,9 +280,19 @@ export class AccountDeletionService {
       data: { status: "WITHDRAWN", respondedAt: now },
     });
 
+    // Free text the person wrote, in both directions.
+    //
+    // `rejectionReason` on the applications they SENT was written by a
+    // practice about them, not by them, and the practice could still read it
+    // through `findMine` for the whole grace period. The anonymization has to
+    // cover it here: the later scrub below only handles the opposite direction.
     await tx.application.updateMany({
       where: { applicantId: profileId },
-      data: { message: null, withdrawnReason: null },
+      data: {
+        message: null,
+        withdrawnReason: null,
+        rejectionReason: null,
+      },
     });
 
     for (const { listingId } of listingsToRecalculate) {
