@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { ApplicationStatus, Prisma } from "../generated/prisma/client";
@@ -26,48 +27,6 @@ export class ApplicationsService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {}
-
-  private async recalcListingStatus(
-    tx: Prisma.TransactionClient,
-    listingId: string,
-  ) {
-    const listing = await tx.replacementListing.findUnique({
-      where: { id: listingId },
-    });
-
-    if (
-      !listing ||
-      listing.status === "FILLED" ||
-      listing.status === "CLOSED" ||
-      listing.status === "CANCELLED"
-    ) {
-      return;
-    }
-
-    const activeCount = await tx.application.count({
-      where: { listingId, status: { in: ACTIVE_STATUSES } },
-    });
-
-    let nextStatus = listing.status;
-
-    if (activeCount === 0) {
-      nextStatus = "OPEN";
-    } else if (
-      listing.maxApplications &&
-      activeCount >= listing.maxApplications
-    ) {
-      nextStatus = "FULL";
-    } else {
-      nextStatus = "IN_DISCUSSION";
-    }
-
-    if (nextStatus !== listing.status) {
-      await tx.replacementListing.update({
-        where: { id: listingId },
-        data: { status: nextStatus },
-      });
-    }
-  }
 
   /**
    * Totals per status over the whole collection, so tab counters stay stable
@@ -227,7 +186,7 @@ export class ApplicationsService {
         orderBy: { createdAt: "desc" },
         include: {
           applicant: {
-            include: { user: { select: { name: true, image: true } } },
+            include: { user: { select: { name: true, image: true, deletedAt: true } } },
           },
         },
       }),
@@ -293,7 +252,7 @@ export class ApplicationsService {
       include: {
         listing: { include: { practice: true } },
         applicant: {
-          include: { user: { select: { name: true, image: true } } },
+          include: { user: { select: { name: true, image: true, deletedAt: true } } },
         },
       },
     });
@@ -489,7 +448,7 @@ export class ApplicationsService {
           },
         });
 
-        await this.recalcListingStatus(tx, application.listingId);
+        await recalcListingStatus(tx, application.listingId);
 
         return updated;
       },
@@ -540,7 +499,7 @@ export class ApplicationsService {
           },
         });
 
-        await this.recalcListingStatus(tx, application.listingId);
+        await recalcListingStatus(tx, application.listingId);
 
         return updated;
       },
