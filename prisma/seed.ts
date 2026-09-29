@@ -1,4 +1,5 @@
 import { hashPassword } from "better-auth/crypto";
+import { SYSTEM_SCAFFOLD } from "../src/common/system-scaffold";
 import { Prisma } from "../src/generated/prisma/client";
 import {
   ApplicationStatus,
@@ -9,6 +10,10 @@ import {
 import { createPrismaClient } from "../src/lib/prisma";
 
 const prisma = createPrismaClient();
+
+/** Must stay in sync with the `system_scaffold` migration. */
+const SYSTEM_SCAFFOLD_EMAIL = "system@deleted.invalid";
+const SYSTEM_PRACTICE_NAME = "Annonce retirée par son auteur";
 
 const PASSWORD = "Password123!";
 const USER_COUNT = 40;
@@ -178,13 +183,89 @@ function shuffle<T>(array: T[]): T[] {
 async function main() {
   console.log("--- Cleaning the database ---");
 
+  // The system scaffold — the user, profile and practice that the ghost
+  // listings are attached to — has to survive the wipe. It is seeded by the
+  // `system_scaffold` migration, and deleting it here made every subsequent
+  // account erasure fail with a foreign key violation on
+  // `replacement_listing_practiceId_fkey`, which is a GDPR request blowing up
+  // in a 500 because a fixture script had been careless.
+  const systemRows = await prisma.practice.findMany({
+    where: { id: SYSTEM_SCAFFOLD.practiceId },
+    select: { id: true },
+  });
+  const keepsSystemScaffold = systemRows.length > 0;
+
+  // Applications and listings go unconditionally, ghost listings included: the
+  // ghosts are fixture rows just like the rest, and sparing them made every
+  // reseed pile up one more batch of orphaned listings and applications.
   await prisma.application.deleteMany();
   await prisma.replacementListing.deleteMany();
-  await prisma.practice.deleteMany();
-  await prisma.profile.deleteMany();
-  await prisma.account.deleteMany();
-  await prisma.session.deleteMany();
-  await prisma.user.deleteMany();
+
+  // Below this point only the three scaffold rows are protected. They hold no
+  // applications and no listings once the two calls above have run, so nothing
+  // further can cascade into them.
+  await prisma.practice.deleteMany({
+    where: keepsSystemScaffold
+      ? { id: { not: SYSTEM_SCAFFOLD.practiceId } }
+      : undefined,
+  });
+  await prisma.profile.deleteMany({
+    where: keepsSystemScaffold
+      ? { id: { not: SYSTEM_SCAFFOLD.profileId } }
+      : undefined,
+  });
+  await prisma.account.deleteMany({
+    where: keepsSystemScaffold
+      ? { userId: { not: SYSTEM_SCAFFOLD.userId } }
+      : undefined,
+  });
+  await prisma.session.deleteMany({
+    where: keepsSystemScaffold
+      ? { userId: { not: SYSTEM_SCAFFOLD.userId } }
+      : undefined,
+  });
+  await prisma.user.deleteMany({
+    where: keepsSystemScaffold
+      ? { id: { not: SYSTEM_SCAFFOLD.userId } }
+      : undefined,
+  });
+
+  if (!keepsSystemScaffold) {
+    // Database migrated before the seed learned about the scaffold, or reset
+    // from scratch. Re-create it here so a seeded database is usable for the
+    // erasure flow; the migration is the source of truth in a real deployment.
+    await prisma.user.create({
+      data: {
+        id: SYSTEM_SCAFFOLD.userId,
+        email: SYSTEM_SCAFFOLD_EMAIL,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await prisma.profile.create({
+      data: {
+        id: SYSTEM_SCAFFOLD.profileId,
+        userId: SYSTEM_SCAFFOLD.userId,
+        specialty: "OTHER",
+        profileType: "INSTALLED",
+        isPublic: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await prisma.practice.create({
+      data: {
+        id: SYSTEM_SCAFFOLD.practiceId,
+        ownerId: SYSTEM_SCAFFOLD.profileId,
+        name: SYSTEM_PRACTICE_NAME,
+        address: "—",
+        city: "—",
+        isPublic: false,
+        createdAt: new Date(),
+      },
+    });
+    console.log("--- Re-created the system scaffold (missing) ---");
+  }
 
   console.log("--- Creating users, Better Auth accounts, and profiles ---");
 
