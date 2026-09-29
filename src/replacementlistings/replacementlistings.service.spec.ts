@@ -251,4 +251,121 @@ describe("ReplacementlistingsService", () => {
       BadRequestException,
     );
   });
+
+  describe("findMine status buckets", () => {
+    /**
+     * Records the two distinct `where` clauses the service builds: one for the
+     * page (status-filtered) and one for the counters (not filtered).
+     */
+    function makeService(statuses: string[]) {
+      const pageWheres: Record<string, unknown>[] = [];
+      const countWheres: Record<string, unknown>[] = [];
+      const groupByWheres: Record<string, unknown>[] = [];
+
+      const prisma = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findMany: async ({ where }: { where: Record<string, unknown> }) => {
+            pageWheres.push(where);
+            return [];
+          },
+          count: async ({ where }: { where: Record<string, unknown> }) => {
+            countWheres.push(where);
+            return 0;
+          },
+          groupBy: async ({ where }: { where: Record<string, unknown> }) => {
+            groupByWheres.push(where);
+            return statuses.map((status) => ({ status, _count: 1 }));
+          },
+        },
+      } as unknown as PrismaService;
+
+      const config = { get: () => undefined } as unknown as ConfigService;
+      return {
+        service: new ReplacementlistingsService(prisma, config),
+        pageWheres,
+        countWheres,
+        groupByWheres,
+      };
+    }
+
+    it("counts every status regardless of the active filter", async () => {
+      const { service, groupByWheres } = makeService([
+        "OPEN",
+        "IN_DISCUSSION",
+        "FULL",
+        "FILLED",
+        "CLOSED",
+        "CANCELLED",
+        "DRAFT",
+      ]);
+
+      const result = await service.findMine("user-1", {
+        page: 1,
+        limit: 20,
+        status: ["OPEN", "IN_DISCUSSION", "FULL"],
+      });
+
+      // Counters ignore the filter, otherwise the tabs of the other buckets
+      // would all read 0 and become unclickable.
+      expect(groupByWheres[0]).toEqual({ createdById: profile.id });
+      expect(result.meta.counts).toMatchObject({
+        total: 7,
+        OPEN: 1,
+        IN_DISCUSSION: 1,
+        FULL: 1,
+        FILLED: 1,
+        CLOSED: 1,
+        CANCELLED: 1,
+        DRAFT: 1,
+      });
+    });
+
+    it("applies the status filter to the page but not to the totals", async () => {
+      const { service, pageWheres, countWheres, groupByWheres } = makeService([
+        "OPEN",
+      ]);
+
+      await service.findMine("user-1", {
+        page: 1,
+        limit: 20,
+        status: ["OPEN", "FULL"],
+      });
+
+      expect(pageWheres[0]).toMatchObject({
+        createdById: profile.id,
+        status: { in: ["OPEN", "FULL"] },
+      });
+      expect(countWheres[0]).toMatchObject({
+        createdById: profile.id,
+        status: { in: ["OPEN", "FULL"] },
+      });
+      expect(groupByWheres[0]).not.toHaveProperty("status");
+    });
+
+    it("leaves the page unfiltered when no status is requested", async () => {
+      const { service, pageWheres } = makeService(["OPEN"]);
+
+      await service.findMine("user-1", { page: 1, limit: 20 });
+
+      expect(pageWheres[0]).toEqual({ createdById: profile.id });
+    });
+
+    it("zeroes every counter on an empty collection", async () => {
+      const { service } = makeService([]);
+
+      const result = await service.findMine("user-1", { page: 1, limit: 20 });
+
+      expect(result.meta.counts).toEqual({
+        total: 0,
+        DRAFT: 0,
+        OPEN: 0,
+        IN_DISCUSSION: 0,
+        FULL: 0,
+        FILLED: 0,
+        CLOSED: 0,
+        CANCELLED: 0,
+      });
+    });
+  });
 });

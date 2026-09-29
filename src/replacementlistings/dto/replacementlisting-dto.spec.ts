@@ -166,7 +166,48 @@ describe("ReplacementListing DTO security", () => {
   describe("FindReplacementListingsSchema", () => {
     it("rejects unknown query parameters", () => {
       expect(
-        FindReplacementListingsSchema.safeParse({ status: "OPEN" }).success,
+        FindReplacementListingsSchema.safeParse({ statusz: "OPEN" }).success,
+      ).toBe(false);
+    });
+
+    it("parses a single status into a list", () => {
+      const result = FindReplacementListingsSchema.safeParse({ status: "OPEN" });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toEqual(["OPEN"]);
+      }
+    });
+
+    it("parses several comma-separated statuses, tolerating spaces", () => {
+      const result = FindReplacementListingsSchema.safeParse({
+        status: "OPEN, IN_DISCUSSION ,FULL",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toEqual(["OPEN", "IN_DISCUSSION", "FULL"]);
+      }
+    });
+
+    it("leaves the status undefined when the parameter is absent", () => {
+      const result = FindReplacementListingsSchema.safeParse({ page: "1" });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toBeUndefined();
+      }
+    });
+
+    it("rejects an unknown status instead of silently matching nothing", () => {
+      expect(
+        FindReplacementListingsSchema.safeParse({ status: "PUBLISHED" })
+          .success,
+      ).toBe(false);
+    });
+
+    it("rejects an empty status list rather than matching every listing", () => {
+      // `status=` parses to []: an empty filter must not degrade into "no
+      // filter", which would quietly return the whole collection.
+      expect(
+        FindReplacementListingsSchema.safeParse({ status: "" }).success,
       ).toBe(false);
     });
 

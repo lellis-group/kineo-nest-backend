@@ -1,15 +1,36 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
-import { Specialty } from "../../generated/prisma/enums";
+import { ListingStatus, Specialty } from "../../generated/prisma/enums";
 
 /**
  * Query parameters are plain strings: `z.coerce.boolean()` would turn the
- * literal string "false" into `true`, inverting the filter. Accept only
+ * literal string "false" into "true", inverting the filter. Accept only
  * explicit boolean values or the strings "true"/"false".
  */
 const BooleanQueryParam = z
   .union([z.boolean(), z.literal("true"), z.literal("false")])
   .transform((value) => value === true || value === "true");
+
+/**
+ * One listing status, or several at once.
+ *
+ * The management screen buckets listings into groups a practice reasons about
+ * ("en cours" spans OPEN / IN_DISCUSSION / FULL), so a single-value enum would
+ * force the client to fetch everything and bucket locally — which breaks the
+ * moment the collection is paginated. Comma-separated, the usual shape for an
+ * array on a query string.
+ */
+const ListingStatusFilter = z
+  .string()
+  .transform((raw) =>
+    raw
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  )
+  .pipe(z.array(z.enum(ListingStatus)).min(1))
+  .optional()
+  .describe("Filter by one or more listing statuses (comma-separated)");
 
 export const FindReplacementListingsSchema = z
   .object({
@@ -27,6 +48,7 @@ export const FindReplacementListingsSchema = z
     urgent: BooleanQueryParam.optional().describe(
       "Filter urgent listings only",
     ),
+    status: ListingStatusFilter,
     startDateFrom: z.iso
       .datetime()
       .optional()

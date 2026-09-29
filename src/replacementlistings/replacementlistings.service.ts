@@ -131,6 +131,13 @@ export class ReplacementlistingsService {
     return toReplacementListingDto({ ...listing, applicationsCount: 0 });
   }
 
+  /**
+   * Filters shared by the public search and the owner's collection.
+   *
+   * Deliberately does NOT include `status`: `findAll` pins `status: "OPEN"`
+   * and then spreads this result, so a status key here would silently override
+   * that pin and let the public endpoint return drafts or cancelled listings.
+   */
   private buildListingsWhere(filters: FindReplacementListingsDto) {
     return {
       specialty: filters.specialty,
@@ -181,6 +188,38 @@ export class ReplacementlistingsService {
     };
   }
 
+  /**
+   * Per-status totals over the owner's whole collection, computed WITHOUT the
+   * status filter. The bucket tabs need the counts of every bucket whatever
+   * the active one is — otherwise selecting "En cours" would zero the counters
+   * of "Terminées" and make them unclickable.
+   */
+  private async countListingsByStatus(createdById: string) {
+    const grouped = await this.prisma.replacementListing.groupBy({
+      by: ["status"],
+      where: { createdById },
+      _count: true,
+    });
+
+    const counts = {
+      total: 0,
+      DRAFT: 0,
+      OPEN: 0,
+      IN_DISCUSSION: 0,
+      FULL: 0,
+      FILLED: 0,
+      CLOSED: 0,
+      CANCELLED: 0,
+    } as Record<ListingStatus | "total", number>;
+
+    for (const row of grouped) {
+      counts[row.status] = row._count;
+      counts.total += row._count;
+    }
+
+    return counts;
+  }
+
   async findMine(userId: string, filters: FindReplacementListingsDto) {
     const profileId = await getOwnedProfileId(this.prisma, userId);
 
@@ -188,12 +227,17 @@ export class ReplacementlistingsService {
     const limit = filters.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where = {
+    const baseWhere = {
       createdById: profileId,
       ...this.buildListingsWhere(filters),
     };
 
-    const [data, total] = await Promise.all([
+    const where = {
+      ...baseWhere,
+      status: filters.status ? { in: filters.status } : undefined,
+    };
+
+    const [data, total, counts] = await Promise.all([
       this.prisma.replacementListing.findMany({
         where,
         skip,
@@ -202,13 +246,20 @@ export class ReplacementlistingsService {
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
+      this.countListingsByStatus(profileId),
     ]);
 
     return {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCount(listing)),
       ),
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        counts,
+      },
     };
   }
 

@@ -22,6 +22,23 @@ export class ReplacementListing extends createZodDto(
   ReplacementListingSchema,
 ) {}
 
+/**
+ * Per-status totals over the WHOLE collection, independent of any applied
+ * `status` filter and of the current page. The screen's bucket tabs render
+ * these and never derive a counter from the loaded page, so switching filter
+ * cannot make the numbers jump.
+ */
+export const ListingStatusCountsSchema = z.object({
+  total: z.number().describe("Count across all statuses"),
+  DRAFT: z.number(),
+  OPEN: z.number(),
+  IN_DISCUSSION: z.number(),
+  FULL: z.number(),
+  FILLED: z.number(),
+  CLOSED: z.number(),
+  CANCELLED: z.number(),
+});
+
 export const PaginatedReplacementListingsSchema = z.object({
   data: z.array(ReplacementListingSchema),
   meta: z.object({
@@ -29,6 +46,8 @@ export const PaginatedReplacementListingsSchema = z.object({
     page: z.number(),
     limit: z.number(),
     totalPages: z.number(),
+    /** Only `findMine` returns them; `findAll` is a public, status-OPEN search. */
+    counts: ListingStatusCountsSchema.optional(),
   }),
 });
 
