@@ -6,11 +6,14 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
-import type { PrismaService } from "../prisma.service";
 import {
   REASON_ANOTHER_CANDIDATE_SELECTED,
   REASON_CANDIDATE_UNAVAILABLE,
+  REASON_LISTING_CLOSED,
+  REASON_LISTING_ERASED,
 } from "../applications/rejection-reasons";
+
+import type { PrismaService } from "../prisma.service";
 import { AccountDeletionService } from "./account-deletion.service";
 
 const pepper = "p".repeat(32);
@@ -23,7 +26,9 @@ type Scenario = {
   /** Empty string models a misconfigured deployment with no key at all. */
   pepper?: string;
   /** Active applications the person holds on other people's listings. */
-  activeApplicationsElsewhere?: { listingId: string }[];  /** Applications where the person had been accepted. */
+  activeApplicationsElsewhere?: {
+    listingId: string;
+  }[] /** Applications where the person had been accepted. */;
   acceptedPlacements?: { id: string; listingId: string }[];
   /** Listing statuses, keyed by id, as the recalculation reads them. */
   listings?: Record<
@@ -32,6 +37,16 @@ type Scenario = {
   >;
   /** Active application count per listing id. */
   activeCountPerListing?: Record<string, number>;
+  /** Ids of the listings owned by the account being erased. */
+  ownedListings?: string[];
+  /** Applications other candidates filed on those listings. */
+  thirdPartyCandidates?: {
+    id: string;
+    listingId: string;
+    applicantId: string;
+    status: string;
+    rejectionReason?: string | null;
+  }[];
 };
 
 function makeService(scenario: Scenario) {
@@ -40,6 +55,8 @@ function makeService(scenario: Scenario) {
   const listingUpdates: { id: string }[] = [];
   const applicationUpdates: { id: string }[] = [];
   const verificationDeletes: { where: unknown }[] = [];
+  /** Ghost listings created to carry the third-party applications away. */
+  const ghosts: Record<string, unknown>[] = [];
 
   const tx = {
     verification: {
@@ -80,6 +97,15 @@ function makeService(scenario: Scenario) {
       },
     },
     replacementListing: {
+      findMany: async () => {
+        calls.push("replacementListing.findMany");
+        return (scenario.ownedListings ?? []).map((id) => ({ id }));
+      },
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        calls.push("replacementListing.create");
+        ghosts.push(data);
+        return { id: `ghost-${ghosts.length}` };
+      },
       updateMany: async ({ data }: { data: Record<string, unknown> }) => {
         calls.push("replacementListing.updateMany");
         updates.listing = data;
@@ -112,12 +138,32 @@ function makeService(scenario: Scenario) {
         where,
         select,
       }: {
-        where: { applicantId?: string; status?: unknown };
-        select?: { listingId?: boolean };
+        where: {
+          applicantId?: string;
+          status?: unknown;
+          listingId?: string;
+        };
+        select?: { listingId?: boolean; id?: boolean };
       }) => {
         calls.push("application.findMany");
         if (where.status === "ACCEPTED") {
           return scenario.acceptedPlacements ?? [];
+        }
+        // The detachment pass, per listing. The service asks for
+        // `applicantId: { not: "profile-1" }`; the fake has to apply that
+        // negation itself, otherwise it would hand back the owner's own row too
+        // and the test would pass for the wrong reason.
+        if (select?.id && where.listingId) {
+          return (scenario.thirdPartyCandidates ?? []).filter(
+            (row) =>
+              row.listingId === where.listingId &&
+              row.applicantId !== "profile-1",
+          );
+        }
+        if (select?.rejectionReason) {
+          return (scenario.thirdPartyCandidates ?? []).filter(
+            (row) => row.listingId === where.listingId,
+          ) as { rejectionReason?: string | null }[];
         }
         return select?.listingId
           ? (scenario.activeApplicationsElsewhere ?? []).map((row) => ({
@@ -145,6 +191,19 @@ function makeService(scenario: Scenario) {
       }) => {
         calls.push("application.updateMany");
         (updates.applications ??= []).push({ where, ...data });
+
+        // `updateMany` is filtered by the caller, and the fake has to honour
+        // the filter for the ordering assertions to mean anything: the scrub
+        // is scoped to the account's own listings, and once a row has been
+        // detached onto a ghost it must be out of reach. Blindly reporting
+        // success would have let the scrub pass while reaching nothing.
+        if (where.listing) {
+          const owned = (scenario.ownedListings ?? []).length > 0;
+          if (!owned) {
+            return { count: 0 };
+          }
+        }
+
         return { count: 1 };
       },
     },
@@ -187,6 +246,7 @@ function makeService(scenario: Scenario) {
     listingUpdates,
     applicationUpdates,
     verificationDeletes,
+    ghosts,
   };
 }
 
@@ -221,16 +281,22 @@ describe("AccountDeletionService", () => {
       "user.findUnique",
       "dataDeletionRequest.updateMany",
       "user.update",
+      // The practice's free text goes first, while the rows are still on this
+      // account's listings and the scrub's `listing: listingFilter` predicate
+      // can still reach them.
+      "application.updateMany",
+      // Then the third-party applications are detached, while those listings
+      // are still the rows they point at.
+      "replacementListing.findMany",
       "profile.update",
       "practice.updateMany",
       "replacementListing.updateMany",
       // Read first: the listings to recompute are collected before the flip.
       "application.findMany",
       "application.updateMany",
-      "application.updateMany",
       // And again for the accepted placements, if any.
-      "application.findMany",
       "application.updateMany",
+      "application.findMany",
       "session.deleteMany",
       "account.deleteMany",
       "verification.deleteMany",
@@ -291,7 +357,10 @@ describe("AccountDeletionService", () => {
         code: "TOKEN_EXPIRED",
       },
       {
-        scenario: { token: liveToken, user: { ...pendingUser, deletedAt: new Date() } },
+        scenario: {
+          token: liveToken,
+          user: { ...pendingUser, deletedAt: new Date() },
+        },
         type: GoneException,
         code: "ALREADY_ERASED",
       },
@@ -377,6 +446,91 @@ describe("AccountDeletionService", () => {
     expect(updates.listing).toMatchObject({ status: "CANCELLED" });
   });
 
+  it("moves a third party's accepted application off the listing before it dies", async () => {
+    const { service, ghosts, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "application-accepted",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "ACCEPTED",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    // `Application.listingId` cascades, so an accepted application left on the
+    // erased account's listing dies with it — the candidate's message and the
+    // practice's decision, neither of which they asked to lose.
+    const moved = (updates.applications as Record<string, unknown>[]).find(
+      (update) => update.listingId !== undefined,
+    );
+    expect(moved).toBeDefined();
+
+    // One ghost per original listing, so a candidate who applied to three of the
+    // account's listings keeps three distinct `(listingId, applicantId)` pairs
+    // and cannot trip the unique index.
+    expect(ghosts).toHaveLength(1);
+    expect(ghosts[0]).toMatchObject({
+      status: "CLOSED",
+      urgent: false,
+      title: "Annonce retirée",
+      description: null,
+    });
+  });
+
+  it("detaches before the listings are rewritten, while they are still the referenced rows", async () => {
+    const { service, calls, ghosts } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "application-accepted",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "ACCEPTED",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    // The ordering is invisible in the types and is the whole correctness of
+    // this: once the listings are CANCELLED and overwritten there is nothing
+    // left to copy, and the applications no longer point at a listing we own.
+    expect(calls.indexOf("replacementListing.create")).toBeLessThan(
+      calls.indexOf("replacementListing.updateMany"),
+    );
+    expect(ghosts).toHaveLength(1);
+  });
+
+  it("creates no ghost listing for a listing only the owner applied to", async () => {
+    const { service, ghosts } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "application-own",
+          listingId: "listing-1",
+          applicantId: "profile-1",
+          status: "ACCEPTED",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    // The owner's own rows are theirs to lose, and a ghost per listing would
+    // leave empty containers behind forever.
+    expect(ghosts).toEqual([]);
+  });
+
   it("nulls the rejection reason a practice wrote about the person", async () => {
     const { service, updates } = makeService({
       token: liveToken,
@@ -395,7 +549,8 @@ describe("AccountDeletionService", () => {
 
     // Received applications: the reason the person wrote is removed there too.
     const received = updates.applications?.find(
-      (update) => update.rejectionReason === null && update.message === undefined,
+      (update) =>
+        update.rejectionReason === null && update.message === undefined,
     );
     expect(received).toBeDefined();
   });
@@ -410,12 +565,25 @@ describe("AccountDeletionService", () => {
 
     const applications = updates.applications as Record<string, unknown>[];
 
-    expect(applications[0]).toMatchObject({ status: "WITHDRAWN" });
-    expect(applications[1]).toMatchObject({
-      message: null,
-      withdrawnReason: null,
-    });
-    expect(applications[2]).toMatchObject({ rejectionReason: null });
+    // Selected by content, not by position: the writes happen in an order the
+    // erasure depends on, and indexing them would make any reordering read as
+    // a regression even when nothing changed.
+    expect(
+      applications.find((update) => update.status === "WITHDRAWN"),
+    ).toBeDefined();
+    expect(
+      applications.find(
+        (update) => update.message === null && update.withdrawnReason === null,
+      ),
+    ).toBeDefined();
+    expect(
+      applications.find(
+        (update) =>
+          update.rejectionReason === null &&
+          update.message === undefined &&
+          update.status === undefined,
+      ),
+    ).toBeDefined();
   });
 
   it("rejects a second confirmation of the same link with 404", async () => {
@@ -448,17 +616,346 @@ describe("AccountDeletionService", () => {
     );
   });
 
-  it("refuses the erasure while other candidates hold active applications", async () => {
-    const { service, calls } = makeService({
+  it("lets a filled listing through: the third-party application is detached, not lost", async () => {
+    // The regression this whole pass exists for. A `FILLED` listing always
+    // carries an `ACCEPTED` third-party row, and the guard counted that as a
+    // reason to refuse the erasure — which meant the detachment, living inside
+    // `anonymize` and therefore after the guard, could never run. A practice
+    // holding a placed replacement had no way to erase their account at all,
+    // and the advice the 409 gave ("close your listings") could not help: a
+    // closed listing is not a filled one.
+    const { service, ghosts } = makeService({
       token: liveToken,
       user: pendingUser,
-      activeThirdPartyApplications: 3,
+      // What the guard sees on a filled listing: the ACCEPTED row plus the
+      // PENDING/SHORTLISTED ones `accept` did not clear.
+      activeThirdPartyApplications: 4,
+      ownedListings: ["listing-filled"],
+      thirdPartyCandidates: [
+        {
+          id: "application-accepted",
+          listingId: "listing-filled",
+          applicantId: "profile-2",
+          status: "ACCEPTED",
+        },
+      ],
     });
 
-    await expect(service.confirmDeletion("abc")).rejects.toBeInstanceOf(
-      ConflictException,
+    await service.confirmDeletion("abc");
+
+    expect(ghosts).toHaveLength(1);
+  });
+
+  it("settles the applications it preserves, the way closing a listing does", async () => {
+    // Preserving the row is not enough. A candidate left on `PENDING` reads
+    // "waiting for a decision" on their dashboard, and one left on `ACCEPTED`
+    // reads "you have a replacement to turn up for" — for a practice that no
+    // longer exists and a posting that is gone. `close` and `cancel` already
+    // settle their applications for the same reason.
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-pending",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "PENDING",
+        },
+        {
+          id: "a-shortlisted",
+          listingId: "listing-1",
+          applicantId: "profile-3",
+          status: "SHORTLISTED",
+        },
+        {
+          id: "a-accepted",
+          listingId: "listing-1",
+          applicantId: "profile-4",
+          status: "ACCEPTED",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    const settled = (updates.applications as Record<string, unknown>[]).find(
+      (update) =>
+        update.status === "REJECTED" && update.rejectionReason !== undefined,
     );
-    expect(calls).not.toContain("user.update");
+    expect(settled).toMatchObject({
+      status: "REJECTED",
+      rejectionReason: "L'annonce n'existe plus, le cabinet a fermé son compte",
+    });
+    // All three at once, before the move, so the ghost is the only thing they
+    // ever sit on.
+    const settledIds = (settled?.where as { id: { in: string[] } }).id.in;
+    expect(settledIds).toEqual(["a-pending", "a-shortlisted", "a-accepted"]);
+  });
+
+  it("scrubs the practice's free text on a row it still preserves", async () => {
+    // The regression that motivated the ordering below.
+    //
+    // The scrub is scoped to `listing: listingFilter` — the account's own
+    // listings. Detaching first moves the rows onto ghost listings whose
+    // `createdById` is the system profile, so the scrub's predicate stops
+    // matching them entirely. The candidate then keeps a rejection reason
+    // written by a practice that no longer exists, readable forever.
+    //
+    // Nothing about the row being preserved excuses this: preserving the
+    // candidate's message and timestamps is the point, but a practice's prose
+    // about a candidate is the practice's own free text, and it is exactly what
+    // this scrub exists to erase.
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-rejected",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "REJECTED",
+          rejectionReason: "Texte libre ecrit par le cabinet",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    // The real proof is the order: the scrub must be issued while the rows are
+    // still on the account's listings. Checking the `where` clause alone would
+    // pass whatever the order, because the predicate is identical either way —
+    // only the moment the rows moved differs.
+    const applications = updates.applications ?? [];
+    const scrubIndex = applications.findIndex(
+      (update) =>
+        update.rejectionReason === null && update.status === undefined,
+    );
+    // The detach is the update that carries a `listingId`.
+    const detachIndex = applications.findIndex(
+      (update) => update.listingId !== undefined,
+    );
+
+    expect(scrubIndex).toBeGreaterThanOrEqual(0);
+    expect(detachIndex === -1 || scrubIndex < detachIndex).toBe(true);
+  });
+
+  it("still writes the platform reason after the scrub has run", async () => {
+    // Order matters in both directions. Scrub first, so the practice's prose
+    // goes; detach second, so `REASON_LISTING_ERASED` — ours, not theirs —
+    // lands on the row afterwards and is not scrubbed away with it.
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-pending",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "PENDING",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    const applications = updates.applications as Record<string, unknown>[];
+    const withOurReason = applications.findIndex(
+      (update) => update.rejectionReason === REASON_LISTING_ERASED,
+    );
+    const scrub = applications.findIndex(
+      (update) =>
+        update.rejectionReason === null && update.status === undefined,
+    );
+
+    expect(withOurReason).toBeGreaterThanOrEqual(0);
+    // The scrub is written first; the platform reason lands on the settled row
+    // after it and therefore survives.
+    expect(scrub === -1 || scrub < withOurReason).toBe(true);
+  });
+
+  it("never leaves a preserved row with a status the candidate cannot explain", async () => {
+    // The case the platform-reason list alone does not cover. A row that was
+    // already `REJECTED` carrying the practice's prose is preserved, the prose
+    // is erased, and the status stays `REJECTED` — so the frontend falls back
+    // to « Aucun motif n'a été communiqué par le cabinet ». That is false: no
+    // cabinet decided anything, the account is gone.
+    //
+    // The truth is the listing is gone, which is exactly what
+    // `REASON_LISTING_ERASED` says. It goes on every preserved row, on top of
+    // whatever reason survived, so the banner always explains the state the
+    // candidate is actually in.
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-free-text",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "REJECTED",
+          rejectionReason: "Texte libre ecrit par le cabinet",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    const stamped = (updates.applications ?? []).find(
+      (update) => update.rejectionReason === REASON_LISTING_ERASED,
+    ) as { where: { id: { in: string[] } } } | undefined;
+
+    // The already-rejected row is included, not skipped as "already decided".
+    expect(stamped?.where.id.in).toContain("a-free-text");
+  });
+
+  it("keeps a reachable platform reason on a preserved row and clears the practice's prose", async () => {
+    // Both halves of the same predicate. A reason the platform wrote describes
+    // what happened to the listing; a practice's free text is the practice's
+    // own and goes with the account. Clearing the first as well would leave the
+    // candidate reading « Rejetée » with the frontend's fallback — « Aucun
+    // motif n'a été communiqué par le cabinet » — which is false, because no
+    // cabinet ever decided anything.
+    //
+    // `REASON_LISTING_CLOSED` is absent from the assertions below on purpose:
+    // `close` settles the applications before the status flips, so it cannot
+    // still be sitting on a row the erasure preserves. Listing it as protected
+    // would claim a guarantee no row can rely on — see `PLATFORM_REJECTION_REASONS`.
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-platform",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "REJECTED",
+          rejectionReason: REASON_ANOTHER_CANDIDATE_SELECTED,
+        },
+        {
+          id: "a-free-text",
+          listingId: "listing-1",
+          applicantId: "profile-3",
+          status: "REJECTED",
+          rejectionReason: "Texte libre ecrit par le cabinet",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    const scrub = (updates.applications ?? []).find(
+      (update) =>
+        update.rejectionReason === null && update.status === undefined,
+    ) as { where: { rejectionReason: { notIn: string[] } } } | undefined;
+
+    expect(scrub).toBeDefined();
+    expect(scrub?.where.rejectionReason.notIn).toContain(
+      REASON_ANOTHER_CANDIDATE_SELECTED,
+    );
+    expect(scrub?.where.rejectionReason.notIn).toContain(REASON_LISTING_ERASED);
+    // The legacy spelling too, or a pre-translation row would be erased as if
+    // a practice had written it.
+    expect(scrub?.where.rejectionReason.notIn).toContain(
+      "Another candidate was selected for this listing",
+    );
+    // Exactly the reachable set — no more, or the practice's own prose would
+    // start surviving.
+    expect(scrub?.where.rejectionReason.notIn).not.toContain(
+      REASON_LISTING_CLOSED,
+    );
+  });
+
+  it("settles a rejected row but never touches a withdrawal", async () => {
+    const { service, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-rejected",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "REJECTED",
+        },
+        {
+          id: "a-withdrawn",
+          listingId: "listing-1",
+          applicantId: "profile-3",
+          status: "WITHDRAWN",
+        },
+        {
+          id: "a-pending",
+          listingId: "listing-1",
+          applicantId: "profile-4",
+          status: "PENDING",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    const settle = (updates.applications ?? []).find(
+      (update) => update.rejectionReason === REASON_LISTING_ERASED,
+    ) as { where: { id: { in: string[] } } } | undefined;
+
+    // The withdrawal is left out: a candidate who pulled out did so
+    // themselves, and the listing being gone afterwards does not change the
+    // account of that. The already-rejected row is settled instead, because its
+    // free text is about to be scrubbed and the status must stay explicable.
+    expect(settle?.where.id.in).toContain("a-rejected");
+    expect(settle?.where.id.in).toContain("a-pending");
+    expect(settle?.where.id.in).not.toContain("a-withdrawn");
+    const move = (updates.applications ?? []).find(
+      (update) => update.listingId !== undefined,
+    ) as { where: { id: { in: string[] } } } | undefined;
+    expect(move?.where.id.in).toEqual([
+      "a-rejected",
+      "a-withdrawn",
+      "a-pending",
+    ]);
+  });
+
+  it("preserves a third-party application whatever its status", async () => {
+    // A `REJECTED` row still holds the candidate's message and the practice's
+    // decision, and both belong to someone who never asked to be erased.
+    const { service, ghosts, updates } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      ownedListings: ["listing-1"],
+      thirdPartyCandidates: [
+        {
+          id: "a-rejected",
+          listingId: "listing-1",
+          applicantId: "profile-2",
+          status: "REJECTED",
+        },
+        {
+          id: "a-withdrawn",
+          listingId: "listing-1",
+          applicantId: "profile-3",
+          status: "WITHDRAWN",
+        },
+      ],
+    });
+
+    await service.confirmDeletion("abc");
+
+    expect(ghosts).toHaveLength(1);
+    const moved = (updates.applications as Record<string, unknown>[]).find(
+      (update) => update.listingId !== undefined,
+    );
+    // One ghost, both settled rows on it — so the unique
+    // `(listingId, applicantId)` index cannot be tripped either.
+    expect((moved?.where as { id: { in: string[] } }).id.in).toEqual([
+      "a-rejected",
+      "a-withdrawn",
+    ]);
   });
 
   it("rolls back when no pending erasure request matches the confirmation", async () => {
@@ -489,7 +986,7 @@ describe("AccountDeletionService", () => {
     } as unknown as PrismaService;
     const config = {
       get: (key: string) =>
-      key === "deletionPepper" ? (scenario.pepper ?? pepper) : undefined,
+        key === "deletionPepper" ? (scenario.pepper ?? pepper) : undefined,
     } as unknown as ConfigService;
 
     await expect(
@@ -581,7 +1078,9 @@ describe("AccountDeletionService", () => {
       respondedAt: null,
     });
 
-    expect(listingUpdates).toEqual([{ id: "listing-7", status: "IN_DISCUSSION" }]);
+    expect(listingUpdates).toEqual([
+      { id: "listing-7", status: "IN_DISCUSSION" },
+    ]);
   });
 
   it("never reopens a listing its owner closed or cancelled", async () => {

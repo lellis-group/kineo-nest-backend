@@ -131,6 +131,25 @@ describe("DataLifecycleService", () => {
       expect(daysBack(where.deletedAt.lt)).toBe(90);
     });
 
+    it("cannot reach the system scaffold that the ghost listings hang from", async () => {
+      const { prisma, calls } = makePrisma();
+
+      await new DataLifecycleService(prisma).purgeAnonymizedAccounts();
+
+      // The scaffold is an ordinary user row with `deletedAt` NULL, and this is
+      // the only filter. The ghost listings a candidate's surviving application
+      // points at belong to that profile, so a sweep that ever stopped matching
+      // on `deletedAt` — or a migration that stamped the row — would cascade
+      // the applications away after the grace period and undo the detachment
+      // silently. The assertion is on the shape of the filter, because the row
+      // itself lives in the database.
+      const where = calls[0].where as unknown as {
+        deletedAt: { lt: Date };
+      };
+      expect(Object.keys(where)).toEqual(["deletedAt"]);
+      expect(where.deletedAt.lt).toBeInstanceOf(Date);
+    });
+
     it("never throws when the purge fails", async () => {
       const prisma = {
         user: {
