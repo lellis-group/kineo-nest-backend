@@ -270,7 +270,7 @@ export function createAuth(
             email: user.email,
             name: user.name,
             url: buildFrontendAuthUrl(url, "/goodbye", undefined, frontendUrl),
-            listingsUrl: `${frontendUrl}/mes-annonces`,
+            listingsUrl: `${frontendUrl}/listings/mine`,
             pendingApplications: await countThirdPartyActiveApplications(
               prisma,
               user.id,
