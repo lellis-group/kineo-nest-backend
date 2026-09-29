@@ -43,6 +43,14 @@ export const ApplicationApplicantSchema = z.object({
     name: z.string().nullable(),
     image: z.string().nullable(),
   }),
+  /**
+   * True once the candidate's account was erased (art. 17 GDPR). Every personal
+   * field above is then blank by construction, so the receiving practice needs
+   * to be told why rather than shown an empty card.
+   */
+  anonymized: z
+    .boolean()
+    .describe("Candidate erased their account; personal fields are blank"),
 });
 
 export const ApplicationSchema = z.object({

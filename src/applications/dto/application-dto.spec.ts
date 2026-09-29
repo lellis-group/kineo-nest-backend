@@ -59,9 +59,28 @@ describe("Application DTO security", () => {
           city: "Paris",
           verified: true,
           user: { name: "Alice Martin", image: null },
+          anonymized: false,
         },
       });
       expect(result.success).toBe(true);
+    });
+
+    it("rejects an applicant without the anonymized flag", () => {
+      const result = ApplicationSchema.safeParse({
+        ...validApplication,
+        applicant: {
+          id: "clh8zq6w70000wqf4vlonix5c",
+          specialty: "DENTIST",
+          profileType: "REPLACEMENT",
+          city: null,
+          verified: false,
+          user: { name: null, image: null },
+        },
+      });
+
+      // Required, not optional: the practice must always be able to tell a
+      // blank card apart from an erased candidate.
+      expect(result.success).toBe(false);
     });
   });
 

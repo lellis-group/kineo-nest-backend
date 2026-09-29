@@ -29,7 +29,7 @@ type EmbeddedApplicant = {
   profileType: ProfileType;
   city: string | null;
   verified: boolean;
-  user: { name: string | null; image: string | null };
+  user: { name: string | null; image: string | null; deletedAt: Date | null };
 };
 
 function toEmbeddedListingDto(listing: EmbeddedListing) {
@@ -47,13 +47,20 @@ function toEmbeddedListingDto(listing: EmbeddedListing) {
 }
 
 function toEmbeddedApplicantDto(applicant: EmbeddedApplicant) {
+  const { deletedAt, ...user } = applicant.user;
+
   return {
     id: applicant.id,
     specialty: applicant.specialty,
     profileType: applicant.profileType,
     city: applicant.city,
     verified: applicant.verified,
-    user: { ...applicant.user },
+    user,
+    // A boolean, not the date: the owner needs to know the candidate is gone
+    // and unreachable, but the grace period before the row is physically
+    // dropped is an internal lifecycle detail with no bearing on their
+    // decision. Without it the UI can only render a nameless card.
+    anonymized: deletedAt !== null,
   };
 }
 
