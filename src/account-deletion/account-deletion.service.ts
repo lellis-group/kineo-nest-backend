@@ -23,6 +23,9 @@ import { PrismaService } from "../prisma.service";
 /** Prefix of the single-use deletion token rows in the `verification` table. */
 const DELETE_ACCOUNT_IDENTIFIER_PREFIX = "delete-account-";
 
+/** Prefix better-auth gives password-reset rows in the same table. */
+const RESET_PASSWORD_IDENTIFIER_PREFIX = "reset-password:";
+
 const ANONYMIZED_LISTING_TITLE = "Offre retirée";
 const ANONYMIZED_PRACTICE_FIELD = "—";
 
@@ -225,7 +228,7 @@ export class AccountDeletionService {
           now,
         });
         await this.revokeAccess(tx, userId);
-        await this.purgeVerificationRows(tx, userId, user.email);
+        await this.purgeVerificationRows(tx, userId);
 
         return userId;
       },
@@ -426,23 +429,29 @@ export class AccountDeletionService {
   }
 
   /**
-   * `verification` has no foreign key to `user`, so the rows keyed by the
-   * account (email verification, password reset, leftover deletion links) are
-   * cleared explicitly. The hourly expiry sweep is the safety net.
+   * Clears the single-use links the account still holds.
+   *
+   * `verification` has no foreign key to `user`, so those rows survive the
+   * account on their own. Two identifiers exist in this deployment, and both
+   * are matched by prefix on the user id kept in `value`:
+   * `delete-account-<token>` (written by better-auth on the erasure request)
+   * and `reset-password:<token>`. Nothing writes a raw email into `identifier`
+   * — email verification and address change use a signed JWT instead — so
+   * there is no email-keyed row to clear here, and none to look for.
+   *
+   * An outstanding password reset is worth removing rather than waiting out:
+   * the credential it would restore is already gone, so the link can only fail.
    */
   private async purgeVerificationRows(
     tx: Transaction,
     userId: string,
-    email: string,
   ): Promise<void> {
     await tx.verification.deleteMany({
       where: {
+        value: userId,
         OR: [
-          { identifier: email },
-          {
-            identifier: { startsWith: DELETE_ACCOUNT_IDENTIFIER_PREFIX },
-            value: userId,
-          },
+          { identifier: { startsWith: DELETE_ACCOUNT_IDENTIFIER_PREFIX } },
+          { identifier: { startsWith: RESET_PASSWORD_IDENTIFIER_PREFIX } },
         ],
       },
     });

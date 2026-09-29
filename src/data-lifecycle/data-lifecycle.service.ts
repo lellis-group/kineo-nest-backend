@@ -37,7 +37,9 @@ function positiveIntegerFromEnv(
  * - `session`: expired rows keep the session token, IP and user agent forever.
  * - `verification`: better-auth only deletes expired rows lazily, when a given
  *   identifier is read; unread rows (abandoned sign-up, one-time delete links)
- *   would stay forever. Rows carry the raw email as `identifier`.
+ *   would stay forever. Rows hold a pseudonymous user id in `value` and a
+ *   prefixed token in `identifier` (`delete-account-*`, `reset-password:*`),
+ *   not a raw email: address verification uses a signed JWT.
  * - `dataDeletionRequest`: the accountability trail holds fingerprints, not
  *   plain identifiers, but a justified retention is not a forever one. It is
  *   bounded by two horizons, both anchored on `updatedAt` rather than

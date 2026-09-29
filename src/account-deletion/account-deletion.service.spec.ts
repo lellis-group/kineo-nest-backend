@@ -39,6 +39,7 @@ function makeService(scenario: Scenario) {
   const updates: Record<string, unknown>[] = [];
   const listingUpdates: { id: string }[] = [];
   const applicationUpdates: { id: string }[] = [];
+  const verificationDeletes: { where: unknown }[] = [];
 
   const tx = {
     verification: {
@@ -46,8 +47,9 @@ function makeService(scenario: Scenario) {
         calls.push("verification.findFirst");
         return scenario.token === undefined ? liveToken : scenario.token;
       },
-      deleteMany: async () => {
+      deleteMany: async (args: { where: unknown }) => {
         calls.push("verification.deleteMany");
+        verificationDeletes.push(args);
         return { count: 1 };
       },
     },
@@ -184,6 +186,7 @@ function makeService(scenario: Scenario) {
     updates,
     listingUpdates,
     applicationUpdates,
+    verificationDeletes,
   };
 }
 
@@ -321,6 +324,28 @@ describe("AccountDeletionService", () => {
         ).toMatchObject({ code });
       }
     }
+  });
+
+  it("clears every single-use link the account still holds", async () => {
+    const { service, verificationDeletes } = makeService({
+      token: liveToken,
+      user: pendingUser,
+    });
+
+    await service.confirmDeletion("abc");
+
+    // Token consumption first, then the purge. Both identifiers better-auth
+    // writes must be matched, by prefix, against the user id in `value`.
+    expect(verificationDeletes).toHaveLength(2);
+    expect(verificationDeletes[1]).toMatchObject({
+      where: {
+        value: "user-1",
+        OR: [
+          { identifier: { startsWith: "delete-account-" } },
+          { identifier: { startsWith: "reset-password:" } },
+        ],
+      },
+    });
   });
 
   it("refuses to run without a pepper instead of writing unkeyed hashes", async () => {
