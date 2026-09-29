@@ -16,10 +16,17 @@ model User {
   updatedAt     DateTime  @updatedAt
   emailVerified Boolean   @default(false)
   image         String?
+  /**
+   * Set when the erasure request (art. 17 GDPR) has been executed: every
+   * personal field is already overwritten and access is revoked, the row only
+   * survives until the deferred purge drops it with its cascade.
+   */
+  deletedAt     DateTime?
   accounts      Account[]
   sessions      Session[]
   profile       Profile?
 
+  @@index([deletedAt])
   @@map("user")
 }
 
@@ -114,7 +121,8 @@ enum ApplicationStatus {
 
 enum DataDeletionRequestStatus {
   PENDING
-  EXECUTED
+  ANONYMIZED
+  SUPERSEDED
 }
 
 model Profile {
@@ -209,18 +217,26 @@ model Application {
 /**
  * GDPR accountability trail (art. 5(2), 17): records each account-deletion
  * request and its execution. Deliberately has NO foreign key to `user`: the
- * row must survive the account hard delete (which cascades everything else)
- * so the request/execution timeline stays provable.
+ * row must survive the account purge so the request/execution timeline stays
+ * provable.
+ *
+ * Identifiers are stored as keyed fingerprints (HMAC-SHA256 over a
+ * server-side pepper), never as plaintext. Erasing the account must not leave
+ * the email sitting in an audit table for a year; the fingerprint still allows
+ * an operator to answer "was my request processed?" and to deduplicate
+ * requests without holding personal data.
  */
 model DataDeletionRequest {
   id         String                    @id @default(cuid())
-  userId     String
-  email      String
+  userIdHash String
+  emailHash   String
   status     DataDeletionRequestStatus @default(PENDING)
   createdAt  DateTime                  @default(now())
+  updatedAt  DateTime                  @updatedAt
   executedAt DateTime?
 
-  @@index([userId, createdAt(sort: Desc)])
-  @@index([userId], where: { status: "PENDING" })
+  @@index([userIdHash, createdAt(sort: Desc)])
+  @@index([userIdHash], where: { status: "PENDING" })
+  @@index([status, updatedAt])
   @@map("data_deletion_request")
 }

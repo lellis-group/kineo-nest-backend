@@ -13,7 +13,7 @@ import {
   sendVerificationEmail,
 } from "./email";
 import { buildFrontendAuthUrl } from "./email/links";
-import { logError } from "./log";
+import { deletionHash } from "./hash";
 import { createPrismaClient } from "./prisma";
 
 export interface AuthEnv {
@@ -32,6 +32,7 @@ export interface AuthEnv {
   requireEmailVerification: boolean;
   frontendUrl: string;
   nodeEnv: string;
+  deletionPepper: string;
 }
 
 type EnvSource = NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -89,6 +90,7 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
     nodeEnv: env.NODE_ENV || "development",
+    deletionPepper: env.DELETION_PEPPER || secret,
   };
 }
 
@@ -138,6 +140,7 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
       config.get<boolean>("requireEmailVerification", false) ?? false,
     frontendUrl,
     nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
+    deletionPepper: config.get<string>("deletionPepper", secret) ?? secret,
   };
 }
 
@@ -147,6 +150,7 @@ export function createAuth(
 ) {
   const prisma = prismaClient ?? createPrismaClient();
   const frontendUrl = authEnv.frontendUrl;
+  const pepper = authEnv.deletionPepper;
 
   return betterAuth({
     database: prismaAdapter(prisma, {
@@ -204,27 +208,44 @@ export function createAuth(
         deleteTokenExpiresIn: 60 * 60 * 24,
 
         // Better-auth is limited to the REQUEST phase: mint the single-use token
-        // and email the confirmation link (frontend `/goodbye`). The hard delete
+        // and email the confirmation link (frontend `/goodbye`). The erasure
         // itself is done by `POST /account/confirm-deletion`
         // (AccountDeletionService): it consumes the token without requiring a
-        // session, performs the audit tracking (DataDeletionRequest -> EXECUTED)
-        // and purges `verification` leftovers, all in one transaction. The
-        // deletion callbacks (beforeDelete/afterDelete) are intentionally NOT
-        // wired here — better-auth never deletes the user in this flow, so they
-        // would be dead code.
+        // session, anonymizes the account, flips the audit trail
+        // (DataDeletionRequest PENDING -> ANONYMIZED) and purges `verification`
+        // leftovers, all in one transaction. The deletion callbacks
+        // (beforeDelete/afterDelete) are intentionally NOT wired here —
+        // better-auth never deletes the user in this flow, so they would be
+        // dead code.
         sendDeleteAccountVerification: async ({ user, url }) => {
-          // Accountability trail (art. 5(2) GDPR): record the request before
-          // any execution. Never blocks the deletion flow on a bookkeeping
-          // failure — the hourly sweep keeps the process resilient.
-          try {
-            await prisma.dataDeletionRequest.create({
-              data: { userId: user.id, email: user.email },
+          // Accountability trail (art. 5(2) GDPR): record the request before any
+          // execution, keyed by fingerprint so erasing the account does not
+          // leave the email behind in an audit table.
+          //
+          // The previous pending request is superseded rather than duplicated:
+          // a partial unique index allows only one PENDING row per user, so a
+          // second request would otherwise fail the insert and silently erase
+          // the trail of the first one.
+          //
+          // A failure here is deliberately not swallowed. Letting the email go
+          // out without a trail row would produce an erasure that cannot be
+          // accounted for, which is the exact situation art. 5(2) exists to
+          // prevent.
+          const userIdHash = deletionHash(user.id, pepper);
+
+          await prisma.$transaction(async (tx) => {
+            await tx.dataDeletionRequest.updateMany({
+              where: { userIdHash, status: "PENDING" },
+              data: { status: "SUPERSEDED" },
             });
-          } catch (error) {
-            logError("account.deletion.request.audit_failed", error, {
-              userId: user.id,
+
+            await tx.dataDeletionRequest.create({
+              data: {
+                userIdHash,
+                emailHash: deletionHash(user.email, pepper),
+              },
             });
-          }
+          });
 
           await sendDeleteAccountEmail({
             email: user.email,

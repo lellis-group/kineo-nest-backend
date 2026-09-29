@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isHardenedEnv } from "./env";
 
 function positiveInteger(
   value: string | undefined,
@@ -197,7 +198,15 @@ function configuration() {
     // ---- Database (mirrors validated DATABASE_URL for DI consumers) ----
     databaseUrl: (process.env.DATABASE_URL ?? "").trim(),
 
-    // ---- Data lifecycle ----
+    // ---- GDPR erasure ----
+    // Key of the HMAC fingerprints written to the deletion audit trail. Kept
+    // out of the database on purpose: a dump alone must not reveal who asked
+    // for erasure.
+    // Falling back to the auth secret only happens in development or test,
+    // where `envValidationSchema` already rejects a missing DELETION_PEPPER.
+    deletionPepper:
+      process.env.DELETION_PEPPER || process.env.BETTER_AUTH_SECRET,
+
     dataDeletionRequestRetentionDays: (() => {
       const raw = process.env.DATA_DELETION_REQUEST_RETENTION_DAYS;
       if (!raw) return 365;
@@ -206,6 +215,26 @@ function configuration() {
         throw new Error(
           "DATA_DELETION_REQUEST_RETENTION_DAYS must be a positive integer",
         );
+      }
+      return parsed;
+    })(),
+    pendingDeletionRequestRetentionDays: (() => {
+      const raw = process.env.PENDING_DELETION_REQUEST_RETENTION_DAYS;
+      if (!raw) return 30;
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        throw new Error(
+          "PENDING_DELETION_REQUEST_RETENTION_DAYS must be a positive integer",
+        );
+      }
+      return parsed;
+    })(),
+    accountPurgeGraceDays: (() => {
+      const raw = process.env.ACCOUNT_PURGE_GRACE_DAYS;
+      if (!raw) return 30;
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        throw new Error("ACCOUNT_PURGE_GRACE_DAYS must be a positive integer");
       }
       return parsed;
     })(),
@@ -345,6 +374,13 @@ export const envValidationSchema = z
       .int()
       .positive()
       .optional(),
+    PENDING_DELETION_REQUEST_RETENTION_DAYS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional(),
+    ACCOUNT_PURGE_GRACE_DAYS: z.coerce.number().int().positive().optional(),
+    DELETION_PEPPER: z.string().min(32).optional(),
 
     // ---- Auth ----
     REQUIRE_EMAIL_VERIFICATION: BoolEnum.default("false"),
@@ -360,6 +396,18 @@ export const envValidationSchema = z
         code: "custom",
         message: "SMTP_USER and SMTP_PASS must be set together",
         path: ["SMTP_USER"],
+      });
+    }
+
+    // The pepper keys the deletion audit trail fingerprints. Outside local
+    // environments it must be its own secret: sharing it with
+    // BETTER_AUTH_SECRET would tie the audit trail to an auth key rotation and
+    // hand a single leaked variable two very different capabilities.
+    if (isHardenedEnv(env.NODE_ENV) && !env.DELETION_PEPPER) {
+      ctx.addIssue({
+        code: "custom",
+        message: "DELETION_PEPPER must be set outside development and test",
+        path: ["DELETION_PEPPER"],
       });
     }
   })
