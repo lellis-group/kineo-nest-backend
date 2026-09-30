@@ -110,7 +110,9 @@ describe("recalcListingStatus", () => {
   });
 
   it("never reopens a listing its owner took out of circulation", async () => {
-    for (const status of ["CLOSED", "CANCELLED"]) {
+    // CLOSED_NO_CANDIDATE joins the two: `close` put it there, and nothing
+    // the candidates do afterwards brings the posting back.
+    for (const status of ["CLOSED", "CLOSED_NO_CANDIDATE", "CANCELLED"]) {
       const { tx, updates } = makeTx({
         listing: { id: "l1", status },
         activeCount: 0,

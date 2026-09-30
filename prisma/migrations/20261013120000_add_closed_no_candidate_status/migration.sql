@@ -1,0 +1,14 @@
+-- AlterEnum
+--
+-- `close` now distinguishes "the replacement was retained" (CLOSED, reached
+-- from FILLED) from "the listing was closed without anyone being retained"
+-- (CLOSED_NO_CANDIDATE, reached from IN_DISCUSSION and FULL). The candidate
+-- reads the difference on their own status banner, so the listing has to
+-- carry it: REASON_LISTING_CLOSED and REASON_LISTING_CLOSED_NO_CANDIDATE are
+-- not interchangeable.
+--
+-- Added with ADD VALUE rather than recreated, so this takes no lock and no
+-- table rewrite. It cannot be used in the same transaction as an insert of the
+-- new value, which is not a constraint here: nothing writes CLOSED_NO_CANDIDATE
+-- until the application that knows the status is deployed.
+ALTER TYPE "ListingStatus" ADD VALUE 'CLOSED_NO_CANDIDATE';

@@ -10,6 +10,7 @@ import {
   REASON_CANDIDATE_UNAVAILABLE,
   REASON_LISTING_CANCELLED,
   REASON_LISTING_CLOSED,
+  REASON_LISTING_CLOSED_NO_CANDIDATE,
   REASON_LISTING_ERASED,
 } from "./rejection-reasons";
 
@@ -25,6 +26,7 @@ const UNREACHABLE_REASONS: ReadonlySet<string> = new Set([
   // flips, and a listing already out of circulation takes no new application,
   // so nothing they wrote survives to be read by the scrub.
   REASON_LISTING_CLOSED,
+  REASON_LISTING_CLOSED_NO_CANDIDATE,
   REASON_LISTING_CANCELLED,
   // `releaseAcceptedPlacements` writes it on the erased person's OWN
   // applications, which become `WITHDRAWN` and are not preserved.

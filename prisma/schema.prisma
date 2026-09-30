@@ -108,6 +108,7 @@ enum ListingStatus {
   FULL
   FILLED
   CLOSED
+  CLOSED_NO_CANDIDATE
   CANCELLED
 }
 
@@ -236,7 +237,14 @@ model DataDeletionRequest {
   executedAt DateTime?
 
   @@index([userIdHash, createdAt(sort: Desc)])
-  @@index([userIdHash], where: { status: "PENDING" })
+  // UNIQUE, not a plain index: it is the only thing that makes a second
+  // PENDING request for the same person impossible. `sendDeleteAccountVerification`
+  // supersedes the previous one and inserts a new row, and it runs at
+  // READ COMMITTED, so two concurrent requests can both read "one PENDING" and
+  // both insert. Without UNIQUE both rows land and the erasure trail is
+  // ambiguous. Declared `unique: true` so `migrate dev` stops proposing to
+  // downgrade it — which it did once, silently.
+  @@unique([userIdHash], where: { status: "PENDING" }, map: "data_deletion_request_userIdHash_idx")
   @@index([status, updatedAt])
   @@map("data_deletion_request")
 }

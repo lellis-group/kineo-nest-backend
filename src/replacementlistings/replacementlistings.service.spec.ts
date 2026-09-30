@@ -4,8 +4,9 @@ import { ConfigService } from "@nestjs/config";
 import {
   REASON_LISTING_CANCELLED,
   REASON_LISTING_CLOSED,
+  REASON_LISTING_CLOSED_NO_CANDIDATE,
 } from "../applications/rejection-reasons";
-import { PrismaService } from "../prisma.service";
+import { ListingStatusCountsSchema } from "./entities/replacementlisting.entity";
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 const profile = { id: "profile-1", userId: "user-1" };
@@ -306,6 +307,217 @@ describe("ReplacementlistingsService", () => {
     });
   });
 
+  it("rejects closing a listing that is a draft", async () => {
+    const transactionClient = {
+      profile: { findUnique: async () => profile },
+      replacementListing: { findUnique: async () => listing },
+      application: { updateMany: async () => ({ count: 0 }) },
+    };
+    const prisma = {
+      $transaction: async (
+        operation: (tx: typeof transactionClient) => unknown,
+      ) => operation(transactionClient),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    await expect(service.close("listing-1", "user-1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  /**
+   * `close` has two outcomes and the applicant reads which one happened, so the
+   * status and the reason on the settled rows have to agree.
+   */
+  describe("close distinguishes whether anyone was retained", () => {
+    function makeService(status: string) {
+      const calls: string[] = [];
+      let applicationData: Record<string, unknown> | undefined;
+      let listingData: Record<string, unknown> | undefined;
+
+      const transactionClient = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => ({ ...listing, status }),
+          update: async ({ data }: { data: Record<string, unknown> }) => {
+            calls.push("listing.update");
+            listingData = data;
+            return { ...listing, ...data, _count: { applications: 0 } };
+          },
+        },
+        application: {
+          updateMany: async ({ data }: { data: Record<string, unknown> }) => {
+            calls.push("application.updateMany");
+            applicationData = data;
+            return { count: 2 };
+          },
+        },
+      };
+      const prisma = {
+        $transaction: async (
+          operation: (tx: typeof transactionClient) => unknown,
+        ) => operation(transactionClient),
+      } as unknown as PrismaService;
+      const config = { get: () => undefined } as unknown as ConfigService;
+
+      return {
+        calls,
+        getApplicationData: () => applicationData,
+        getListingData: () => listingData,
+        service: new ReplacementlistingsService(prisma, config),
+      };
+    }
+
+    it.each(["IN_DISCUSSION", "FULL"])(
+      "settles the waiting candidates and says nobody was retained (%s)",
+      async (status) => {
+        const { service, getApplicationData, getListingData } =
+          makeService(status);
+
+        await service.close("listing-1", "user-1");
+
+        expect(getListingData()).toMatchObject({
+          status: "CLOSED_NO_CANDIDATE",
+        });
+        expect(getApplicationData()).toMatchObject({
+          status: "REJECTED",
+          rejectionReason: REASON_LISTING_CLOSED_NO_CANDIDATE,
+        });
+      },
+    );
+
+    it("keeps the generic reason when a replacement was retained", async () => {
+      const { service, getApplicationData, getListingData } =
+        makeService("FILLED");
+
+      await service.close("listing-1", "user-1");
+
+      expect(getListingData()).toMatchObject({ status: "CLOSED" });
+      // The accepted application is the placement: `terminateActiveApplications`
+      // only settles PENDING and SHORTLISTED, so it survives untouched.
+      expect(getApplicationData()).toMatchObject({
+        rejectionReason: REASON_LISTING_CLOSED,
+      });
+    });
+
+    it("closes an OPEN listing with the generic reason", async () => {
+      const { service, calls, getListingData, getApplicationData } =
+        makeService("OPEN");
+
+      await service.close("listing-1", "user-1");
+
+      // `terminateActiveApplications` still runs; it matches nothing, because an
+      // OPEN listing holds no application by definition. The generic reason is
+      // the right one here: nobody was rejected, so claiming one would be noise.
+      expect(calls).toEqual(["application.updateMany", "listing.update"]);
+      expect(getListingData()).toMatchObject({ status: "CLOSED" });
+      expect(getApplicationData()).toMatchObject({
+        rejectionReason: REASON_LISTING_CLOSED,
+      });
+    });
+
+    it.each(["DRAFT", "CLOSED", "CLOSED_NO_CANDIDATE", "CANCELLED"])(
+      "refuses a listing already out of circulation (%s)",
+      async (status) => {
+        const { service } = makeService(status);
+
+        await expect(
+          service.close("listing-1", "user-1"),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      },
+    );
+  });
+
+  describe("cancel refuses a filled listing", () => {
+    function makeService(status: string) {
+      const calls: string[] = [];
+      const transactionClient = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => ({ ...listing, status }),
+          update: async () => {
+            calls.push("listing.update");
+            return { ...listing, _count: { applications: 0 } };
+          },
+        },
+        application: {
+          updateMany: async () => {
+            calls.push("application.updateMany");
+            return { count: 0 };
+          },
+        },
+      };
+      const prisma = {
+        $transaction: async (
+          operation: (tx: typeof transactionClient) => unknown,
+        ) => operation(transactionClient),
+      } as unknown as PrismaService;
+      const config = { get: () => undefined } as unknown as ConfigService;
+
+      return {
+        calls,
+        service: new ReplacementlistingsService(prisma, config),
+      };
+    }
+
+    it("blocks it, so no candidate keeps a confirmed placement on a cancelled listing", async () => {
+      // A filled listing carries an ACCEPTED application, and
+      // `terminateActiveApplications` only settles PENDING and SHORTLISTED, so
+      // cancelling would leave someone who was told they had the post holding
+      // an acceptance on a listing that no longer exists. `close` is the exit.
+      const { service, calls } = makeService("FILLED");
+
+      await expect(
+        service.cancel("listing-1", "user-1"),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(calls).toEqual([]);
+    });
+
+    it.each(["IN_DISCUSSION", "FULL", "DRAFT", "OPEN"])(
+      "still allows it on a listing nobody was retained on (%s)",
+      async (status) => {
+        const { service, calls } = makeService(status);
+
+        await service.cancel("listing-1", "user-1");
+
+        expect(calls).toEqual(["application.updateMany", "listing.update"]);
+      },
+    );
+  });
+
+  it("closes the counter map so a CLOSED_NO_CANDIDATE listing is counted", async () => {
+    // The response is validated by `ListingStatusCountsSchema`, which is strict
+    // about its keys. A new status missing from either side turns `findMine`
+    // into a 500 at serialization time, not a wrong number.
+    const grouped = [
+      { status: "CLOSED_NO_CANDIDATE" as const, _count: 2 },
+      { status: "OPEN" as const, _count: 1 },
+    ];
+    const prisma = {
+      profile: { findUnique: async () => profile },
+      replacementListing: {
+        findMany: async () => [],
+        count: async () => 0,
+        groupBy: async () => grouped,
+      },
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    const result = await service.findMine("user-1", { page: 1, limit: 20 });
+
+    expect(result.meta.counts).toMatchObject({
+      CLOSED_NO_CANDIDATE: 2,
+      OPEN: 1,
+      total: 3,
+    });
+    // The declared schema must accept it, or the response never leaves.
+    expect(
+      ListingStatusCountsSchema.safeParse(result.meta.counts).success,
+    ).toBe(true);
+  });
+
   it("rejects closing a listing that does not exist", async () => {
     const transactionClient = {
       profile: { findUnique: async () => profile },
@@ -455,6 +667,7 @@ describe("ReplacementlistingsService", () => {
         FULL: 0,
         FILLED: 0,
         CLOSED: 0,
+        CLOSED_NO_CANDIDATE: 0,
         CANCELLED: 0,
       });
     });

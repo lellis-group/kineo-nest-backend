@@ -126,9 +126,17 @@ export class ReplacementlistingsController {
 
   @Patch(":id/close")
   @ApiOperation({
-    summary: "Close a listing once the replacement is completed",
+    summary:
+      "Close a listing, distinguishing whether a replacement was retained",
+    description:
+      "From FILLED, the accepted application is kept and the listing is CLOSED. " +
+      "From IN_DISCUSSION or FULL, nobody was retained: the applications are " +
+      "settled and the listing becomes CLOSED_NO_CANDIDATE, which the applicant reads.",
   })
-  @ApiResponse({ status: 400, description: "Listing is not open or filled" })
+  @ApiResponse({
+    status: 400,
+    description: "Listing is a draft or already out of circulation",
+  })
   @ApiResponse({ status: 403, description: "Not the owner of this listing" })
   @ZodSerializerDto(ReplacementListing)
   close(@Session() session: UserSession, @Param("id") id: string) {
@@ -139,7 +147,8 @@ export class ReplacementlistingsController {
   @ApiOperation({ summary: "Cancel a listing before it is filled" })
   @ApiResponse({
     status: 400,
-    description: "Listing is already closed or cancelled",
+    description:
+      "Listing is filled (close it instead) or already out of circulation",
   })
   @ApiResponse({ status: 403, description: "Not the owner of this listing" })
   @ZodSerializerDto(ReplacementListing)

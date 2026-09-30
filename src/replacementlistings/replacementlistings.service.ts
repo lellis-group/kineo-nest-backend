@@ -9,12 +9,16 @@ import { ConfigService } from "@nestjs/config";
 import {
   REASON_LISTING_CANCELLED,
   REASON_LISTING_CLOSED,
+  REASON_LISTING_CLOSED_NO_CANDIDATE,
 } from "../applications/rejection-reasons";
 import {
   assertNoThirdPartyApplications,
   LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
-import { recalcListingStatus } from "../common/listing-status";
+import {
+  recalcListingStatus,
+  TERMINAL_LISTING_STATUSES,
+} from "../common/listing-status";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
@@ -217,6 +221,7 @@ export class ReplacementlistingsService {
       FULL: 0,
       FILLED: 0,
       CLOSED: 0,
+      CLOSED_NO_CANDIDATE: 0,
       CANCELLED: 0,
     } as Record<ListingStatus | "total", number>;
 
@@ -457,17 +462,49 @@ export class ReplacementlistingsService {
           throw new ForbiddenException();
         }
 
-        if (listing.status !== "OPEN" && listing.status !== "FILLED") {
+        /**
+         * Two outcomes, because the applicant reads the difference.
+         *
+         * `close` used to be reachable only from `OPEN` and `FILLED`, which is
+         * why a single reason was enough: `OPEN` held no application at all, and
+         * `FILLED` had already retained one. It is now also reachable from
+         * `IN_DISCUSSION` and `FULL`, where the posting ends with nobody
+         * retained — and that is not what a shortlisted candidate would infer
+         * from "clôturée". Hence `CLOSED_NO_CANDIDATE` and its own reason.
+         *
+         * `FILLED` stays reachable even though it is terminal: the placement is
+         * already written, and closing is how the owner takes the posting out
+         * of circulation. `terminateActiveApplications` only settles `PENDING`
+         * and `SHORTLISTED`, so the accepted application survives it. `cancel`
+         * has no such case and refuses it.
+         */
+        if (
+          listing.status === "DRAFT" ||
+          listing.status === "CLOSED" ||
+          listing.status === "CLOSED_NO_CANDIDATE" ||
+          listing.status === "CANCELLED"
+        ) {
           throw new BadRequestException(
-            "Only open or filled listings can be closed",
+            "Only a listing still in circulation can be closed",
           );
         }
 
-        await terminateActiveApplications(tx, id, REASON_LISTING_CLOSED);
+        const closedWithoutCandidate =
+          listing.status === "IN_DISCUSSION" || listing.status === "FULL";
+
+        await terminateActiveApplications(
+          tx,
+          id,
+          closedWithoutCandidate
+            ? REASON_LISTING_CLOSED_NO_CANDIDATE
+            : REASON_LISTING_CLOSED,
+        );
 
         return tx.replacementListing.update({
           where: { id },
-          data: { status: "CLOSED" },
+          data: {
+            status: closedWithoutCandidate ? "CLOSED_NO_CANDIDATE" : "CLOSED",
+          },
           include: APPLICATIONS_COUNT_INCLUDE,
         });
       },
@@ -493,9 +530,22 @@ export class ReplacementlistingsService {
           throw new ForbiddenException();
         }
 
-        if (listing.status === "CLOSED" || listing.status === "CANCELLED") {
+        /**
+         * `FILLED` is refused alongside the statuses already out of
+         * circulation, because a filled listing carries an `ACCEPTED`
+         * application: someone has been told they have the post. Cancelling it
+         * would leave that candidate holding a confirmed placement on a listing
+         * that no longer exists, and `terminateActiveApplications` only settles
+         * `PENDING` and `SHORTLISTED`, so the accepted row would survive
+         * untouched. No other path produces that combination.
+         *
+         * `close` is the way out, and `remove` already says so.
+         */
+        if (TERMINAL_LISTING_STATUSES.includes(listing.status)) {
           throw new BadRequestException(
-            "This listing is already closed or cancelled",
+            listing.status === "FILLED"
+              ? "A filled listing cannot be cancelled, close it instead"
+              : "This listing is already closed or cancelled",
           );
         }
 

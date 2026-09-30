@@ -53,6 +53,13 @@ type ApplicationClient = PrismaService | Prisma.TransactionClient;
  * unblocks it, which is the same for all of them: taking the listing out of
  * `RECRUITING_LISTING_STATUSES`.
  *
+ * The messages also say which of the two actions to use. `close` and `cancel`
+ * are not interchangeable for the applicant: `close` reaches
+ * `CLOSED_NO_CANDIDATE` from a listing that was still recruiting, and writes a
+ * reason saying nobody was retained, whereas `cancel` writes one saying the
+ * posting was dropped. Presenting them as alternatives without that difference
+ * would leave a shortlisted candidate unable to tell the two outcomes apart.
+ *
  * There is deliberately no account-erasure message. `confirmDeletion` does not
  * call this guard: it detaches those applications onto ghost listings first, so
  * the erasure can and must go through. The three endpoints below delete their
@@ -63,15 +70,21 @@ const STATUS_LIST = "pending, shortlisted, or an accepted placement";
 
 export const LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE =
   `This listing still has applications from other candidates (${STATUS_LIST}). ` +
-  "Close the listing first — deleting it would erase their application.";
+  "Close it if the replacement was retained, or cancel it if you are giving up " +
+  "on the replacement — the candidates are told which of the two it was, so the " +
+  "choice is visible to them.";
 
 export const PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE =
   `This practice still has listings with applications from other candidates (${STATUS_LIST}). ` +
-  "Close or cancel those listings first — deleting the practice would erase them.";
+  "Close or cancel those listings first — deleting the practice would erase them. " +
+  "Close if the replacement was retained, cancel if you are giving up on it: " +
+  "the candidates are told which.";
 
 export const PROFILE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE =
   `Your listings still have applications from other candidates (${STATUS_LIST}). ` +
-  "Close or cancel them first — deleting your profile would erase them.";
+  "Close or cancel them first — deleting your profile would erase them. " +
+  "Close if the replacement was retained, cancel if you are giving up on it: " +
+  "the candidates are told which.";
 
 /** Applications from other candidates that must survive this account's deletion. */
 export function thirdPartyActiveApplicationsFilter(

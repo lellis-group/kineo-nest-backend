@@ -36,6 +36,9 @@ export const ListingStatusCountsSchema = z.object({
   FULL: z.number(),
   FILLED: z.number(),
   CLOSED: z.number(),
+  CLOSED_NO_CANDIDATE: z
+    .number()
+    .describe("Closed without anyone being retained"),
   CANCELLED: z.number(),
 });
 

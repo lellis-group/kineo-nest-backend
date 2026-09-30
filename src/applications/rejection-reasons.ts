@@ -22,6 +22,21 @@ export const REASON_ANOTHER_CANDIDATE_SELECTED =
 /** Written when the owner closes a listing that still holds applications. */
 export const REASON_LISTING_CLOSED = "L'annonce a été clôturée";
 
+/**
+ * Written when the owner closes a listing that was still recruiting, so nobody
+ * was ever retained.
+ *
+ * `close` used to be reachable only from `OPEN` (no application at all) or
+ * `FILLED` (one retained), which meant `REASON_LISTING_CLOSED` could never
+ * mislead anyone. It is reachable from `IN_DISCUSSION` and `FULL` too now, and
+ * there it means the opposite of what a retained candidate would read: the
+ * posting ended without a replacement. Saying only "clôturée" would leave a
+ * shortlisted candidate unable to tell "they found someone" from "nobody was
+ * taken", so the distinction is spelled out in the sentence.
+ */
+export const REASON_LISTING_CLOSED_NO_CANDIDATE =
+  "L'annonce a été clôturée, aucun remplaçant n'ayant été retenu";
+
 /** Written when the owner cancels a listing that still holds applications. */
 export const REASON_LISTING_CANCELLED = "L'annonce a été annulée";
 
@@ -30,8 +45,7 @@ export const REASON_LISTING_CANCELLED = "L'annonce a été annulée";
  * replacement happens. Their data is gone, so the practice is told the
  * candidate is no longer available rather than anything about the erasure.
  */
-export const REASON_CANDIDATE_UNAVAILABLE =
-  "Ce candidat n'est plus disponible";
+export const REASON_CANDIDATE_UNAVAILABLE = "Ce candidat n'est plus disponible";
 
 /**
  * Written on the third-party applications moved aside when their listing's
@@ -55,11 +69,11 @@ export const REASON_LISTING_ERASED =
  * This is deliberately not "every reason this file defines". The scrub can only
  * ever see a reason that survived on such a row, which excludes:
  *
- * - `REASON_LISTING_CLOSED` / `REASON_LISTING_CANCELLED`: `close` and `cancel`
- *   settle the applications *before* the status flips, and a listing already out
- *   of circulation takes no new one, so nothing they wrote can still be sitting
- *   there when an account is erased. Listing them would imply a protection that
- *   no row can ever rely on.
+ * - `REASON_LISTING_CLOSED` / `REASON_LISTING_CLOSED_NO_CANDIDATE` /
+ *   `REASON_LISTING_CANCELLED`: `close` and `cancel` settle the applications
+ *   *before* the status flips, and a listing already out of circulation takes no
+ *   new one, so nothing they wrote can still be sitting there when an account is
+ *   erased. Listing them would imply a protection that no row can ever rely on.
  * - `REASON_CANDIDATE_UNAVAILABLE`: written by `releaseAcceptedPlacements` on
  *   the erased person's OWN applications, which are not preserved — they become
  *   `WITHDRAWN`. It lands on the practice's side of the exchange, never on a
@@ -113,6 +127,7 @@ export const ALL_PLATFORM_REJECTION_REASONS: string[] = [
 export const ALL_REJECTION_REASON_STRINGS: string[] = [
   REASON_ANOTHER_CANDIDATE_SELECTED,
   REASON_LISTING_CLOSED,
+  REASON_LISTING_CLOSED_NO_CANDIDATE,
   REASON_LISTING_CANCELLED,
   REASON_CANDIDATE_UNAVAILABLE,
   REASON_LISTING_ERASED,

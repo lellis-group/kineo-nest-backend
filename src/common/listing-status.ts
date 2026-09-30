@@ -10,10 +10,19 @@ const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
   "SHORTLISTED",
 ];
 
-/** Statuses a listing can no longer leave. */
-const TERMINAL_LISTING_STATUSES: ListingStatus[] = [
+/**
+ * Statuses a listing can no longer leave.
+ *
+ * Exported because the listing service needs it to decide what `close` and
+ * `cancel` refuse, and that decision has to agree with the one made here: the
+ * four guards in `replacementlistings.service.ts` each used to redraw their own
+ * list, which is how `close` ended up rejecting the two statuses that hold
+ * active applications while `cancel` accepted `FILLED`.
+ */
+export const TERMINAL_LISTING_STATUSES: ListingStatus[] = [
   "FILLED",
   "CLOSED",
+  "CLOSED_NO_CANDIDATE",
   "CANCELLED",
 ];
 
