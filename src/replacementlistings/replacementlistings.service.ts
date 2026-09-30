@@ -472,17 +472,17 @@ export class ReplacementlistingsService {
          * retained — and that is not what a shortlisted candidate would infer
          * from "clôturée". Hence `CLOSED_NO_CANDIDATE` and its own reason.
          *
-         * `FILLED` stays reachable even though it is terminal: the placement is
-         * already written, and closing is how the owner takes the posting out
-         * of circulation. `terminateActiveApplications` only settles `PENDING`
-         * and `SHORTLISTED`, so the accepted application survives it. `cancel`
-         * has no such case and refuses it.
+         * The refusals are `DRAFT` plus the statuses that never had a candidate
+         * to be `close`d for. `FILLED` is terminal yet still reachable: the
+         * placement is already written, and closing is how the owner takes the
+         * posting out of circulation. `terminateActiveApplications` only settles
+         * `PENDING` and `SHORTLISTED`, so the accepted application survives it.
+         * `cancel` has no such case and refuses `FILLED`.
          */
         if (
           listing.status === "DRAFT" ||
-          listing.status === "CLOSED" ||
-          listing.status === "CLOSED_NO_CANDIDATE" ||
-          listing.status === "CANCELLED"
+          (TERMINAL_LISTING_STATUSES.includes(listing.status) &&
+            listing.status !== "FILLED")
         ) {
           throw new BadRequestException(
             "Only a listing still in circulation can be closed",

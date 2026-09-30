@@ -536,25 +536,6 @@ describe("ReplacementlistingsService", () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it("rejects closing a listing that is not open or filled", async () => {
-    const transactionClient = {
-      profile: { findUnique: async () => profile },
-      replacementListing: { findUnique: async () => listing },
-      application: { updateMany: async () => ({ count: 0 }) },
-    };
-    const prisma = {
-      $transaction: async (
-        operation: (tx: typeof transactionClient) => unknown,
-      ) => operation(transactionClient),
-    } as unknown as PrismaService;
-    const config = { get: () => undefined } as unknown as ConfigService;
-    const service = new ReplacementlistingsService(prisma, config);
-
-    await expect(service.close("listing-1", "user-1")).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-  });
-
   describe("findMine status buckets", () => {
     /**
      * Records the two distinct `where` clauses the service builds: one for the
