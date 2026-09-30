@@ -23,6 +23,7 @@ import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type {
+  ApplicationDecisionSource,
   ApplicationStatus,
   ListingStatus,
 } from "../generated/prisma/enums";
@@ -64,6 +65,7 @@ async function terminateActiveApplications(
   tx: Prisma.TransactionClient,
   listingId: string,
   reason: string,
+  decisionSource: ApplicationDecisionSource,
 ): Promise<void> {
   await tx.application.updateMany({
     where: {
@@ -72,6 +74,9 @@ async function terminateActiveApplications(
     },
     data: {
       status: "REJECTED",
+      // Which owner action ended the posting, so the applicant reads "the
+      // practice closed it without anyone" rather than "you were refused".
+      decisionSource,
       rejectionReason: reason,
       respondedAt: new Date(),
     },
@@ -498,6 +503,9 @@ export class ReplacementlistingsService {
           closedWithoutCandidate
             ? REASON_LISTING_CLOSED_NO_CANDIDATE
             : REASON_LISTING_CLOSED,
+          closedWithoutCandidate
+            ? "LISTING_CLOSED_NO_CANDIDATE"
+            : "LISTING_CLOSED",
         );
 
         return tx.replacementListing.update({
@@ -549,7 +557,12 @@ export class ReplacementlistingsService {
           );
         }
 
-        await terminateActiveApplications(tx, id, REASON_LISTING_CANCELLED);
+        await terminateActiveApplications(
+          tx,
+          id,
+          REASON_LISTING_CANCELLED,
+          "LISTING_CANCELLED",
+        );
 
         return tx.replacementListing.update({
           where: { id },

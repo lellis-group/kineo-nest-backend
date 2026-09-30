@@ -16,6 +16,8 @@ const validApplication = {
   listingId: "clh8zq6w70000wqf4vlonix5a",
   applicantId: "clh8zq6w70000wqf4vlonix5c",
   status: "PENDING",
+  // Nobody has decided yet, so the column is null on a live application.
+  decisionSource: null,
   message: null,
   rejectionReason: null,
   withdrawnReason: null,
@@ -85,25 +87,56 @@ describe("Application DTO security", () => {
   });
 
   describe("PaginatedApplicationsSchema", () => {
+    /** The two count maps, over the same three applications. */
+    const validMeta = {
+      total: 3,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+      counts: {
+        total: 3,
+        PENDING: 2,
+        SHORTLISTED: 0,
+        ACCEPTED: 0,
+        REJECTED: 1,
+        WITHDRAWN: 0,
+      },
+      decisionCounts: {
+        total: 3,
+        CANDIDATE_WITHDREW: 0,
+        PRACTICE_ACCEPTED: 0,
+        // The one rejection, and the practice wrote it themselves.
+        PRACTICE_REJECTED: 1,
+        ANOTHER_CANDIDATE_SELECTED: 0,
+        LISTING_CLOSED: 0,
+        LISTING_CLOSED_NO_CANDIDATE: 0,
+        LISTING_CANCELLED: 0,
+        LISTING_ERASED: 0,
+        CANDIDATE_UNAVAILABLE: 0,
+        // The two still open: `decisionSource` is null, which groupBy cannot
+        // key on, so it gets its own bucket.
+        undecided: 2,
+      },
+    };
+
     it("accepts a paginated response with server-computed status counts", () => {
       const result = PaginatedApplicationsSchema.safeParse({
         data: [validApplication],
-        meta: {
-          total: 3,
-          page: 1,
-          limit: 20,
-          totalPages: 1,
-          counts: {
-            total: 3,
-            PENDING: 2,
-            SHORTLISTED: 0,
-            ACCEPTED: 0,
-            REJECTED: 1,
-            WITHDRAWN: 0,
-          },
-        },
+        meta: validMeta,
       });
       expect(result.success).toBe(true);
+    });
+
+    it("rejects decision counts missing a source", () => {
+      // A dropped key would be a filter whose count is silently wrong, and the
+      // applicant's tab counter is the only place it would show.
+      const { CANDIDATE_WITHDREW: _dropped, ...partial } =
+        validMeta.decisionCounts;
+      const result = PaginatedApplicationsSchema.safeParse({
+        data: [validApplication],
+        meta: { ...validMeta, decisionCounts: partial },
+      });
+      expect(result.success).toBe(false);
     });
 
     it("rejects counts missing a status", () => {
@@ -284,6 +317,65 @@ describe("Application DTO security", () => {
       expect(
         FindApplicationsSchema.safeParse({ page: "100", limit: "100" }).success,
       ).toBe(true);
+    });
+
+    /**
+     * The applicant's buckets span several statuses or several decision
+     * sources, so the filter takes a comma-separated list. It stays an array
+     * even for one value, which is what lets the service build either an
+     * equality or an `in` without the caller knowing which it sent.
+     */
+    it("accepts a comma-separated status list", () => {
+      const result = FindApplicationsSchema.safeParse({
+        status: "REJECTED,WITHDRAWN",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toEqual(["REJECTED", "WITHDRAWN"]);
+      }
+    });
+
+    it("keeps a single status as a one-element list", () => {
+      const result = FindApplicationsSchema.safeParse({ status: "PENDING" });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toEqual(["PENDING"]);
+      }
+    });
+
+    it("rejects a status the enum does not have", () => {
+      expect(
+        FindApplicationsSchema.safeParse({ status: "PENDING,NOPE" }).success,
+      ).toBe(false);
+    });
+
+    it("rejects an empty list", () => {
+      // `status=` would otherwise become `in: []`, which matches nothing and
+      // reads to the caller as "no filter" on a screen that shows a count.
+      expect(FindApplicationsSchema.safeParse({ status: "" }).success).toBe(
+        false,
+      );
+      expect(
+        FindApplicationsSchema.safeParse({ status: "PENDING," }).success,
+      ).toBe(false);
+    });
+
+    it("filters by decision source", () => {
+      const result = FindApplicationsSchema.safeParse({
+        status: "REJECTED",
+        decisionSource:
+          "PRACTICE_REJECTED,LISTING_CLOSED,LISTING_CLOSED_NO_CANDIDATE,LISTING_CANCELLED",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.decisionSource).toHaveLength(4);
+      }
+    });
+
+    it("rejects a decision source the enum does not have", () => {
+      expect(
+        FindApplicationsSchema.safeParse({ decisionSource: "NOPE" }).success,
+      ).toBe(false);
     });
   });
 });

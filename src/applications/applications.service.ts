@@ -10,17 +10,38 @@ import { ConfigService } from "@nestjs/config";
 import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
-import { ApplicationStatus, Prisma } from "../generated/prisma/client";
+import {
+  ApplicationDecisionSource,
+  ApplicationStatus,
+  Prisma,
+} from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { toApplicationDto } from "./application.mapper";
-import { REASON_ANOTHER_CANDIDATE_SELECTED } from "./rejection-reasons";
 import { CreateApplicationDto } from "./dto/create-application.dto";
 import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
+import { REASON_ANOTHER_CANDIDATE_SELECTED } from "./rejection-reasons";
 
 const ACTIVE_STATUSES: ApplicationStatus[] = ["PENDING", "SHORTLISTED"];
+
+/**
+ * Turns a comma-separated query value into a Prisma filter.
+ *
+ * The DTO always yields an array, even for one value, so a plain value would be
+ * needed back for the single case: `in: [x]` and `x` are the same query, but
+ * passing `in: undefined` would be a filter Prisma rejects rather than an absent
+ * one.
+ */
+function oneOrMany<T extends ApplicationStatus | ApplicationDecisionSource>(
+  values: T[] | undefined,
+): T | { in: T[] } | undefined {
+  if (!values) {
+    return undefined;
+  }
+  return values.length === 1 ? values[0] : { in: values };
+}
 
 @Injectable()
 export class ApplicationsService {
@@ -53,6 +74,54 @@ export class ApplicationsService {
 
     for (const row of grouped) {
       counts[row.status] = row._count;
+      counts.total += row._count;
+    }
+
+    return counts;
+  }
+
+  /**
+   * Totals per decision source, for the same reason as the status counts.
+   *
+   * The applicant's screen splits what used to be one « Rejetées » bucket into
+   * the situations that read differently to them, and a bucket spanning several
+   * sources cannot be counted from the status totals alone. Returned as a full
+   * zeroed map so a source that never appears still has a key to sum from.
+   *
+   * `null` is counted separately: those are the applications still open, where
+   * nobody has decided anything.
+   */
+  private async countApplicationsByDecisionSource(
+    where: Prisma.ApplicationWhereInput,
+  ): Promise<{ total: number } & Record<ApplicationDecisionSource, number>> {
+    const grouped = await this.prisma.application.groupBy({
+      by: ["decisionSource"],
+      where,
+      _count: true,
+    });
+
+    const counts = {
+      total: 0,
+      CANDIDATE_WITHDREW: 0,
+      PRACTICE_ACCEPTED: 0,
+      PRACTICE_REJECTED: 0,
+      ANOTHER_CANDIDATE_SELECTED: 0,
+      LISTING_CLOSED: 0,
+      LISTING_CLOSED_NO_CANDIDATE: 0,
+      LISTING_CANCELLED: 0,
+      LISTING_ERASED: 0,
+      CANDIDATE_UNAVAILABLE: 0,
+      undecided: 0,
+    } as { total: number } & Record<ApplicationDecisionSource, number> & {
+        undecided: number;
+      };
+
+    for (const row of grouped) {
+      if (row.decisionSource === null) {
+        counts.undecided += row._count;
+      } else {
+        counts[row.decisionSource] = row._count;
+      }
       counts.total += row._count;
     }
 
@@ -177,9 +246,13 @@ export class ApplicationsService {
     const limit = filters.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where = { listingId, status: filters.status };
+    const where = {
+      listingId,
+      status: oneOrMany(filters.status),
+      decisionSource: oneOrMany(filters.decisionSource),
+    };
 
-    const [data, total, counts] = await Promise.all([
+    const [data, total, counts, decisionCounts] = await Promise.all([
       this.prisma.application.findMany({
         where,
         skip,
@@ -187,12 +260,15 @@ export class ApplicationsService {
         orderBy: { createdAt: "desc" },
         include: {
           applicant: {
-            include: { user: { select: { name: true, image: true, deletedAt: true } } },
+            include: {
+              user: { select: { name: true, image: true, deletedAt: true } },
+            },
           },
         },
       }),
       this.prisma.application.count({ where }),
       this.countApplicationsByStatus({ listingId }),
+      this.countApplicationsByDecisionSource({ listingId }),
     ]);
 
     return {
@@ -203,6 +279,7 @@ export class ApplicationsService {
         limit,
         totalPages: Math.ceil(total / limit),
         counts,
+        decisionCounts,
       },
     };
   }
@@ -216,11 +293,12 @@ export class ApplicationsService {
 
     const where = {
       applicantId: profile.id,
-      status: filters.status,
+      status: oneOrMany(filters.status),
+      decisionSource: oneOrMany(filters.decisionSource),
       listingId: filters.listingId,
     };
 
-    const [data, total, counts] = await Promise.all([
+    const [data, total, counts, decisionCounts] = await Promise.all([
       this.prisma.application.findMany({
         where,
         skip,
@@ -230,6 +308,10 @@ export class ApplicationsService {
       }),
       this.prisma.application.count({ where }),
       this.countApplicationsByStatus({
+        applicantId: profile.id,
+        listingId: filters.listingId,
+      }),
+      this.countApplicationsByDecisionSource({
         applicantId: profile.id,
         listingId: filters.listingId,
       }),
@@ -243,6 +325,7 @@ export class ApplicationsService {
         limit,
         totalPages: Math.ceil(total / limit),
         counts,
+        decisionCounts,
       },
     };
   }
@@ -253,7 +336,9 @@ export class ApplicationsService {
       include: {
         listing: { include: { practice: true } },
         applicant: {
-          include: { user: { select: { name: true, image: true, deletedAt: true } } },
+          include: {
+            user: { select: { name: true, image: true, deletedAt: true } },
+          },
         },
       },
     });
@@ -380,7 +465,11 @@ export class ApplicationsService {
         const now = new Date();
         const updated = await tx.application.update({
           where: { id },
-          data: { status: "ACCEPTED", respondedAt: now },
+          data: {
+            status: "ACCEPTED",
+            decisionSource: "PRACTICE_ACCEPTED",
+            respondedAt: now,
+          },
         });
         await tx.application.updateMany({
           where: {
@@ -390,6 +479,7 @@ export class ApplicationsService {
           },
           data: {
             status: "REJECTED",
+            decisionSource: "ANOTHER_CANDIDATE_SELECTED",
             rejectionReason: REASON_ANOTHER_CANDIDATE_SELECTED,
             respondedAt: now,
           },
@@ -444,6 +534,7 @@ export class ApplicationsService {
           where: { id },
           data: {
             status: "REJECTED",
+            decisionSource: "PRACTICE_REJECTED",
             rejectionReason: dto.rejectionReason,
             respondedAt: new Date(),
           },
@@ -496,6 +587,10 @@ export class ApplicationsService {
           where: { id },
           data: {
             status: "WITHDRAWN",
+            // The one status that can only mean the candidate acted: the
+            // account-erasure path writes WITHDRAWN too, but on rows that
+            // disappear with the account, so nobody reads this one.
+            decisionSource: "CANDIDATE_WITHDREW",
             withdrawnReason: dto.withdrawnReason,
           },
         });

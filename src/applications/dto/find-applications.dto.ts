@@ -1,6 +1,24 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
-import { ApplicationStatus } from "../../generated/prisma/enums";
+import {
+  ApplicationDecisionSource,
+  ApplicationStatus,
+} from "../../generated/prisma/enums";
+
+/**
+ * One value, or several separated by commas — `status=REJECTED,WITHDRAWN`.
+ *
+ * Kept as an array in the inferred type even for a single value, so the service
+ * has one shape to handle; it turns that into an equality or an `in` at the
+ * query. Enum objects are passed rather than arrays so the literal members
+ * survive: an array would widen the result back to `string[]`, and Prisma
+ * rejects a plain `string` where it wants the enum.
+ */
+const csvEnum = <T extends Record<string, string>>(values: T) =>
+  z
+    .string()
+    .transform((raw) => raw.split(",").map((part) => part.trim()))
+    .pipe(z.array(z.enum(values)).min(1));
 
 export const FindApplicationsSchema = z
   .object({
@@ -8,10 +26,14 @@ export const FindApplicationsSchema = z
       .cuid()
       .optional()
       .describe("Filter by listing id (Prisma cuid)"),
-    status: z
-      .enum(ApplicationStatus)
+    status: csvEnum(ApplicationStatus)
       .optional()
-      .describe("Filter by application status"),
+      .describe("Filter by application status; comma-separated for several"),
+    decisionSource: csvEnum(ApplicationDecisionSource)
+      .optional()
+      .describe(
+        "Filter by who decided; comma-separated for several. Null (still open) is not selectable here",
+      ),
     page: z.coerce
       .number()
       .int()

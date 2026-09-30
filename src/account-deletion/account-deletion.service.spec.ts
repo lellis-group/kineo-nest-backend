@@ -1047,6 +1047,10 @@ describe("AccountDeletionService", () => {
       {
         id: "app-accepted",
         status: "REJECTED",
+        // The practice is the one shown this, and it has to be able to say so
+        // without reading the reason: the candidate erased their account, which
+        // is not a judgement of anyone.
+        decisionSource: "CANDIDATE_UNAVAILABLE",
         rejectionReason: REASON_CANDIDATE_UNAVAILABLE,
         respondedAt: expect.any(Date),
       },
@@ -1074,6 +1078,9 @@ describe("AccountDeletionService", () => {
         },
       },
       status: "PENDING",
+      // Back in the pipeline: no decision stands any more, so the column
+      // returns to null exactly as a fresh application leaves it.
+      decisionSource: null,
       rejectionReason: null,
       respondedAt: null,
     });

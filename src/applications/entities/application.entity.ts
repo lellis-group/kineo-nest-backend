@@ -1,6 +1,7 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import {
+  ApplicationDecisionSource,
   ApplicationStatus,
   ListingStatus,
   ProfileType,
@@ -58,6 +59,12 @@ export const ApplicationSchema = z.object({
   listingId: z.string(),
   applicantId: z.string(),
   status: z.enum(ApplicationStatus),
+  decisionSource: z
+    .enum(ApplicationDecisionSource)
+    .nullable()
+    .describe(
+      "Who decided, for the applicant's own reading. Null while the application is still open: nobody has decided yet.",
+    ),
   message: z.string().nullable(),
   rejectionReason: z.string().nullable(),
   withdrawnReason: z.string().nullable(),
@@ -84,6 +91,30 @@ export const ApplicationStatusCountsSchema = z.object({
   WITHDRAWN: z.number(),
 });
 
+/**
+ * Totals per decision source, alongside the status counts.
+ *
+ * `undecided` holds the applications nobody has ruled on — `decisionSource` is
+ * null there, which `groupBy` cannot key on, so it is counted separately
+ * instead of being spread across the enum members.
+ *
+ * Both maps are always full: a filter the caller did not apply does not shrink
+ * them, which is what lets a tab counter stay put while paging.
+ */
+export const ApplicationDecisionCountsSchema = z.object({
+  total: z.number(),
+  CANDIDATE_WITHDREW: z.number(),
+  PRACTICE_ACCEPTED: z.number(),
+  PRACTICE_REJECTED: z.number(),
+  ANOTHER_CANDIDATE_SELECTED: z.number(),
+  LISTING_CLOSED: z.number(),
+  LISTING_CLOSED_NO_CANDIDATE: z.number(),
+  LISTING_CANCELLED: z.number(),
+  LISTING_ERASED: z.number(),
+  CANDIDATE_UNAVAILABLE: z.number(),
+  undecided: z.number(),
+});
+
 export const PaginatedApplicationsSchema = z.object({
   data: z.array(ApplicationSchema),
   meta: z.object({
@@ -92,6 +123,7 @@ export const PaginatedApplicationsSchema = z.object({
     limit: z.number(),
     totalPages: z.number(),
     counts: ApplicationStatusCountsSchema,
+    decisionCounts: ApplicationDecisionCountsSchema,
   }),
 });
 

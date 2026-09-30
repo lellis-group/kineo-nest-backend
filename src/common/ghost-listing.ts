@@ -123,6 +123,9 @@ export async function detachThirdPartyApplications(
           // the posting is leaving circulation, so the pending decision will
           // never come.
           status: "REJECTED",
+          // Distinct from a practice refusal: nobody chose, the practice is
+          // gone. The applicant has to be able to tell the two apart.
+          decisionSource: "LISTING_ERASED",
           rejectionReason: REASON_LISTING_ERASED,
           respondedAt: now,
         },

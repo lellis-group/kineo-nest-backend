@@ -375,7 +375,14 @@ export class AccountDeletionService {
         applicantId: profileId,
         status: { in: ["PENDING", "SHORTLISTED"] },
       },
-      data: { status: "WITHDRAWN", respondedAt: now },
+      data: {
+        status: "WITHDRAWN",
+        // Never read: the row disappears with the account. Recorded so the
+        // column is not silently null on a WITHDRAWN row, and so this path
+        // stays distinguishable if such a row is ever inspected.
+        decisionSource: "CANDIDATE_WITHDREW",
+        respondedAt: now,
+      },
     });
 
     // Free text the person wrote, in both directions.
@@ -429,6 +436,7 @@ export class AccountDeletionService {
         where: { id: application.id },
         data: {
           status: "REJECTED",
+          decisionSource: "CANDIDATE_UNAVAILABLE",
           rejectionReason: REASON_CANDIDATE_UNAVAILABLE,
           respondedAt: now,
         },
@@ -441,7 +449,14 @@ export class AccountDeletionService {
           status: "REJECTED",
           rejectionReason: { in: AUTO_REJECTION_REASONS },
         },
-        data: { status: "PENDING", rejectionReason: null, respondedAt: null },
+        data: {
+          status: "PENDING",
+          // Back in the pipeline: there is no decision any more, so the column
+          // returns to null the way a fresh application leaves it.
+          decisionSource: null,
+          rejectionReason: null,
+          respondedAt: null,
+        },
       });
 
       await recalcListingStatus(tx, application.listingId, {

@@ -191,6 +191,18 @@ model ReplacementListing {
   @@map("replacement_listing")
 }
 
+enum ApplicationDecisionSource {
+  CANDIDATE_WITHDREW
+  PRACTICE_ACCEPTED
+  PRACTICE_REJECTED
+  ANOTHER_CANDIDATE_SELECTED
+  LISTING_CLOSED
+  LISTING_CLOSED_NO_CANDIDATE
+  LISTING_CANCELLED
+  LISTING_ERASED
+  CANDIDATE_UNAVAILABLE
+}
+
 model Application {
   id              String             @id @default(cuid())
   listingId       String
@@ -198,6 +210,7 @@ model Application {
   applicantId     String
   applicant       Profile            @relation(fields: [applicantId], references: [id], onDelete: Cascade)
   status          ApplicationStatus  @default(PENDING)
+  decisionSource  ApplicationDecisionSource?
   message         String?
   rejectionReason String?
   withdrawnReason String?
