@@ -1,5 +1,8 @@
-import type { ApplicationStatus, ListingStatus } from "../generated/prisma/enums";
 import type { Prisma } from "../generated/prisma/client";
+import type {
+  ApplicationStatus,
+  ListingStatus,
+} from "../generated/prisma/enums";
 
 /** Statuses that keep a listing open to new candidates. */
 const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
@@ -15,6 +18,17 @@ const TERMINAL_LISTING_STATUSES: ListingStatus[] = [
 ];
 
 /**
+ * Statuses that are not derived from applications.
+ *
+ * `DRAFT` is the owner's own decision to stay out of circulation, reached
+ * through `publish` and never through a recount: it holds no applications by
+ * construction, so recalculating it would resolve to `OPEN` and publish a
+ * listing nobody asked to publish. `recalcListingStatus` only ever moves a
+ * listing between `OPEN`, `IN_DISCUSSION` and `FULL`.
+ */
+const UNCALCULATED_LISTING_STATUSES: ListingStatus[] = ["DRAFT"];
+
+/**
  * Recomputes a listing's status from the applications it still holds.
  *
  * The status is derived state, never an independent fact: it exists so a
@@ -26,7 +40,8 @@ const TERMINAL_LISTING_STATUSES: ListingStatus[] = [
  * Lives in `common/` rather than in `ApplicationsService` because the account
  * erasure reaches it from outside: anonymizing an applicant clears the active
  * applications they held on other people's listings, which frees capacity
- * those owners are entitled to.
+ * those owners are entitled to. Changing `maxApplications` on a listing is the
+ * other entry point: it is the second input to the derivation.
  *
  * @param includeFilled Recalculate even when the listing is `FILLED`, so an
  * erasure can reopen a listing whose selected candidate left. `CLOSED` and
@@ -50,7 +65,10 @@ export async function recalcListingStatus(
     ? TERMINAL_LISTING_STATUSES.filter((status) => status !== "FILLED")
     : TERMINAL_LISTING_STATUSES;
 
-  if (terminal.includes(listing.status)) {
+  if (
+    terminal.includes(listing.status) ||
+    UNCALCULATED_LISTING_STATUSES.includes(listing.status)
+  ) {
     return;
   }
 

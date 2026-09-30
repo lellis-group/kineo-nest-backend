@@ -14,6 +14,7 @@ import {
   assertNoThirdPartyApplications,
   LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
+import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
@@ -299,7 +300,19 @@ export class ReplacementlistingsService {
   }
 
   private async assertOwnership(id: string, userId: string) {
-    const listing = await this.prisma.replacementListing.findUnique({
+    return this.assertOwnershipWith(this.prisma, id, userId);
+  }
+
+  /**
+   * Same ownership check against an explicit client, so callers that already
+   * opened a serializable transaction can keep the read and the write in it.
+   */
+  private async assertOwnershipWith(
+    client: PrismaService | Prisma.TransactionClient,
+    id: string,
+    userId: string,
+  ) {
+    const listing = await client.replacementListing.findUnique({
       where: { id },
     });
 
@@ -307,7 +320,7 @@ export class ReplacementlistingsService {
       throw new NotFoundException(`Replacement listing ${id} not found`);
     }
 
-    const profileId = await getOwnedProfileId(this.prisma, userId);
+    const profileId = await getOwnedProfileId(client, userId);
 
     if (listing.createdById !== profileId) {
       throw new ForbiddenException();
@@ -332,33 +345,64 @@ export class ReplacementlistingsService {
   }
 
   async update(id: string, userId: string, dto: UpdateReplacementListingDto) {
-    const listing = await this.assertOwnership(id, userId);
+    const updated = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        // Re-read inside the transaction. `assertOwnership` on its own would
+        // leave the status guard and the write as two statements on two
+        // connections, so a concurrent `/accept` could move the listing to
+        // FILLED between the check and the update, and this would then edit a
+        // placement that has already been confirmed.
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    if (
-      listing.status === "FILLED" ||
-      listing.status === "CLOSED" ||
-      listing.status === "CANCELLED"
-    ) {
-      throw new BadRequestException("This listing can no longer be modified");
-    }
+        if (
+          listing.status === "FILLED" ||
+          listing.status === "CLOSED" ||
+          listing.status === "CANCELLED"
+        ) {
+          throw new BadRequestException(
+            "This listing can no longer be modified",
+          );
+        }
 
-    const startDate = dto.startDate
-      ? new Date(dto.startDate)
-      : listing.startDate;
-    const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
-    if (startDate >= endDate) {
-      throw new BadRequestException("startDate must be before endDate");
-    }
+        const startDate = dto.startDate
+          ? new Date(dto.startDate)
+          : listing.startDate;
+        const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
+        if (startDate >= endDate) {
+          throw new BadRequestException("startDate must be before endDate");
+        }
 
-    const updated = await this.prisma.replacementListing.update({
-      where: { id },
-      data: {
-        ...dto,
-        startDate: dto.startDate ? startDate : undefined,
-        endDate: dto.endDate ? endDate : undefined,
+        const result = await tx.replacementListing.update({
+          where: { id },
+          data: {
+            ...dto,
+            startDate: dto.startDate ? startDate : undefined,
+            endDate: dto.endDate ? endDate : undefined,
+          },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
+
+        // `status` is derived state: it exists so `create` can refuse a
+        // candidate on a full listing. Changing `maxApplications` moves one of
+        // the two inputs to that derivation, so it has to go back through it.
+        // Without this, a FULL listing whose owner raises the cap stays FULL
+        // forever and refuses every candidate with free slots, and the module
+        // has no transition that can undo it.
+        const capacityChanged = dto.maxApplications !== undefined;
+        if (capacityChanged) {
+          await recalcListingStatus(tx, id);
+          // The recalc may have moved the status, so the row has to be read
+          // again to return it.
+          return tx.replacementListing.findUniqueOrThrow({
+            where: { id },
+            include: APPLICATIONS_COUNT_INCLUDE,
+          });
+        }
+
+        return result;
       },
-      include: APPLICATIONS_COUNT_INCLUDE,
-    });
+    );
 
     return toReplacementListingDto(this.withCount(updated));
   }

@@ -79,7 +79,7 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     rateLimitMax: positiveInt(env.RATE_LIMIT_MAX, 20, "RATE_LIMIT_MAX"),
     sessionExpiresIn: durationSeconds(env.SESSION_EXPIRES_IN, 60 * 60 * 24 * 7),
     sessionUpdateAge: durationSeconds(env.SESSION_UPDATE_AGE, 60 * 60 * 24),
-    cookieCacheEnabled: env.COOKIE_CACHE_ENABLED !== "false",
+    cookieCacheEnabled: env.COOKIE_CACHE_ENABLED === "true",
     cookieCacheMaxAge: positiveInt(
       env.COOKIE_CACHE_MAX_AGE,
       60 * 5,
@@ -141,7 +141,7 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     sessionUpdateAge:
       config.get<number>("session.updateAge", 60 * 60 * 24) ?? 60 * 60 * 24,
     cookieCacheEnabled:
-      config.get<boolean>("session.cookieCache.enabled", true) ?? true,
+      config.get<boolean>("session.cookieCache.enabled", false) ?? false,
     cookieCacheMaxAge:
       config.get<number>("session.cookieCache.maxAge", 300) ?? 300,
     jwtEnabled: config.get<boolean>("jwt.enabled", false) ?? false,
@@ -297,27 +297,30 @@ export function createAuth(
     session: {
       expiresIn: authEnv.sessionExpiresIn,
       updateAge: authEnv.sessionUpdateAge,
+      /**
+       * Off by default, and the reason is not performance.
+       *
+       * The cache is served from a signed cookie that better-auth validates
+       * without ever touching the database. Its `version` option cannot close
+       * that hole: better-auth computes it from the *decoded cookie payload*
+       * (`dist/api/routes/session.mjs`), so a function keyed on the user row
+       * is compared against the very copy it was baked from and always
+       * matches. Deleting the `Session` rows does not invalidate it either,
+       * because `internalAdapter.findSession` is only reached on a cache miss.
+       *
+       * The concrete consequence was the account erasure: anonymization
+       * overwrote `name`/`image`/`emailVerified` in the database, yet for
+       * `cookieCache.maxAge` `get-session` kept answering from the cookie
+       * with `emailVerified: true` — an erased identity that still passed
+       * `EmailVerifiedGuard` and could write. `EmailVerifiedGuard` no longer
+       * trusts the session payload (it re-reads the row), but anything else
+       * reading the session would still be served stale data, so the cache
+       * stays disabled until better-auth exposes a server-side invalidation
+       * hook. See `email-verified.guard.ts`.
+       */
       cookieCache: {
         enabled: authEnv.cookieCacheEnabled,
         maxAge: authEnv.cookieCacheMaxAge,
-        /**
-         * Bump the cache version whenever the user row changes.
-         *
-         * The session cookie cache is served straight from a signed cookie:
-         * better-auth never reaches the database on that path, and its own
-         * expiry check compares two cookies, not the stored session. Deleting
-         * the `Session` rows therefore does NOT invalidate it, and for
-         * `cookieCache.maxAge` the API keeps answering with the user as it was
-         * at cache time.
-         *
-         * That is a correctness problem well beyond the account erasure, which
-         * is what made it visible: anonymization overwrites `name` and `image`
-         * and claims the personal data is gone, while `get-session` still
-         * served both for the rest of the cache window. Keying the version on
-         * `user.updatedAt` closes that window and, more generally, stops any
-         * profile change from being shadowed by a stale session payload.
-         */
-        version: (_session, user) => String(new Date(user.updatedAt).getTime()),
       },
     },
 

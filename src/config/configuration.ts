@@ -156,7 +156,11 @@ function configuration() {
         60 * 60 * 24, // 1 day
       ),
       cookieCache: {
-        enabled: process.env.COOKIE_CACHE_ENABLED !== "false",
+        // Default-off: the cache is served from the signed cookie without ever
+        // reaching the database, and better-auth's `version` option cannot
+        // invalidate it (it is recomputed from the cached payload itself). See
+        // the long note in `src/lib/auth.ts`.
+        enabled: process.env.COOKIE_CACHE_ENABLED === "true",
         maxAge: positiveInteger(
           process.env.COOKIE_CACHE_MAX_AGE,
           300,
@@ -345,7 +349,7 @@ export const envValidationSchema = z
     // ---- Session (better-auth) ----
     SESSION_EXPIRES_IN: DurationString.default("604800"),
     SESSION_UPDATE_AGE: DurationString.default("86400"),
-    COOKIE_CACHE_ENABLED: BoolEnum.default("true"),
+    COOKIE_CACHE_ENABLED: BoolEnum.default("false"),
     COOKIE_CACHE_MAX_AGE: z.coerce.number().int().positive().default(300),
 
     // ---- JWT (better-auth, optional) ----

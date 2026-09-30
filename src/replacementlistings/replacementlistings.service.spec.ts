@@ -1,12 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-
-import { PrismaService } from "../prisma.service";
 import {
   REASON_LISTING_CANCELLED,
   REASON_LISTING_CLOSED,
 } from "../applications/rejection-reasons";
+import { PrismaService } from "../prisma.service";
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 const profile = { id: "profile-1", userId: "user-1" };
@@ -63,9 +62,14 @@ describe("ReplacementlistingsService", () => {
   });
 
   it("rejects a partial date update that would invalidate a listing", async () => {
-    const prisma = {
+    const transactionClient = {
       replacementListing: { findUnique: async () => listing },
       profile: { findUnique: async () => profile },
+    };
+    const prisma = {
+      $transaction: async (
+        operation: (tx: typeof transactionClient) => unknown,
+      ) => operation(transactionClient),
     } as unknown as PrismaService;
     const config = { get: () => undefined } as unknown as ConfigService;
     const service = new ReplacementlistingsService(prisma, config);
@@ -75,6 +79,89 @@ describe("ReplacementlistingsService", () => {
         endDate: "2026-09-01T08:00:00.000Z",
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("reopens a FULL listing when the owner raises maxApplications", async () => {
+    // A FULL listing whose cap is raised must stop being FULL, otherwise it
+    // refuses every candidate with free slots and nothing in the module can
+    // undo that: the only writes that move an application out of the active
+    // set are reject/withdraw, which is what FULL is supposed to unblock.
+    const fullListing = { ...listing, status: "FULL", maxApplications: 2 };
+    const updateCalls: Array<{ data: Record<string, unknown> }> = [];
+
+    const transactionClient = {
+      replacementListing: {
+        findUnique: async () => fullListing,
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          updateCalls.push({ data });
+          return { ...fullListing, _count: { applications: 0 } };
+        },
+        findUniqueOrThrow: async () => ({
+          ...fullListing,
+          status: "IN_DISCUSSION",
+          maxApplications: 5,
+          _count: { applications: 0 },
+        }),
+      },
+      application: {
+        count: async () => 2,
+      },
+      profile: { findUnique: async () => profile },
+    };
+    const prisma = {
+      $transaction: async (
+        operation: (tx: typeof transactionClient) => unknown,
+      ) => operation(transactionClient),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    const result = await service.update("listing-1", "user-1", {
+      maxApplications: 5,
+    });
+
+    // 2 active applications against a cap of 5 is IN_DISCUSSION, not FULL.
+    expect(result.status).toBe("IN_DISCUSSION");
+    expect(updateCalls[0]?.data).toMatchObject({ maxApplications: 5 });
+  });
+
+  it("keeps a FULL listing FULL when maxApplications is left alone", async () => {
+    const fullListing = { ...listing, status: "FULL", maxApplications: 2 };
+    const updated = {
+      ...fullListing,
+      title: "New title",
+      _count: { applications: 0 },
+    };
+
+    const transactionClient = {
+      replacementListing: {
+        findUnique: async () => fullListing,
+        update: async () => updated,
+        // A recalc would be wrong here: no capacity changed.
+        findUniqueOrThrow: async () => {
+          throw new Error("status must not be recalculated");
+        },
+      },
+      application: {
+        count: async () => {
+          throw new Error("status must not be recalculated");
+        },
+      },
+      profile: { findUnique: async () => profile },
+    };
+    const prisma = {
+      $transaction: async (
+        operation: (tx: typeof transactionClient) => unknown,
+      ) => operation(transactionClient),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    const result = await service.update("listing-1", "user-1", {
+      title: "New title",
+    });
+
+    expect(result.status).toBe("FULL");
   });
 
   it("allows anyone to view an OPEN listing", async () => {

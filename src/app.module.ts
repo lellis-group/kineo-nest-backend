@@ -3,14 +3,13 @@ import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
 import { ScheduleModule } from "@nestjs/schedule";
-import { ThrottlerModule } from "@nestjs/throttler";
+import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { AuthModule } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerInterceptor, ZodValidationPipe } from "nestjs-zod";
 import { AccountDeletionModule } from "./account-deletion/account-deletion.module";
 import { AppController } from "./app.controller";
 import { ApplicationsModule } from "./applications/applications.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception/http-exception.filter";
-import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-proxy.guard";
 import configuration, { envValidationSchema } from "./config/configuration";
 import { DataLifecycleModule } from "./data-lifecycle/data-lifecycle.module";
 import { HealthModule } from "./health/health.module";
@@ -110,7 +109,13 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
-    { provide: APP_GUARD, useClass: ThrottlerBehindProxyGuard },
+    // The stock guard. Its `getTracker` returns `req.ip`, which Express resolves
+    // through the `trust proxy` setting — the one source of truth for "who is
+    // this request from". A subclass that read `req.ips[0]` looked like it
+    // handled the proxy case better, but `req.ips` is the same filtered chain
+    // `req.ip` is derived from, so it resolved to the identical value and only
+    // added a `req.ips` dereference that would throw on a non-Express adapter.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
   ],
 })

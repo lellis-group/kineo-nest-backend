@@ -1,11 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import type { PrismaService } from "../prisma.service";
-import { createAuth, type AuthEnv } from "./auth";
+import { type AuthEnv, createAuth, readAuthEnv } from "./auth";
+import { createPrismaClient } from "./prisma";
 
 /**
- * The session cookie cache is served from a signed cookie without ever
- * touching the database, so deleting the `Session` rows does not invalidate it.
- * These tests pin the version hook that closes that window.
+ * The session cookie cache is served from a signed cookie without ever reading
+ * the database, and better-auth recomputes its `version` from the decoded
+ * payload — so a version hook cannot notice a change made in the database.
+ * These tests pin the mitigation that does work: the cache stays off unless it
+ * is explicitly turned on.
  */
 
 const baseEnv: AuthEnv = {
@@ -16,10 +19,8 @@ const baseEnv: AuthEnv = {
   sessionUpdateAge: 86400,
   rateLimitWindow: 60,
   rateLimitMax: 20,
-  cookieCacheEnabled: true,
+  cookieCacheEnabled: false,
   cookieCacheMaxAge: 300,
-  emailVerification: { requireEmailVerification: false },
-  advanced: { useSecureCookies: false },
   jwtEnabled: false,
   requireEmailVerification: false,
   frontendUrl: "http://localhost:3001",
@@ -30,7 +31,7 @@ const baseEnv: AuthEnv = {
 };
 
 /** Reach into the resolved better-auth options without a live backend. */
-function sessionOptions(env: Partial<AuthEnv> = {}) {
+function cookieCacheOptions(env: Partial<AuthEnv> = {}) {
   const prisma = {
     user: { findUnique: async () => null },
     session: { findUnique: async () => null, deleteMany: async () => ({}) },
@@ -38,40 +39,49 @@ function sessionOptions(env: Partial<AuthEnv> = {}) {
   } as unknown as PrismaService;
 
   const auth = createAuth(
-    { ...baseEnv, ...env } as AuthEnv,
+    { ...baseEnv, ...env },
     prisma as unknown as ReturnType<typeof createPrismaClient>,
   ) as unknown as {
-    options: { session: { cookieCache: { version: (s: unknown, u: unknown) => string } } };
+    options: {
+      session: {
+        cookieCache: {
+          enabled?: boolean;
+          version?: unknown;
+        };
+      };
+    };
   };
 
   return auth.options.session.cookieCache;
 }
 
-describe("session cookie cache versioning", () => {
-  it("changes when the user row is updated", () => {
-    const { version } = sessionOptions();
-
-    const before = version({}, { updatedAt: new Date("2026-01-01T00:00:00Z") });
-    const after = version({}, { updatedAt: new Date("2026-01-02T00:00:00Z") });
-
-    // Anonymization rewrites the user row, so the cached payload must no
-    // longer match or `get-session` keeps serving the pre-erasure name.
-    expect(before).not.toBe(after);
+describe("session cookie cache", () => {
+  it("is disabled by default", () => {
+    // The cache cannot be invalidated server-side, so it must not be on
+    // unless someone deliberately opted in. A revoked session that still
+    // authenticates is the failure this prevents.
+    expect(cookieCacheOptions().enabled).toBe(false);
   });
 
-  it("is stable for an unchanged user", () => {
-    const { version } = sessionOptions();
-    const updatedAt = new Date("2026-01-01T00:00:00Z");
+  it("is off when COOKIE_CACHE_ENABLED is unset", () => {
+    const env = readAuthEnv({
+      BETTER_AUTH_SECRET: "s".repeat(32),
+      DATABASE_URL: "postgresql://localhost/kineo",
+    } as unknown as NodeJS.ProcessEnv);
 
-    expect(version({}, { updatedAt })).toBe(version({}, { updatedAt }));
+    expect(env.cookieCacheEnabled).toBe(false);
   });
 
-  it("ignores the session argument", () => {
-    const { version } = sessionOptions();
-    const updatedAt = new Date("2026-01-01T00:00:00Z");
+  it("can still be enabled explicitly", () => {
+    // Opt-in stays available; it is just no longer the default.
+    expect(cookieCacheOptions({ cookieCacheEnabled: true }).enabled).toBe(true);
+  });
 
-    expect(version({ id: "a" }, { updatedAt })).toBe(
-      version({ id: "b" }, { updatedAt }),
-    );
+  it("registers no version hook", () => {
+    // A `version` function looks like it invalidates the cache on a user-row
+    // change. It does not: better-auth calls it with the cached payload
+    // (`dist/api/routes/session.mjs`), so the value it returns is compared
+    // against the copy it was baked from and always matches.
+    expect(cookieCacheOptions().version).toBeUndefined();
   });
 });

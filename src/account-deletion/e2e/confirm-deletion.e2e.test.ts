@@ -161,6 +161,13 @@ async function requestErasure(ownerId: string, email: string) {
 const confirm = (token: string) =>
   request(fx.baseUrl).post("/account/confirm-deletion").send({ token });
 
+/** Every `Set-Cookie` value in a response, one per cookie. */
+function setCookieHeaders(response: { headers: Record<string, unknown> }) {
+  const raw = response.headers["set-cookie"];
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw.map(String) : [String(raw)];
+}
+
 beforeAll(async () => {
   fx = await bootApp();
   pepper = process.env.DELETION_PEPPER ?? PEPPER;
@@ -193,6 +200,22 @@ describe("POST /account/confirm-deletion", () => {
     });
     expect(user.deletedAt).not.toBeNull();
     expect(user.email).not.toBe(owner.email);
+
+    // Revoking the `Session` rows is invisible to the browser: the session
+    // cookie is signed and still verifies, and better-auth only reaches the
+    // database once the cookie can no longer resolve a session. Without an
+    // explicit expiry header the erased account keeps working from the same
+    // browser.
+    const cleared = setCookieHeaders(response);
+    for (const cookie of [
+      "better-auth.session_token",
+      "better-auth.session_data",
+    ]) {
+      expect(cleared.some((h) => h.startsWith(`${cookie}=;`))).toBe(true);
+    }
+    for (const header of cleared) {
+      expect(header).toContain("Expires=Thu, 01 Jan 1970");
+    }
 
     // All three third-party rows survive, on a ghost.
     const survivors = await fx.prisma.application.findMany({

@@ -121,4 +121,17 @@ describe("recalcListingStatus", () => {
       expect(updates).toEqual([]);
     }
   });
+
+  it("never publishes a draft", async () => {
+    // A draft holds no applications, so the recount would resolve it to OPEN.
+    // Going live is `publish`'s decision, not a side effect of editing the cap.
+    const { tx, updates } = makeTx({
+      listing: { id: "l1", status: "DRAFT", maxApplications: 5 },
+      activeCount: 0,
+    });
+
+    await recalcListingStatus(tx, "l1");
+
+    expect(updates).toEqual([]);
+  });
 });
