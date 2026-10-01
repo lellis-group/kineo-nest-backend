@@ -367,13 +367,16 @@ export class ReplacementlistingsService {
         // connections, so a concurrent `/accept` could move the listing to
         // FILLED between the check and the update, and this would then edit a
         // placement that has already been confirmed.
+        //
+        // The statuses themselves come from `TERMINAL_LISTING_STATUSES`, the
+        // same list `close` and `cancel` refuse from. This guard used to spell
+        // out `FILLED || CLOSED || CANCELLED` and so let `CLOSED_NO_CANDIDATE`
+        // through: the owner could edit the title and the dates of a posting
+        // they had already closed. Every decision to stop modifying a listing
+        // reads the shared list, which is what keeps them from drifting apart.
         const listing = await this.assertOwnershipWith(tx, id, userId);
 
-        if (
-          listing.status === "FILLED" ||
-          listing.status === "CLOSED" ||
-          listing.status === "CANCELLED"
-        ) {
+        if (TERMINAL_LISTING_STATUSES.includes(listing.status)) {
           throw new BadRequestException(
             "This listing can no longer be modified",
           );

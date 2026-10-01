@@ -7,7 +7,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { recalcListingStatus } from "../common/listing-status";
+import {
+  recalcListingStatus,
+  TERMINAL_LISTING_STATUSES,
+} from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import {
@@ -456,11 +459,17 @@ export class ApplicationsService {
             "Only pending or shortlisted applications can be accepted",
           );
         }
-        if (
-          listing.status === "FILLED" ||
-          listing.status === "CLOSED" ||
-          listing.status === "CANCELLED"
-        ) {
+        // Read from `TERMINAL_LISTING_STATUSES` rather than listing the
+        // statuses out here. This guard used to name `FILLED`, `CLOSED` and
+        // `CANCELLED` and so let an `accept` through on a listing that `close`
+        // had already taken out of circulation — the status was
+        // `CLOSED_NO_CANDIDATE`, a terminal status this list did not mention.
+        // It only failed to reopen a listing because the applications on a
+        // closed one have always been settled, so the `ACTIVE_STATUSES` check
+        // above refused them first. That is a coincidence between two guards,
+        // not a property of either: the day `close` stops settling them, the
+        // listing reopens through this path.
+        if (TERMINAL_LISTING_STATUSES.includes(listing.status)) {
           throw new BadRequestException(
             "This listing can no longer accept an application",
           );
