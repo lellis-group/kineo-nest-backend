@@ -21,7 +21,23 @@ import { Test } from "@nestjs/testing";
 import { Client } from "pg";
 import { SYSTEM_SCAFFOLD } from "../../common/system-scaffold";
 
-const TEST_DB = process.env.TEST_DATABASE_NAME ?? "kineo_e2e";
+/**
+ * Name of the throwaway database this process owns.
+ *
+ * Derived from `KINE_E2E_SUITE`, which `package.json` sets per suite, so the
+ * three suites that `test:e2e` runs in three separate processes each create
+ * their own. They used to share one name, and `bun test src` — which loads
+ * every spec in a single process — had two of them race between
+ * `DROP DATABASE IF EXISTS` and `CREATE DATABASE`, which surfaced as
+ * `duplicate key value violates unique constraint "pg_database_datname_index"`.
+ * Distinct names remove the race entirely rather than papering over it.
+ *
+ * `TEST_DATABASE_NAME` still wins, so a developer can point one run at a
+ * database of their own to inspect what a suite left behind.
+ */
+const TEST_DB =
+  process.env.TEST_DATABASE_NAME ??
+  `kineo_e2e_${process.env.KINEO_E2E_SUITE ?? "default"}`;
 const ADMIN_URL =
   process.env.TEST_DATABASE_ADMIN_URL ??
   "postgresql://johndoe:randompassword@localhost:5432/postgres";

@@ -7,8 +7,33 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+
+    # The e2e suites boot the real AppModule, run `prisma migrate deploy` and
+    # drive HTTP against it, so they need a live server. `services:` provides
+    # one that is ready before any step runs, which the previous `DATABASE_URL`
+    # pointing at a localhost nothing was listening on never did.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kineo
+          POSTGRES_PASSWORD: kineo
+          POSTGRES_DB: kineo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
-      DATABASE_URL: postgresql://user:password@localhost:5432/kineo
+      DATABASE_URL: postgresql://kineo:kineo@localhost:5432/kineo
+      # The harness connects here to CREATE/DROP its own throwaway databases,
+      # so it has to point at `postgres` rather than at the app database.
+      TEST_DATABASE_ADMIN_URL: postgresql://kineo:kineo@localhost:5432/postgres
+      BETTER_AUTH_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_ci_secret
+
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -19,4 +44,8 @@ jobs:
       - run: bunx prisma generate
       - run: bun run build
       - run: bun run lint
-      - run: bun test src
+      # `bun run test`, not `bun test src`: the bare invocation also collects
+      # `**/e2e/**`, and the harness deliberately refuses to share a process —
+      # so the two suites it loaded failed here on every push.
+      - run: bun run test
+      - run: bun run test:e2e
