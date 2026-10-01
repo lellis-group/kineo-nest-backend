@@ -8,6 +8,7 @@ import {
   Specialty,
 } from "../src/generated/prisma/enums";
 import { createPrismaClient } from "../src/lib/prisma";
+import { REASON_ANOTHER_CANDIDATE_SELECTED } from "../src/applications/rejection-reasons";
 
 const prisma = createPrismaClient();
 
@@ -538,8 +539,11 @@ async function main() {
     ApplicationStatus.WITHDRAWN,
   ];
 
+  // The first is the platform's own, not a practice's opinion — importing the
+  // constant keeps it that way, where a hand-typed copy would drift back to
+  // being indistinguishable from the free text below it.
   const rejectionReasons = [
-    "Autre candidat retenu",
+    REASON_ANOTHER_CANDIDATE_SELECTED,
     "Disponibilités incompatibles",
     "Profil déjà pourvu",
     "Spécialité non correspondante",

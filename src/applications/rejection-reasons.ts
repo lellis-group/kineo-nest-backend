@@ -92,13 +92,18 @@ export const PLATFORM_REJECTION_REASONS: string[] = [
 ];
 
 /**
- * The English spelling of `REASON_ANOTHER_CANDIDATE_SELECTED`, still present on
- * rows written before the reasons were translated. Listed so a row that predates
- * the translation is recognised as ours rather than erased as a practice's free
- * text.
+ * Earlier spellings of `REASON_ANOTHER_CANDIDATE_SELECTED`, still present on
+ * rows written before the reasons were reworded. Listed so a row that predates
+ * the change is recognised as ours rather than erased as a practice's free text.
+ *
+ * Both are here because the reasons were translated once and reworded once, and
+ * a deployment that only knows the newest string silently reclassifies every
+ * historical row as somebody's opinion — which is the exact failure
+ * `PLATFORM_REJECTION_REASONS` exists to prevent.
  */
 export const LEGACY_PLATFORM_REJECTION_REASONS: string[] = [
   "Another candidate was selected for this listing",
+  "Autre candidat retenu",
 ];
 
 /**

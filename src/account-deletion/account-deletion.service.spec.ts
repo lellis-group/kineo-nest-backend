@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import {
+  LEGACY_PLATFORM_REJECTION_REASONS,
   REASON_ANOTHER_CANDIDATE_SELECTED,
   REASON_CANDIDATE_UNAVAILABLE,
   REASON_LISTING_CLOSED,
@@ -1068,12 +1069,15 @@ describe("AccountDeletionService", () => {
         listingId: "listing-7",
         id: { not: "app-accepted" },
         status: "REJECTED",
-        // Both spellings: rows written before the reasons were translated
-        // still carry the English one, and those candidates must come back too.
+        // Every spelling: rows written before the reasons were translated
+        // still carry the English one, and rows written before they were
+        // reworded carry the older French one. Those candidates must come back
+        // too — an auto-rejection is not a decision the practice took, so
+        // leaving it out would strand them in REJECTED forever.
         rejectionReason: {
           in: [
             REASON_ANOTHER_CANDIDATE_SELECTED,
-            "Another candidate was selected for this listing",
+            ...LEGACY_PLATFORM_REJECTION_REASONS,
           ],
         },
       },
