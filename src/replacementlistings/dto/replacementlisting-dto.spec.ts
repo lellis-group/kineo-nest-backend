@@ -171,7 +171,9 @@ describe("ReplacementListing DTO security", () => {
     });
 
     it("parses a single status into a list", () => {
-      const result = FindReplacementListingsSchema.safeParse({ status: "OPEN" });
+      const result = FindReplacementListingsSchema.safeParse({
+        status: "OPEN",
+      });
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.status).toEqual(["OPEN"]);

@@ -5,8 +5,8 @@ import {
   GoneException,
   NotFoundException,
 } from "@nestjs/common";
-import type { HttpAdapterHost } from "@nestjs/core";
 import type { ConfigService } from "@nestjs/config";
+import type { HttpAdapterHost } from "@nestjs/core";
 import { HttpExceptionFilter } from "./http-exception.filter";
 
 /**
@@ -74,10 +74,7 @@ describe("HttpExceptionFilter (hardened)", () => {
   });
 
   it("leaves the body shape unchanged when there is no code", () => {
-    const payload = run(
-      new NotFoundException("Ce lien est invalide."),
-      true,
-    );
+    const payload = run(new NotFoundException("Ce lien est invalide."), true);
 
     expect(payload).not.toHaveProperty("code");
     expect(payload).toMatchObject({ statusCode: 404 });

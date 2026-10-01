@@ -1,4 +1,5 @@
 import { hashPassword } from "better-auth/crypto";
+import { REASON_ANOTHER_CANDIDATE_SELECTED } from "../src/applications/rejection-reasons";
 import { SYSTEM_SCAFFOLD } from "../src/common/system-scaffold";
 import { Prisma } from "../src/generated/prisma/client";
 import {
@@ -8,7 +9,6 @@ import {
   Specialty,
 } from "../src/generated/prisma/enums";
 import { createPrismaClient } from "../src/lib/prisma";
-import { REASON_ANOTHER_CANDIDATE_SELECTED } from "../src/applications/rejection-reasons";
 
 const prisma = createPrismaClient();
 
