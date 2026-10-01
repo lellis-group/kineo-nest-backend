@@ -87,7 +87,10 @@ export class ProfileController {
 
   @Patch(":id")
   @ApiOperation({ summary: "Update a profile" })
-  @ApiResponse({ status: 403, description: "Not the owner of this profile" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this profile, or the email is not verified",
+  })
   @ZodSerializerDto(Profile)
   update(
     @Session() session: UserSession,
@@ -99,7 +102,10 @@ export class ProfileController {
 
   @Delete(":id")
   @ApiOperation({ summary: "Delete a profile" })
-  @ApiResponse({ status: 403, description: "Not the owner of this profile" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this profile, or the email is not verified",
+  })
   @ZodSerializerDto(Profile)
   remove(@Session() session: UserSession, @Param("id") id: string) {
     return this.profileService.remove(id, session.user.id);

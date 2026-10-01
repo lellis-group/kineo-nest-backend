@@ -62,7 +62,10 @@ export class ApplicationsController {
 
   @Get("listing/:listingId")
   @ApiOperation({ summary: "List applications received for a listing you own" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing, or the email is not verified",
+  })
   @ZodSerializerDto(PaginatedApplications)
   findForListing(
     @Session() session: UserSession,
@@ -89,7 +92,10 @@ export class ApplicationsController {
 
   @Patch(":id/view")
   @ApiOperation({ summary: "Mark an application as viewed" })
-  @ApiResponse({ status: 403, description: "Not the owner of the listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of the listing, or the email is not verified",
+  })
   @ZodSerializerDto(Application)
   markAsViewed(@Session() session: UserSession, @Param("id") id: string) {
     return this.applicationsService.markAsViewed(id, session.user.id);

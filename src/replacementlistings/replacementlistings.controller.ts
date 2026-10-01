@@ -97,7 +97,10 @@ export class ReplacementlistingsController {
     summary: "Publish a draft listing, making it publicly visible",
   })
   @ApiResponse({ status: 400, description: "Listing is not a draft" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing, or the email is not verified",
+  })
   @ZodSerializerDto(ReplacementListing)
   publish(@Session() session: UserSession, @Param("id") id: string) {
     return this.replacementlistingsService.publish(id, session.user.id);
@@ -105,7 +108,10 @@ export class ReplacementlistingsController {
 
   @Patch(":id")
   @ApiOperation({ summary: "Update a listing" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing, or the email is not verified",
+  })
   @ZodSerializerDto(ReplacementListing)
   update(
     @Session() session: UserSession,
@@ -121,7 +127,10 @@ export class ReplacementlistingsController {
 
   @Delete(":id")
   @ApiOperation({ summary: "Delete a listing" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing, or the email is not verified",
+  })
   @ZodSerializerDto(ReplacementListing)
   remove(@Session() session: UserSession, @Param("id") id: string) {
     return this.replacementlistingsService.remove(id, session.user.id);
@@ -140,7 +149,10 @@ export class ReplacementlistingsController {
     status: 400,
     description: "Listing is a draft or already out of circulation",
   })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing, or the email is not verified",
+  })
   @ZodSerializerDto(ReplacementListing)
   close(@Session() session: UserSession, @Param("id") id: string) {
     return this.replacementlistingsService.close(id, session.user.id);
@@ -153,7 +165,10 @@ export class ReplacementlistingsController {
     description:
       "Listing is filled (close it instead) or already out of circulation",
   })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing, or the email is not verified",
+  })
   @ZodSerializerDto(ReplacementListing)
   cancel(@Session() session: UserSession, @Param("id") id: string) {
     return this.replacementlistingsService.cancel(id, session.user.id);

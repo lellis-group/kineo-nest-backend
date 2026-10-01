@@ -80,7 +80,10 @@ export class PracticesController {
 
   @Patch(":id")
   @ApiOperation({ summary: "Update a practice" })
-  @ApiResponse({ status: 403, description: "Not the owner of this practice" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this practice, or the email is not verified",
+  })
   @ZodSerializerDto(Practice)
   update(
     @Session() session: UserSession,
@@ -92,7 +95,10 @@ export class PracticesController {
 
   @Delete(":id")
   @ApiOperation({ summary: "Delete a practice" })
-  @ApiResponse({ status: 403, description: "Not the owner of this practice" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this practice, or the email is not verified",
+  })
   @ZodSerializerDto(Practice)
   remove(@Session() session: UserSession, @Param("id") id: string) {
     return this.practicesService.remove(id, session.user.id);
