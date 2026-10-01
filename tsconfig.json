@@ -15,7 +15,6 @@
     "outDir": "dist",
     "types": [
       "node",
-      "jest",
       "bun"
     ]
   },
