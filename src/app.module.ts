@@ -109,7 +109,20 @@ function throttleValue(
                   return false;
                 }
               } catch {
-                return false;
+                // Fail towards SKIPPING this tier, not towards applying it.
+                //
+                // `skipIf` returning `false` means "do not skip", so the old
+                // `catch { return false }` applied the 5-per-15-min budget to
+                // every route of the whole API — including `/health` — the
+                // moment `switchToHttp()` threw on a non-HTTP context. The
+                // error would then be indistinguishable from a caller who had
+                // genuinely hit the limit, and it would lock out reads rather
+                // than protect the endpoint the tier exists for.
+                //
+                // Failing open here costs one erasure attempt on a context that
+                // is not the erasure endpoint at all. Failing closed costs the
+                // entire API. The right direction is not a close call.
+                return true;
               }
               return true;
             },
