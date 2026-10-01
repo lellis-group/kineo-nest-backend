@@ -29,7 +29,7 @@ The market already includes established players:
 3. Publishing a replacement listing (practice, dates, specialty)
 4. Search / apply for a listing
 5. Application lifecycle with transparent status tracking (no messaging/conversation module yet)
-6. Listing status (draft → open → in discussion → full → filled → closed/cancelled)
+6. Listing status (draft → open → in discussion → full → filled → closed/closed-without-candidate/cancelled)
 
 Out of MVP scope: contract generation, payment, real-time RPPS API verification, rating, messaging/conversation module.
 
@@ -132,7 +132,6 @@ erDiagram
         float longitude
         boolean isPublic
     }
-
     ReplacementListing {
         string id PK
         string practiceId FK
@@ -141,7 +140,7 @@ erDiagram
         datetime startDate
         datetime endDate
         enum specialty
-        enum status "DRAFT OPEN IN_DISCUSSION FULL FILLED CLOSED CANCELLED"
+        enum status "DRAFT OPEN IN_DISCUSSION FULL FILLED CLOSED CLOSED_NO_CANDIDATE CANCELLED"
         boolean urgent
         string description
         int maxApplications "optional cap on active applications"
@@ -152,6 +151,7 @@ erDiagram
         string listingId FK
         string applicantId FK
         enum status "PENDING SHORTLISTED ACCEPTED REJECTED WITHDRAWN"
+        enum decisionSource "who decided; null while open"
         string message
         string rejectionReason
         string withdrawnReason
@@ -159,6 +159,20 @@ erDiagram
         datetime respondedAt
     }
 ```
+
+### 4.3 System scaffold and ghost listings
+
+`user.deletedAt` is set when an erasure runs, and a `DataDeletionRequest` row is written for the audit trail. Neither appears in the ERD above because neither is part of the candidate-facing model, but both are load-bearing.
+
+**The scaffold** (`common/system-scaffold.ts`) is three fixed rows created by the `system_scaffold` migration: a `user`, its `profile` and its `practice`. It exists so an erasure has somewhere to move other people's applications to. Ids are constants rather than generated, because the erasure refers to them by id on every run.
+
+**Ghost listings** are `CLOSED` listings owned by the scaffold practice, created one-per-original-listing during an erasure. They hold the applications other candidates had filed, so the `User → Profile → Practice → ReplacementListing → Application` cascade cannot destroy them. They are invisible to the public search (`findAll` only surfaces `OPEN`) and are collected by the daily sweep once no application points at them any more.
+
+### 4.4 DataDeletionRequest (art. 5(2) accountability)
+
+Deliberately has **no foreign key to `user`**: the row must survive the purge for the request/execution timeline to stay provable. It stores keyed fingerprints (`userIdHash`, `emailHash`) rather than identifiers — see §8.
+
+A partial **UNIQUE** index on `userIdHash WHERE status = 'PENDING'` is what makes a second concurrent request impossible. `sendDeleteAccountVerification` runs at READ COMMITTED, so without it two requests could both land and make the trail ambiguous.
 
 **Not implemented**: `Conversation`/`Message` (messaging module), originally planned in the ERD, is out of scope for now — deferred until a real need emerges.
 
@@ -237,16 +251,26 @@ stateDiagram-v2
     OPEN --> IN_DISCUSSION : first active application
     IN_DISCUSSION --> FULL : maxApplications reached
     FULL --> IN_DISCUSSION : an application is withdrawn/rejected, below cap again
+    IN_DISCUSSION --> OPEN : last active application leaves
+    OPEN --> IN_DISCUSSION : recalc after a write
     IN_DISCUSSION --> FILLED : application accepted
     FULL --> FILLED : application accepted
     OPEN --> FILLED : application accepted
-    OPEN --> CLOSED : closed by owner
-    FILLED --> CLOSED : replacement completed
+
+    OPEN --> CLOSED : closed, nobody to retain
+    FILLED --> CLOSED : closed after the placement was retained
+    IN_DISCUSSION --> CLOSED_NO_CANDIDATE : closed while still recruiting
+    FULL --> CLOSED_NO_CANDIDATE : closed while still recruiting
+
     DRAFT --> CANCELLED : cancelled by owner
     OPEN --> CANCELLED : cancelled by owner
     IN_DISCUSSION --> CANCELLED : cancelled by owner (active applications auto-rejected)
     FULL --> CANCELLED : cancelled by owner (active applications auto-rejected)
 ```
+
+`CLOSED_NO_CANDIDATE` is what makes "they found someone" and "nobody was taken" tellable apart to a shortlisted candidate. It exists because `close` became reachable from a listing that was still recruiting, where the plain `CLOSED` reason would have read as a successful placement.
+
+`FILLED` is the one terminal status `close` accepts and `cancel` refuses: the placement is already written, and cancelling would leave the accepted candidate holding a post that no longer exists. Every terminal-status decision reads `TERMINAL_LISTING_STATUSES` from `common/listing-status.ts` — the guards used to redraw that list each, which is how they came to disagree.
 
 ### 5.4 Application Lifecycle
 
@@ -256,11 +280,19 @@ stateDiagram-v2
     PENDING --> SHORTLISTED : owner shortlists
     PENDING --> ACCEPTED : owner accepts
     SHORTLISTED --> ACCEPTED : owner accepts
-    PENDING --> REJECTED : owner rejects, or listing cancelled
-    SHORTLISTED --> REJECTED : owner rejects, or listing cancelled
-    PENDING --> WITHDRAWN : applicant withdraws
-    SHORTLISTED --> WITHDRAWN : applicant withdraws
+    PENDING --> REJECTED : owner rejects, or listing closed/cancelled/erased
+    SHORTLISTED --> REJECTED : owner rejects, or listing closed/cancelled/erased
+    PENDING --> WITHDRAWN : applicant withdraws, or account erased
+    SHORTLISTED --> WITHDRAWN : applicant withdraws, or account erased
 ```
+
+`decisionSource` records **who** settled the row, and is `null` while the application is still open. `status` alone could not carry this: "rejected" reads the same whether a practice refused the candidate, closed the posting, cancelled it, or the posting's owner erased their account — four situations the applicant needs to tell apart.
+
+The values are `CANDIDATE_WITHDREW`, `PRACTICE_ACCEPTED`, `PRACTICE_REJECTED`, `ANOTHER_CANDIDATE_SELECTED`, `LISTING_CLOSED`, `LISTING_CLOSED_NO_CANDIDATE`, `LISTING_CANCELLED`, `LISTING_ERASED`, `CANDIDATE_UNAVAILABLE`.
+
+A candidate who is erased while holding an `ACCEPTED` placement is a special case: the listing is reopened and the auto-rejected pool is put back in the pipeline, because the premise under which they were turned down no longer holds.
+
+`rejectionReason` is stored verbatim, in French, and reaches the applicant as written — see `applications/rejection-reasons.ts` for the platform-authored strings and the historical spellings that must keep matching.
 
 ### 5.5 Account Erasure (art. 17 GDPR)
 
@@ -274,40 +306,49 @@ sequenceDiagram
 
     U->>A: POST /api/auth/delete-user (session + password)
     A->>D: DataDeletionRequest PENDING (fingerprints only)
-    A-->>U: email, 24h token, warning if applications will block
+    A-->>U: email, 24h token, how many candidate applications will be kept
     U->>A: POST /account/confirm-deletion (token)
     A->>D: serializable tx
-    Note over A,D: refuses with 409 if other candidates hold active applications
+    A->>D: third-party applications moved onto ghost listings
     A->>D: ANONYMIZED, PII overwritten, sessions and accounts revoked
+    A->>D: listings CANCELLED, released placements reopened
     D-->>A: committed
-    A-->>U: 200, logged out everywhere
+    A-->>U: 200, session cookies cleared
     Note over A,D: ACCOUNT_PURGE_GRACE_DAYS later
     A->>D: delete user -> cascade clears profile, practices, listings, applications
+    A->>D: orphan ghost listings with no application left are collected
 ```
 
-**What is erased at confirmation**: `user.name`/`image`/`email`, `profile.rppsNumber`/`city`/coordinates, practice name and address, listing titles and descriptions, the rejection reasons the account holder wrote, and the application messages and withdrawal reasons it wrote on other people's listings. Its own applications also leave the `PENDING`/`SHORTLISTED` pipeline, so nobody keeps a candidate they can no longer reach.
+**No blocker.** An earlier version refused the erasure with a `409` while another candidate held an application on one of the account's listings, on the grounds that the cascade would destroy that candidate's data. That was wrong twice over: the third party's message and the practice's decision are not ours to erase on someone else's request, and refusing left the account holder permanently unable to exercise a right the law gives them.
+
+The applications are now **moved onto ghost listings** before the anonymization, inside the same transaction, so the cascade stops short of them and the erasure goes through. Each is settled as `REJECTED` with `decisionSource: LISTING_ERASED`, and the candidate is told the posting no longer exists — without disclosing anything about the erasure. The three endpoints that delete a listing, a practice or a profile outright keep their own guard, because they have no equivalent step.
+
+**What is erased at confirmation**: `user.name`/`image`/`email` (replaced by a deterministic `deleted+<hash>@deleted.invalid`), `profile.rppsNumber`/`city`/coordinates, practice name and address, listing titles and descriptions, the rejection reasons the account holder wrote, and the application messages and withdrawal reasons it wrote on other people's listings. Its own applications leave the `PENDING`/`SHORTLISTED` pipeline, so nobody keeps a candidate they can no longer reach.
 
 **What is retained**: two keyed fingerprints (HMAC-SHA256 over `DELETION_PEPPER`) plus timestamps, for `DATA_DELETION_REQUEST_RETENTION_DAYS`. An operator can answer "was my request processed?" without the database holding a single identifier. A request that was never confirmed is dropped after `PENDING_DELETION_REQUEST_RETENTION_DAYS`, since it only ever recorded an intention.
 
-**The blocker**: an erasure is refused while another candidate holds an active application on one of the account's listings, because the cascade would destroy that candidate's data. The user is warned by email at request time and told to close or cancel those listings; closing and cancelling both terminate the active applications so the way out always exists.
+**Session revocation**: the `Session` rows are deleted inside the transaction *and* the browser's cookies are cleared by the controller. Deleting the rows alone is invisible to the client — `session_token` is a signed cookie that keeps verifying, and better-auth only consults the database on a cache miss.
 
-**Known limits**: there is no user-facing undo during the grace period (the email address is not recoverable without encrypting the original). Data portability (art. 15/20) and the consent register (art. 7) are not implemented.
+**Known limits**: there is no user-facing undo during the grace period (the email address is not recoverable without encrypting the original). Data portability (art. 15/20) and the consent register (art. 7) are not implemented. The session cookie cache must stay off (`COOKIE_CACHE_ENABLED=false`): better-auth cannot invalidate it server-side, so it would keep serving `emailVerified: true` for an account the database has already anonymized.
 
 ---
 
 ## 6. Security & Reliability
 
-Covered by an internal audit (`SECURITY-AUDIT.md`), mostly resolved:
+Most of the following came out of a series of security-audit remediation commits on the `fix/security-audit-remediation` branch; the audit document itself is not in the repository.
 
 - **Access control**: ownership checks on every mutating route across all four modules; `404` (not `403`) returned for private resources to avoid enumeration.
+- **Verified email on writes**: `EmailVerifiedGuard` is applied at **controller** level on all four business controllers, and reads the HTTP method — `POST`/`PUT`/`PATCH`/`DELETE` are gated, reads are not. It reads the flag from the database row rather than the session payload, because the erasure is exactly the case where that snapshot lies: the row says `emailVerified = false` while the cookie still says `true`. `deletedAt` is checked alongside it.
 - **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades).
-- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, with stricter limits on `create` routes and a dedicated `deletion` tier (5 attempts / 15 min) on the anonymous account-erasure endpoint, which authenticates the caller with a bearer token from an email link. Clients are keyed by `req.ip`, which Express resolves through `trust proxy` — set `TRUST_PROXY=true` when the API sits behind a reverse proxy, or every caller shares the proxy's address.
-- **Input validation**: length/range constraints on every Zod DTO (text fields capped, coordinates bounded, RPPS format-checked); per-profile resource caps configurable via env vars (`MAX_PRACTICES_PER_PROFILE`, `MAX_ACTIVE_LISTINGS_PER_PROFILE`, `MAX_ACTIVE_APPLICATIONS_PER_PROFILE`).
-- **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`.
-- **Email**: no more plaintext token logging; real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction.
-- **Indexes**: composite and partial indexes aligned with actual query patterns (`status`-filtered lookups on listings/applications, bounding-box geo search on practices).
+- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`/`deletion`) via `@nestjs/throttler`, with a dedicated `deletion` tier (5 attempts / 15 min) scoped to the anonymous account-erasure endpoint. Both the `ttl` and the `limit` of every tier are configurable (`THROTTLE_*_TTL` / `THROTTLE_*_LIMIT`), and limits are read from the validated `ConfigService` — never re-read at import time, which used to give the decorators a second, unvalidated copy of the numbers.
+- **Input validation**: length/range constraints on every Zod DTO (text fields capped, coordinates bounded, RPPS format-checked, query objects `.strict()`); per-profile resource caps configurable via env vars (`MAX_PRACTICES_PER_PROFILE`, `MAX_ACTIVE_LISTINGS_PER_PROFILE`, `MAX_ACTIVE_APPLICATIONS_PER_PROFILE`).
+- **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`; production error bodies sanitized by `HttpExceptionFilter`.
+- **Email**: HTML-escaped templates, no plaintext token logging, real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction.
+- **Indexes**: composite and partial indexes aligned with actual query patterns (`status`-filtered lookups on listings/applications, bounding-box geo search on practices, hash index on `verification.identifier`).
 
-Not yet done: automated tests (unit/e2e) beyond a single transactional test on `accept()`; production stack-trace leak has not been manually verified; email notifications on status changes are written (templates + mailer) but not yet wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`.
+**Tests**: 291 unit assertions across 25 files, plus 30 end-to-end tests that boot the real `AppModule` against a throwaway PostgreSQL database and drive it over HTTP. CI runs both. The e2e suites each own their own database and must run in separate processes — `bun test src` collects them all and fails, so `bun run test` and `bun run test:e2e` are the two entry points.
+
+Still not done: email notifications on status changes are written (templates + mailer) but not yet wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`. Stack-trace leakage in production has not been manually verified.
 
 ---
 
@@ -319,8 +360,9 @@ Not yet done: automated tests (unit/e2e) beyond a single transactional test on `
 - [x] ReplacementListing Module (full lifecycle, capacity threshold, geo/date/specialty search)
 - [x] Application Module (apply, shortlist, accept/reject cascade, withdraw, view tracking)
 - [x] Security hardening (throttling, Helmet, CORS, indexes, input validation, concurrency safety)
+- [x] GDPR account erasure (art. 17): anonymization, deferred purge, ghost-listing detachment, audit trail
+- [x] Automated test suite (291 unit assertions + 30 e2e over HTTP against a real database, wired into CI)
 - [ ] Email notifications wired into the application lifecycle (`NotificationsModule`)
-- [ ] Automated test suite (unit + e2e)
 - [ ] Messaging Module (conversation linked to an application) — deferred, not MVP-critical
 - [ ] Frontend (early TanStack Router scaffolding only)
 - [ ] V2: RPPS verification via official API, PDF contract generation, bilateral rating, geolocated "emergency" alerts
@@ -333,7 +375,7 @@ Not yet done: automated tests (unit/e2e) beyond a single transactional test on `
 
 - The `User`, `Session`, `Account`, `Verification`, `Jwks` models are managed by better-auth: do not modify them manually, regenerate via the better-auth CLI if additional fields are needed on `User`.
 - All business data (specialty, status, location) lives in `Profile`, not in `User`.
-- `email-verified.guard.ts` must be applied on **controllers**, not services — Nest guards have no effect on plain service methods.
+- `email-verified.guard.ts` must be applied on **controllers**, not services — Nest guards have no effect on plain service methods. Apply it at **controller class** level, not per handler: it gates by HTTP method, and enumerating the protected handlers by hand is what let `PATCH`/`DELETE` through unchecked in the first place.
 - Every service that needs to check resource ownership uses the shared helpers in `common/profile-lookup.ts` rather than duplicating `findUnique` logic.
 - Any write that reads-then-writes a shared counter (application count, listing capacity) must go through `runSerializableTransaction` (`common/serializable-transaction.ts`) to avoid race conditions.
 - Zod entity schemas use `z.iso.datetime()` for date fields exposed to Swagger — plain `z.date()` breaks OpenAPI generation (`nestjs-zod` / Zod v4 limitation) and must not be reintroduced.
@@ -341,3 +383,9 @@ Not yet done: automated tests (unit/e2e) beyond a single transactional test on `
 - `data_deletion_request` stores **keyed fingerprints, never plain identifiers**. Anything reading that table must go through `deletionHash(value, pepper)` (`lib/hash.ts`); computing a raw hash of an email to search it would defeat the purpose and, since an email has low entropy, would be reversible by dictionary.
 - `DELETION_PEPPER` is a separate secret on purpose. Do not reuse `BETTER_AUTH_SECRET`, and back it up with the database: rotating it does not lose the trail but does make it unsearchable.
 - A deletion token is a bearer secret carried in a URL. Never log it, and keep the `deletion` throttle tier on any route that accepts one.
+- **Do not hand-write a list of `ListingStatus` values.** Read `TERMINAL_LISTING_STATUSES` from `common/listing-status.ts`. Four guards each redrew the list once, and they drifted: `update` and `accept` were missing `CLOSED_NO_CANDIDATE` for a whole release. `src/common/listing-status-guards.spec.ts` is a table over all four guards × every enum member, typed `satisfies Record<ListingStatus, ...>` — **adding a member to the enum fails the build until every guard's row is written.** That is the mechanism, and it only works if the table is updated rather than bypassed.
+- **The listing status is derived state.** Any write that moves an application in or out of the active set must go through `recalcListingStatus` (`common/listing-status.ts`). It was reimplemented inline in `ApplicationsService.create` once; two copies of the rule is how they diverge.
+- **Every paginated query needs a total order**: `orderBy: [{ createdAt: "desc" }, { id: "desc" }]`. Without the `id` tie-breaker the database may return a different slice on each call, so page 2 repeats rows from page 1. This was fixed on one endpoint out of six.
+- **Never read `process.env` at module scope** in anything a decorator or a provider can load early. `throttle-with-config.decorator.ts` used to call `configuration()` at import, freezing a second unvalidated copy of the throttle limits and throwing at load rather than at boot.
+- **A 404 in a guard test is a broken test, not a refusal.** Rethrow it: it means the fixture never reached the guard, and counting it as a "refused" passes for the wrong reason.
+- **The e2e suites refuse to share a process** (`KINEO_E2E` guard in `e2e/harness.ts`), because `lib/prisma.ts` binds its adapter to `DATABASE_URL` at import time. Run them with `bun run test:e2e`, never `bun test src`.
