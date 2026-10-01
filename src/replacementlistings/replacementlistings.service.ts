@@ -191,7 +191,10 @@ export class ReplacementlistingsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // `id` breaks the ties `createdAt` leaves. Without a total order the
+        // database may return a different slice on each call, so page 2 could
+        // repeat rows from page 1 and silently drop others.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
@@ -260,7 +263,8 @@ export class ReplacementlistingsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // `id` breaks the ties `createdAt` leaves — see `findAll`.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),

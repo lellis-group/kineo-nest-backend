@@ -56,7 +56,17 @@ export class ProfileService {
     };
 
     const [data, total] = await Promise.all([
-      this.prisma.profile.findMany({ where, skip, take: limit }),
+      this.prisma.profile.findMany({
+        where,
+        skip,
+        take: limit,
+        // This list had no `orderBy` at all, which is the strongest form of the
+        // unstable-pagination problem the other five endpoints had: the
+        // database is free to return any order it likes on each call, so
+        // paging through the results can repeat a profile and skip another.
+        // `createdAt` alone still leaves ties, hence the `id`.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
       this.prisma.profile.count({ where }),
     ]);
 

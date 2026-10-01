@@ -257,7 +257,10 @@ export class ApplicationsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // `id` breaks the ties `createdAt` leaves. Two candidates applying in
+        // the same transaction share a `createdAt`, and without a total order
+        // the database may swap them between two pages.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: {
           applicant: {
             include: {
@@ -303,7 +306,8 @@ export class ApplicationsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // `id` breaks the ties `createdAt` leaves — see `findForListing`.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: { listing: { include: { practice: true } } },
       }),
       this.prisma.application.count({ where }),
