@@ -93,9 +93,20 @@ function configuration() {
     trustProxy: process.env.TRUST_PROXY === "true",
 
     // ---- Throttler (NestJS ThrottlerModule) ----
+    //
+    // Every tier is fully configurable, `ttl` included. The three generic ones
+    // used to hardcode their windows — 1s, 10s, 60s — while only `deletion`
+    // read its `THROTTLE_*_TTL`. A deployment that wanted "30 requests per
+    // minute" instead of "50 per second" had no way to express it: the window
+    // was a constant in this file. The defaults below preserve the shipped
+    // behaviour exactly, so an installation that sets nothing is unaffected.
     throttle: {
       short: {
-        ttl: 1_000,
+        ttl: positiveInteger(
+          process.env.THROTTLE_SHORT_TTL,
+          1_000,
+          "THROTTLE_SHORT_TTL",
+        ),
         limit: positiveInteger(
           process.env.THROTTLE_SHORT_LIMIT,
           500,
@@ -103,7 +114,11 @@ function configuration() {
         ),
       },
       medium: {
-        ttl: 10_000,
+        ttl: positiveInteger(
+          process.env.THROTTLE_MEDIUM_TTL,
+          10_000,
+          "THROTTLE_MEDIUM_TTL",
+        ),
         limit: positiveInteger(
           process.env.THROTTLE_MEDIUM_LIMIT,
           1500,
@@ -111,7 +126,11 @@ function configuration() {
         ),
       },
       long: {
-        ttl: 60_000,
+        ttl: positiveInteger(
+          process.env.THROTTLE_LONG_TTL,
+          60_000,
+          "THROTTLE_LONG_TTL",
+        ),
         limit: positiveInteger(
           process.env.THROTTLE_LONG_LIMIT,
           3500,
@@ -336,8 +355,13 @@ export const envValidationSchema = z
     TRUST_PROXY: BoolEnum.default("false"),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
+    // The TTLs default to the windows `configuration.ts` has always used, so
+    // setting nothing keeps the shipped behaviour.
+    THROTTLE_SHORT_TTL: z.coerce.number().int().positive().default(1_000),
     THROTTLE_SHORT_LIMIT: z.coerce.number().int().positive().default(500),
+    THROTTLE_MEDIUM_TTL: z.coerce.number().int().positive().default(10_000),
     THROTTLE_MEDIUM_LIMIT: z.coerce.number().int().positive().default(1500),
+    THROTTLE_LONG_TTL: z.coerce.number().int().positive().default(60_000),
     THROTTLE_LONG_LIMIT: z.coerce.number().int().positive().default(3500),
     THROTTLE_DELETION_TTL: z.coerce.number().int().positive().default(900_000),
     THROTTLE_DELETION_LIMIT: z.coerce.number().int().positive().default(5),

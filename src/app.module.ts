@@ -23,6 +23,35 @@ import { PrismaModule } from "./prisma.module";
 import { ProfileModule } from "./profile/profile.module";
 import { ReplacementlistingsModule } from "./replacementlistings/replacementlistings.module";
 
+/**
+ * Reads one throttle setting from the validated configuration.
+ *
+ * Each call site used to repeat its own fallback — `config.get("throttle.short.limit", 500)` —
+ * so the same eight numbers were written down three times over: in
+ * `configuration.ts`, in the Zod schema, and here. They could disagree, and
+ * nothing would say so.
+ *
+ * Throwing rather than defaulting is deliberate. `configuration()` already
+ * resolves every tier from `process.env` and rejects a non-positive value, so a
+ * missing key here means the configuration object did not carry what this
+ * factory was promised — a wiring bug, not a deployment choice. Silently
+ * substituting a default would throttle the API by numbers nobody chose.
+ */
+function throttleValue(
+  config: ConfigService,
+  tier: "short" | "medium" | "long" | "deletion",
+  field: "ttl" | "limit",
+): number {
+  const key = `throttle.${tier}.${field}`;
+  const value = config.get<number>(key);
+
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`throttle configuration is incomplete: ${key} is missing`);
+  }
+
+  return value;
+}
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -39,23 +68,23 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
         throttlers: [
           {
             name: "short",
-            ttl: config.get<number>("throttle.short.ttl", 1000),
-            limit: config.get<number>("throttle.short.limit", 500),
+            ttl: throttleValue(config, "short", "ttl"),
+            limit: throttleValue(config, "short", "limit"),
           },
           {
             name: "medium",
-            ttl: config.get<number>("throttle.medium.ttl", 10000),
-            limit: config.get<number>("throttle.medium.limit", 1500),
+            ttl: throttleValue(config, "medium", "ttl"),
+            limit: throttleValue(config, "medium", "limit"),
           },
           {
             name: "long",
-            ttl: config.get<number>("throttle.long.ttl", 60000),
-            limit: config.get<number>("throttle.long.limit", 3500),
+            ttl: throttleValue(config, "long", "ttl"),
+            limit: throttleValue(config, "long", "limit"),
           },
           {
             name: "deletion",
-            ttl: config.get<number>("throttle.deletion.ttl", 900000),
-            limit: config.get<number>("throttle.deletion.limit", 5),
+            ttl: throttleValue(config, "deletion", "ttl"),
+            limit: throttleValue(config, "deletion", "limit"),
             // The deletion tier (5 attempts / 15 min) protects the anonymous
             // account-erasure endpoint only. Without this, the global guard
             // would apply it to every undecorated route (GET /profile, health,
