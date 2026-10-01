@@ -30,12 +30,15 @@ import {
 import { ProfileService } from "./profile.service";
 
 @ApiTags("Profile")
+// Every write in this controller, not just `POST`. The guard reads the HTTP
+// method and lets reads through, so class level is both complete and shorter
+// than annotating each handler — and it cannot go stale when a route is added.
+@UseGuards(EmailVerifiedGuard)
 @Controller("profile")
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({
     summary: "Create a professional profile for the current user",

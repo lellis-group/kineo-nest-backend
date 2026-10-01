@@ -26,12 +26,15 @@ import {
 } from "./entities/application.entity";
 
 @ApiTags("Applications")
+// See `ProfileController`: class level, so `accept`, `reject` and `withdraw`
+// are covered. `accept` is the consequential one — it fills the listing and
+// rejects every other candidate with a reason they will read.
+@UseGuards(EmailVerifiedGuard)
 @Controller("applications")
 export class ApplicationsController {
   constructor(private readonly applicationsService: ApplicationsService) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({ summary: "Apply to a replacement listing" })
   @ApiResponse({ status: 201, description: "Application submitted" })

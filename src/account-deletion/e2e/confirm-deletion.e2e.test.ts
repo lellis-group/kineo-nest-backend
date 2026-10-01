@@ -35,6 +35,13 @@ async function seedScenario() {
     data: {
       id: "user-owner",
       email: "owner@test.invalid",
+      // Verified, so the scenarios below reach the handler they are about
+      // rather than being turned away by `EmailVerifiedGuard`. It now guards
+      // every write rather than the four `POST` handlers, and these cases are
+      // about `remove`'s own refusals — a 403 here would say nothing about
+      // them. The guard's own contract is covered by the suite that shares its
+      // name, over HTTP.
+      emailVerified: true,
       createdAt: now,
       updatedAt: now,
     },

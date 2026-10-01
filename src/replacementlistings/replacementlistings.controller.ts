@@ -29,6 +29,10 @@ import {
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 @ApiTags("Replacement Listings")
+// See `ProfileController`: class level, so `publish`, `close`, `cancel` and
+// `DELETE /:id` are covered — `close` and `cancel` are the two that take a
+// posting out of circulation and settle the candidates waiting on it.
+@UseGuards(EmailVerifiedGuard)
 @Controller("replacement-listings")
 export class ReplacementlistingsController {
   constructor(
@@ -36,7 +40,6 @@ export class ReplacementlistingsController {
   ) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({
     summary: "Create a draft replacement listing for a practice you own",

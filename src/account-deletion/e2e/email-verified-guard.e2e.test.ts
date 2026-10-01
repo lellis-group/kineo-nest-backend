@@ -72,6 +72,15 @@ async function restoreVerified() {
 
 let cookies: string[];
 
+/**
+ * Id of the profile the first test creates, captured from its response.
+ *
+ * The API generates the id, so it cannot be assumed: the `PATCH` and `DELETE`
+ * cases below need the real one, and a profile is unique per user, so they
+ * cannot create a second to work with. `null` until that first test runs.
+ */
+let profileId: string | null = null;
+
 beforeAll(async () => {
   fx = await bootApp();
   await resetData(fx.prisma);
@@ -81,6 +90,16 @@ beforeAll(async () => {
 afterAll(async () => {
   await shutdownApp();
 });
+
+/** The shared fixture the write cases act on. Fails loudly rather than 404ing. */
+function existingProfileId(): string {
+  if (!profileId) {
+    throw new Error(
+      "no profile was created: the first test in this suite must run first",
+    );
+  }
+  return profileId;
+}
 
 describe("EmailVerifiedGuard", () => {
   beforeEach(async () => {
@@ -94,6 +113,7 @@ describe("EmailVerifiedGuard", () => {
       .send({ specialty: "GENERALIST", profileType: "BOTH" });
 
     expect(response.status).toBe(201);
+    profileId = response.body?.id ?? null;
   });
 
   it("refuses a write when the database row says unverified", async () => {
@@ -132,5 +152,73 @@ describe("EmailVerifiedGuard", () => {
       .send({ specialty: "GENERALIST", profileType: "BOTH" });
 
     expect(response.status).toBe(401);
+  });
+
+  it("guards PATCH as well, not only POST", async () => {
+    // The guard used to sit on the four `POST` handlers only, so every `PATCH`
+    // and `DELETE` ran unchecked: an unverified account could accept a
+    // candidate, close a posting or delete a practice while being refused on
+    // `POST /profile`. Driven over HTTP because the point is which handlers
+    // carry the guard, which no service-level test can observe.
+    //
+    // The profile comes from the first test in this suite, which POSTed one.
+    // A profile is unique per user, so it cannot be created again here.
+    const id = existingProfileId();
+
+    await fx.prisma.user.update({
+      where: { id: USER_ID },
+      data: { emailVerified: false },
+    });
+
+    const response = await request(fx.baseUrl)
+      .patch(`/profile/${id}`)
+      .set("Cookie", cookies)
+      .send({ city: "Lyon" });
+
+    expect(response.status).toBe(403);
+
+    const unchanged = await fx.prisma.profile.findUnique({
+      where: { id },
+      select: { city: true },
+    });
+    expect(unchanged?.city).toBeNull();
+  });
+
+  it("guards DELETE as well, not only POST", async () => {
+    const id = existingProfileId();
+
+    await fx.prisma.user.update({
+      where: { id: USER_ID },
+      data: { emailVerified: false },
+    });
+
+    const response = await request(fx.baseUrl)
+      .delete(`/profile/${id}`)
+      .set("Cookie", cookies);
+
+    expect(response.status).toBe(403);
+
+    const stillThere = await fx.prisma.profile.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it("still lets an unverified account read its own data", async () => {
+    // The guard has to widen to every write without narrowing the reads: a
+    // candidate whose verification is pending must still be able to see the
+    // status of their own applications. The test name used to say "verified"
+    // while asserting the opposite of what it set up.
+    await fx.prisma.user.update({
+      where: { id: USER_ID },
+      data: { emailVerified: false },
+    });
+
+    const response = await request(fx.baseUrl)
+      .get("/profile/me")
+      .set("Cookie", cookies);
+
+    expect(response.status).toBe(200);
   });
 });
