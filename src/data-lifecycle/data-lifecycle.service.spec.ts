@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { ConfigService } from "@nestjs/config";
+import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import { PrismaService } from "../prisma.service";
 import { DataLifecycleService } from "./data-lifecycle.service";
 
@@ -21,6 +22,7 @@ function makePrisma() {
     verification: { deleteMany: record("verification") },
     dataDeletionRequest: { deleteMany: record("dataDeletionRequest") },
     user: { deleteMany: record("user") },
+    replacementListing: { deleteMany: record("replacementListing") },
   } as unknown as PrismaService;
 
   return { prisma, calls };
@@ -114,8 +116,17 @@ describe("DataLifecycleService", () => {
 
       await new DataLifecycleService(prisma).purgeAnonymizedAccounts();
 
-      expect(calls).toHaveLength(1);
-      const where = calls[0].where as unknown as { deletedAt: { lt: Date } };
+      // Scoped to the user sweep: `purgeAnonymizedAccounts` also collects orphan
+      // ghost listings, so the assertion is on which call this is rather than on
+      // the only call made. Asserting a total here would make every new step of
+      // this sweep a breaking change — and, when the ghost collection was first
+      // added, it hid behind the sweep's own `try`/`catch` instead of failing
+      // here at all.
+      const accountSweep = calls.filter((c) => c.model === "user");
+      expect(accountSweep).toHaveLength(1);
+      const where = accountSweep[0].where as unknown as {
+        deletedAt: { lt: Date };
+      };
       expect(daysBack(where.deletedAt.lt)).toBe(30);
     });
 
@@ -153,6 +164,89 @@ describe("DataLifecycleService", () => {
     it("never throws when the purge fails", async () => {
       const prisma = {
         user: {
+          deleteMany: async () => {
+            throw new Error("boom");
+          },
+        },
+      } as unknown as PrismaService;
+
+      await expect(
+        new DataLifecycleService(prisma).purgeAnonymizedAccounts(),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("orphan ghost listings", () => {
+    /** The ghost-collection query, asserted on the shape of its filter. */
+    function ghostWhere(calls: Call[]) {
+      const call = calls.filter((c) => c.model === "replacementListing");
+      expect(call).toHaveLength(1);
+      return call[0].where as unknown as {
+        practiceId: string;
+        applications: { none: Record<string, never> };
+      };
+    }
+
+    it("collects a ghost that no application points at any more", async () => {
+      const { prisma, calls } = makePrisma();
+
+      await new DataLifecycleService(prisma).purgeAnonymizedAccounts();
+
+      const where = ghostWhere(calls);
+      expect(where.practiceId).toBe(SYSTEM_SCAFFOLD.practiceId);
+      expect(where.applications).toEqual({ none: {} });
+    });
+
+    it("never collects a ghost that still carries an application", async () => {
+      // The safety property, and the reason this is a subquery rather than an
+      // age threshold. A ghost holding a row IS the context a candidate reads
+      // on their dashboard; deleting it would cascade their message and their
+      // decision away, silently undoing the detachment the erasure performed
+      // when it created the ghost in the first place.
+      const { prisma, calls } = makePrisma();
+
+      await new DataLifecycleService(prisma).purgeAnonymizedAccounts();
+
+      // `applications: { none: {} }` is the whole guarantee: the delete is only
+      // issued against rows with zero applications, so a ghost with one is
+      // excluded by the database and not by a hopeful read-then-delete in
+      // application code.
+      const where = ghostWhere(calls);
+      expect(where.applications.none).toEqual({});
+      expect(Object.keys(where)).toEqual(["practiceId", "applications"]);
+    });
+
+    it("scopes the collection to the system practice", async () => {
+      // Without this, an ordinary practice whose owner erased every
+      // application would have its listing deleted by a data-retention sweep.
+      const { prisma, calls } = makePrisma();
+
+      await new DataLifecycleService(prisma).purgeAnonymizedAccounts();
+
+      expect(ghostWhere(calls).practiceId).toBe(SYSTEM_SCAFFOLD.practiceId);
+    });
+
+    it("collects ghosts only after the account cascade, never before", async () => {
+      // Ordering is the mechanism, not a detail: the ghost is collectable only
+      // once the application it carried is actually gone. Collected first, it
+      // would delete the row out from under the cascade that was about to
+      // remove it.
+      const { prisma, calls } = makePrisma();
+
+      await new DataLifecycleService(prisma).purgeAnonymizedAccounts();
+
+      const order = calls.map((c) => c.model);
+      expect(order.indexOf("user")).toBeLessThan(
+        order.indexOf("replacementListing"),
+      );
+    });
+
+    it("still purges the accounts when the ghost collection fails", async () => {
+      // The two sweeps are independent. A failure on the second must not
+      // discard the count of the first, nor throw: it runs again tomorrow.
+      const prisma = {
+        user: { deleteMany: async () => ({ count: 4 }) },
+        replacementListing: {
           deleteMany: async () => {
             throw new Error("boom");
           },

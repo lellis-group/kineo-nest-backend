@@ -1,6 +1,7 @@
 import { Inject, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Cron, CronExpression } from "@nestjs/schedule";
+import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import { logError, logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 
@@ -170,15 +171,52 @@ export class DataLifecycleService {
         where: { deletedAt: { lt: daysAgo(new Date(), graceDays) } },
       });
 
-      if (purged.count > 0) {
+      // Run after the cascade above, and never before: a ghost only becomes
+      // collectable once the application it carried has actually gone.
+      const ghosts = await this.purgeOrphanGhostListings();
+
+      if (purged.count > 0 || ghosts > 0) {
         logEvent("data_lifecycle.accounts_purged", {
           accountsPurged: purged.count,
+          orphanGhostListingsPurged: ghosts,
           graceDays,
         });
       }
     } catch (error) {
       logError("data_lifecycle.accounts_purge_failed", error);
     }
+  }
+
+  /**
+   * Drops the ghost listings no application points at any more.
+   *
+   * A ghost is created during an erasure to hold the rows other candidates had
+   * filed on the account's listings, so the cascade could not destroy them
+   * (`ghost-listing.ts`). It exists for exactly as long as those rows do.
+   *
+   * When the candidate who filed one of those applications erases their own
+   * account in turn, their `Profile` cascades and takes the application with
+   * it — and the ghost is left behind holding nothing. Nothing else collects
+   * it: the ghosts belong to the system profile, which the purge above never
+   * reaches because its `deletedAt` stays NULL. So they accumulate silently,
+   * one set per erasure that touched a listing another person had applied to.
+   *
+   * The emptiness test is the whole safety property here. It is a subquery on
+   * `application`, not a date comparison: a ghost that still carries a row is
+   * the context a candidate reads on their dashboard, and losing it would undo
+   * the detachment the erasure performed. A ghost created seconds ago by an
+   * erasure still in flight therefore cannot be collected, because its
+   * applications exist — which is exactly the condition being checked.
+   */
+  private async purgeOrphanGhostListings(): Promise<number> {
+    const purged = await this.prisma.replacementListing.deleteMany({
+      where: {
+        practiceId: SYSTEM_SCAFFOLD.practiceId,
+        applications: { none: {} },
+      },
+    });
+
+    return purged.count;
   }
 }
 
