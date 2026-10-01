@@ -7,7 +7,10 @@ import {
   REASON_LISTING_CLOSED_NO_CANDIDATE,
 } from "../applications/rejection-reasons";
 import { ListingStatusCountsSchema } from "./entities/replacementlisting.entity";
-import { ReplacementlistingsService } from "./replacementlistings.service";
+import {
+  LISTING_TRANSITION_CODES,
+  ReplacementlistingsService,
+} from "./replacementlistings.service";
 
 const profile = { id: "profile-1", userId: "user-1" };
 const listing = {
@@ -651,6 +654,164 @@ describe("ReplacementlistingsService", () => {
         CLOSED_NO_CANDIDATE: 0,
         CANCELLED: 0,
       });
+    });
+  });
+
+  /**
+   * The `code` is the contract the French UI branches on; the message is only
+   * there for logs and for a client that predates it.
+   *
+   * The frontend used to translate these refusals by matching the English text
+   * with regexes, and the regexes stopped matching the day `close` became
+   * reachable from a listing still recruiting — the messages were reworded, and
+   * a practice was told to "try again" for a refusal that has a definite way
+   * out. Pinning the codes here is what stops that recurring silently: a
+   * rewording can no longer change what the client does.
+   */
+  describe("transition refusals carry a machine-readable code", () => {
+    /**
+     * Drives `action` on a listing in one status and reads the `code` off
+     * whatever it threw.
+     *
+     * The assertion is on the code rather than on the message, because the
+     * message is English and free to change; the code is the contract.
+     */
+    async function codeOf(
+      status: string,
+      action: (service: ReplacementlistingsService) => Promise<unknown>,
+    ): Promise<unknown> {
+      const listing = { ...openListing, status };
+      const transactionClient = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => listing,
+          findUniqueOrThrow: async () => ({
+            ...listing,
+            _count: { applications: 0 },
+          }),
+          update: async () => ({ ...listing, _count: { applications: 0 } }),
+        },
+        application: {
+          count: async () => 0,
+          updateMany: async () => ({ count: 0 }),
+        },
+      };
+      const prisma = {
+        // `remove` is the one action here that is NOT wrapped in a transaction:
+        // it asserts ownership, checks the FILLED guard, then deletes, all on
+        // `this.prisma`. So the fake answers on both the transaction client and
+        // the root client — without the latter the guard never sees the
+        // listing, and the call fails on a missing method rather than on the
+        // refusal under test.
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => listing,
+          findUniqueOrThrow: async () => ({
+            ...listing,
+            _count: { applications: 0 },
+          }),
+          update: async () => ({ ...listing, _count: { applications: 0 } }),
+        },
+        application: {
+          count: async () => 0,
+          updateMany: async () => ({ count: 0 }),
+        },
+        $transaction: async (
+          operation: (tx: typeof transactionClient) => unknown,
+        ) => operation(transactionClient),
+      } as unknown as PrismaService;
+      const service = new ReplacementlistingsService(prisma, {
+        get: () => undefined,
+      } as unknown as ConfigService);
+
+      try {
+        await action(service);
+      } catch (error) {
+        const response = (error as BadRequestException).getResponse();
+        return typeof response === "object" && response !== null
+          ? (response as { code?: unknown }).code
+          : undefined;
+      }
+      throw new Error(`expected ${status} to be refused`);
+    }
+
+    it.each([
+      [
+        "update refuses a listing that left circulation",
+        "FILLED",
+        (s: ReplacementlistingsService) =>
+          s.update("listing-1", "user-1", { maxApplications: 3 }),
+        LISTING_TRANSITION_CODES.NOT_MODIFIABLE,
+      ],
+      [
+        "close refuses a listing that left circulation",
+        "CANCELLED",
+        (s: ReplacementlistingsService) => s.close("listing-1", "user-1"),
+        LISTING_TRANSITION_CODES.NOT_IN_CIRCULATION,
+      ],
+      [
+        "cancel refuses an already terminal listing",
+        "CLOSED",
+        (s: ReplacementlistingsService) => s.cancel("listing-1", "user-1"),
+        LISTING_TRANSITION_CODES.ALREADY_TERMINAL,
+      ],
+      [
+        "cancel refuses a filled listing with its own code",
+        "FILLED",
+        (s: ReplacementlistingsService) => s.cancel("listing-1", "user-1"),
+        LISTING_TRANSITION_CODES.FILLED_CANNOT_BE_CANCELLED,
+      ],
+      [
+        "remove refuses a filled listing",
+        "FILLED",
+        (s: ReplacementlistingsService) => s.remove("listing-1", "user-1"),
+        LISTING_TRANSITION_CODES.FILLED_CANNOT_BE_DELETED,
+      ],
+    ])("%s", async (_label, status, action, expected) => {
+      expect(await codeOf(status as string, action as never)).toBe(expected);
+    });
+
+    it("names the invalid-period refusal separately from a transition", async () => {
+      // Same status, different cause: the frontend shows a date error here and
+      // a state message for the terminal one, so the two must not share a code.
+      const listing = { ...openListing };
+      const transactionClient = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => listing,
+          findUniqueOrThrow: async () => ({
+            ...listing,
+            _count: { applications: 0 },
+          }),
+          update: async () => ({ ...listing, _count: { applications: 0 } }),
+        },
+        application: {
+          count: async () => 0,
+          updateMany: async () => ({ count: 0 }),
+        },
+      };
+      const prisma = {
+        profile: { findUnique: async () => profile },
+        $transaction: async (
+          operation: (tx: typeof transactionClient) => unknown,
+        ) => operation(transactionClient),
+      } as unknown as PrismaService;
+      const service = new ReplacementlistingsService(prisma, {
+        get: () => undefined,
+      } as unknown as ConfigService);
+
+      try {
+        await service.update("listing-1", "user-1", {
+          startDate: "2026-09-12T08:00:00.000Z",
+          endDate: "2026-09-10T08:00:00.000Z",
+        });
+        throw new Error("expected the period to be refused");
+      } catch (error) {
+        const response = (error as BadRequestException).getResponse();
+        expect((response as { code?: unknown }).code).toBe(
+          LISTING_TRANSITION_CODES.INVALID_PERIOD,
+        );
+      }
     });
   });
 });

@@ -45,6 +45,55 @@ const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
   "SHORTLISTED",
 ];
 
+/**
+ * Machine-readable discriminators for the transition refusals of this module.
+ *
+ * These used to reach the client as English prose only, and the French UI had to
+ * match on the text — `translateStatusMessage` in the frontend branches on
+ * "only open or filled" and "already closed or cancelled". Rewording a message
+ * silently disabled the translation, and a practice was told to "try again"
+ * for a refusal that has a definite cause and a definite way out. That already
+ * happened once: the backend reworded both messages when `close` became
+ * reachable from a listing that was still recruiting, and the regexes stopped
+ * matching.
+ *
+ * The message is still sent, for logs and for any client that does not know
+ * about codes. `code` is the contract: it changes only when the meaning changes.
+ *
+ * Mirrored by the frontend's `LISTING_TRANSITION_CODES`.
+ */
+export const LISTING_TRANSITION_CODES = {
+  /** `publish` on anything that is not a draft. */
+  NOT_A_DRAFT: "LISTING_NOT_A_DRAFT",
+  /** `update` on a listing that has left circulation. */
+  NOT_MODIFIABLE: "LISTING_NOT_MODIFIABLE",
+  /** `update` with `startDate >= endDate`. */
+  INVALID_PERIOD: "LISTING_INVALID_PERIOD",
+  /** `remove` on a filled listing — `close` is the way out. */
+  FILLED_CANNOT_BE_DELETED: "LISTING_FILLED_CANNOT_BE_DELETED",
+  /** `close` on a draft or a listing already out of circulation. */
+  NOT_IN_CIRCULATION: "LISTING_NOT_IN_CIRCULATION",
+  /** `cancel` on a filled listing — `close` is the way out. */
+  FILLED_CANNOT_BE_CANCELLED: "LISTING_FILLED_CANNOT_BE_CANCELLED",
+  /** `cancel` on a listing already closed or cancelled. */
+  ALREADY_TERMINAL: "LISTING_ALREADY_TERMINAL",
+} as const;
+
+/**
+ * A `BadRequestException` carrying a machine-readable `code`.
+ *
+ * `HttpExceptionFilter` already forwards a `code` from the response body when
+ * the environment is hardened; this is the same mechanism the account-erasure
+ * endpoint uses, reused here rather than reinvented.
+ *
+ * Refusals that are not about a transition — the per-profile quota — keep using
+ * the plain exception: they have a single meaning, the status already says it,
+ * and a code would be a second name for the same thing.
+ */
+function refuse(message: string, code: string): BadRequestException {
+  return new BadRequestException({ statusCode: 400, message, code });
+}
+
 const APPLICATIONS_COUNT_INCLUDE = {
   _count: {
     select: {
@@ -347,7 +396,10 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status !== "DRAFT") {
-      throw new BadRequestException("Only draft listings can be published");
+      throw refuse(
+        "Only draft listings can be published",
+        LISTING_TRANSITION_CODES.NOT_A_DRAFT,
+      );
     }
 
     const updated = await this.prisma.replacementListing.update({
@@ -377,8 +429,9 @@ export class ReplacementlistingsService {
         const listing = await this.assertOwnershipWith(tx, id, userId);
 
         if (TERMINAL_LISTING_STATUSES.includes(listing.status)) {
-          throw new BadRequestException(
+          throw refuse(
             "This listing can no longer be modified",
+            LISTING_TRANSITION_CODES.NOT_MODIFIABLE,
           );
         }
 
@@ -387,7 +440,10 @@ export class ReplacementlistingsService {
           : listing.startDate;
         const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
         if (startDate >= endDate) {
-          throw new BadRequestException("startDate must be before endDate");
+          throw refuse(
+            "startDate must be before endDate",
+            LISTING_TRANSITION_CODES.INVALID_PERIOD,
+          );
         }
 
         const result = await tx.replacementListing.update({
@@ -428,8 +484,9 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status === "FILLED") {
-      throw new BadRequestException(
+      throw refuse(
         "A filled listing cannot be deleted, close it instead",
+        LISTING_TRANSITION_CODES.FILLED_CANNOT_BE_DELETED,
       );
     }
 
@@ -496,8 +553,9 @@ export class ReplacementlistingsService {
           (TERMINAL_LISTING_STATUSES.includes(listing.status) &&
             listing.status !== "FILLED")
         ) {
-          throw new BadRequestException(
+          throw refuse(
             "Only a listing still in circulation can be closed",
+            LISTING_TRANSITION_CODES.NOT_IN_CIRCULATION,
           );
         }
 
@@ -557,10 +615,13 @@ export class ReplacementlistingsService {
          * `close` is the way out, and `remove` already says so.
          */
         if (TERMINAL_LISTING_STATUSES.includes(listing.status)) {
-          throw new BadRequestException(
+          throw refuse(
             listing.status === "FILLED"
               ? "A filled listing cannot be cancelled, close it instead"
               : "This listing is already closed or cancelled",
+            listing.status === "FILLED"
+              ? LISTING_TRANSITION_CODES.FILLED_CANNOT_BE_CANCELLED
+              : LISTING_TRANSITION_CODES.ALREADY_TERMINAL,
           );
         }
 
