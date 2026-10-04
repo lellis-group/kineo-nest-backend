@@ -24,13 +24,31 @@ let cachedTransporter:
   | undefined;
 let cachedKey: string | undefined;
 
+/**
+ * A transport injected by the caller, bypassing SMTP entirely.
+ *
+ * There is otherwise no way to assert *which* email a flow sends: the sender is
+ * one `sendMail` call away from a socket, and a test would need a live server.
+ * The erasure and verification flows both choose between templates, so "which
+ * template went out" is the assertion that matters.
+ */
+let injectedTransporter:
+  | ReturnType<typeof nodemailer.createTransport>
+  | undefined;
+
 function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
 }
 
 /** Override the SMTP config (DI path, tests). Pass `undefined` to clear. */
-export function configureMailer(config?: Partial<SmtpConfig>): void {
+export function configureMailer(
+  config?: Partial<SmtpConfig> & {
+    /** Send through this instead of a real connection. */
+    transporter?: ReturnType<typeof nodemailer.createTransport>;
+  },
+): void {
   smtpOverride = config;
+  injectedTransporter = config?.transporter;
   cachedTransporter = undefined;
   cachedKey = undefined;
 }
@@ -50,6 +68,10 @@ export function resolveSmtpConfig(
 }
 
 function getTransporter() {
+  if (injectedTransporter) {
+    return injectedTransporter;
+  }
+
   const smtp = resolveSmtpConfig();
   const key = JSON.stringify({
     host: smtp.host,

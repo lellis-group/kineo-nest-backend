@@ -17,6 +17,10 @@ import { logError } from "../log";
 import { createPrismaClient } from "../prisma";
 import { emailVerificationStatusPlugin } from "./email-verification-status";
 import { inputValidationHook } from "./input-validation";
+import {
+  decodeVerificationToken,
+  isChangeEmailToken,
+} from "./verification-token";
 
 export interface AuthEnv {
   secret: string;
@@ -208,26 +212,17 @@ export function createAuth(
     ],
 
     user: {
-      // Email self-service (right to rectification, art. 16 GDPR): the
-      // confirmation email goes to the NEW address, so only someone controlling
-      // it can apply the change.
+      // Email self-service (right to rectification, art. 16 GDPR). The link goes
+      // to the NEW address, so only someone controlling it can apply the change.
+      //
+      // No `sendChangeEmailConfirmation`: with it configured, a verified account
+      // takes better-auth's `canSendConfirmation` branch, whose token does not
+      // apply anything — opening that link only mints a second token and sends a
+      // second email. Two hops, two near-identical messages. Without it both
+      // paths fall through to `sendVerificationEmail`, which reads the token and
+      // sends the change-email template: one email, one click, applied.
       changeEmail: {
         enabled: true,
-
-        sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
-          await sendChangeEmailEmail({
-            email: newEmail,
-            name: user.name,
-            url: buildFrontendAuthUrl(
-              url,
-              "/verify-email",
-              {
-                email: newEmail,
-              },
-              frontendUrl,
-            ),
-          });
-        },
       },
 
       deleteUser: {
@@ -353,7 +348,29 @@ export function createAuth(
     },
 
     emailVerification: {
-      sendVerificationEmail: async ({ user, url }) => {
+      // This handler serves three flows, and the token is what tells them apart:
+      // a sign-up, a re-send, and a change of address. Sending the sign-up
+      // template for the last one is what a user sees as "an account creation
+      // email" arriving when they only changed their address.
+      sendVerificationEmail: async ({ user, url, token }) => {
+        const decoded = await decodeVerificationToken(token, authEnv.secret);
+        const change = decoded && isChangeEmailToken(decoded);
+
+        if (change && decoded.updateTo) {
+          await sendChangeEmailEmail({
+            email: user.email,
+            name: user.name,
+            url: buildFrontendAuthUrl(
+              url,
+              "/verify-email",
+              { email: user.email, flow: "change-email" },
+              frontendUrl,
+            ),
+          });
+
+          return;
+        }
+
         await sendVerificationEmail({
           email: user.email,
           name: user.name,
