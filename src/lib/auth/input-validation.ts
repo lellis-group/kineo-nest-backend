@@ -15,7 +15,7 @@ type FieldValidator = { schema: z.ZodType; message: string };
 
 const nameField: FieldValidator = {
   schema: nameSchema,
-  message: "Le nom contient des caractères non autorisés.",
+  message: "The name contains characters that are not allowed.",
 };
 const imageField: FieldValidator = {
   schema: httpsImageUrlSchema,
@@ -23,11 +23,11 @@ const imageField: FieldValidator = {
 };
 const emailField: FieldValidator = {
   schema: emailSchema,
-  message: "Adresse e-mail invalide.",
+  message: "Invalid email address.",
 };
 const passwordField: FieldValidator = {
   schema: passwordSchema,
-  message: "Le mot de passe doit contenir entre 8 et 128 caractères.",
+  message: "The password must be between 8 and 128 characters.",
 };
 const passwordVerifyField: FieldValidator = {
   schema: passwordInputSchema,

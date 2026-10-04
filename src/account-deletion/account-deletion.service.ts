@@ -42,14 +42,14 @@ export class AccountDeletionService {
 
         if (!verification) {
           throw new NotFoundException(
-            "Ce lien de confirmation est invalide ou a déjà été utilisé.",
+            "This confirmation link is invalid or has already been used.",
           );
         }
 
         if (verification.expiresAt.getTime() < Date.now()) {
           await tx.verification.delete({ where: { id: verification.id } });
           throw new GoneException(
-            "Ce lien de confirmation a expiré (valable 24 heures). Relancez la demande depuis votre profil.",
+            "This confirmation link has expired (it is valid for 24 hours). Request a new one from your profile.",
           );
         }
 
@@ -58,12 +58,12 @@ export class AccountDeletionService {
 
         if (!user) {
           await tx.verification.delete({ where: { id: verification.id } });
-          throw new GoneException("Ce compte a déjà été supprimé.");
+          throw new GoneException("This account has already been erased.");
         }
 
         if (user.deletedAt) {
           await tx.verification.delete({ where: { id: verification.id } });
-          throw new GoneException("Ce compte a déjà été supprimé.");
+          throw new GoneException("This account has already been erased.");
         }
 
         const userIdHash = deletionHash(user.id, pepper);
