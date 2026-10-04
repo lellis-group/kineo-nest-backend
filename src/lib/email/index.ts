@@ -120,34 +120,42 @@ export async function sendDeleteAccountEmail({
 }
 
 /**
- * The heads-up for the address being replaced.
+ * The approval request, sent to the address being replaced.
  *
- * It carries no button, and deliberately so: there is no route that cancels a
- * pending change, so a call to action here would be a promise the API cannot
- * keep. What the owner of the old address can do is protect the account, and the
- * notice says so.
+ * This is better-auth's `sendChangeEmailConfirmation`: it is a gate, not a
+ * heads-up. Opening its link is what releases the verification email towards the
+ * new address, so until the owner of the current address approves, nothing is
+ * sent anywhere else and nothing changes. That is what makes a stolen session
+ * harmless here — without it, whoever holds the session can redirect the
+ * account's address and nobody else ever hears about it.
+ *
+ * It therefore carries a button, and that button is the only thing on the page.
  */
-export async function sendChangeEmailNoticeEmail({
+export async function sendChangeEmailApprovalEmail({
   email,
   name,
   newEmail,
+  url,
 }: {
   email: string;
   name?: string | null;
   newEmail: string;
+  url: string;
 }) {
   return sendNotificationEmail({
     email,
     name,
-    subject: "Your email address is being changed",
+    subject: "Approve this email address change",
     title: "Email address change requested",
     message: [
       `A request was made to change the email address on your account to ${newEmail}.`,
       "",
-      "Nothing is applied yet: the change only takes effect once the person who controls the new address confirms it from there.",
+      "Nothing happens until you approve it. Once you do, a confirmation is sent to the new address, and only the person who controls that address can complete the change.",
       "",
-      "If you did not make this request, change your password now and contact support. A session that was stolen is enough to start this.",
+      "If this was not you, do not approve it, change your password, and contact support.",
     ].join("\n"),
+    url,
+    ctaLabel: "Approve the change",
   });
 }
 

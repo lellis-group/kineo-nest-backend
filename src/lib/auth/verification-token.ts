@@ -24,6 +24,21 @@ export function isChangeEmailToken(payload: VerificationTokenPayload): boolean {
 }
 
 /**
+ * Whether opening this link applies the change.
+ *
+ * `change-email-verification` does; `change-email-confirmation` only releases
+ * the verification towards the new address, and better-auth routes that one
+ * through the approval callback rather than through the verification handler.
+ * The distinction decides which template the handler picks: announcing a change
+ * under way is wrong for a link that carries it no further.
+ */
+export function isChangeEmailVerificationToken(
+  payload: VerificationTokenPayload,
+): boolean {
+  return payload.requestType === "change-email-verification";
+}
+
+/**
  * The address the link's intent concerns: the one being moved to on a change,
  * the token's own address otherwise.
  *

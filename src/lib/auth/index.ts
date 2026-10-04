@@ -6,8 +6,8 @@ import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
 import { isHardenedEnv } from "../../config/env";
 import {
+  sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
-  sendChangeEmailNoticeEmail,
   sendDeleteAccountEmail,
   sendResetPasswordEmail,
   sendVerificationEmail,
@@ -20,7 +20,7 @@ import { emailVerificationStatusPlugin } from "./email-verification-status";
 import { inputValidationHook } from "./input-validation";
 import {
   decodeVerificationToken,
-  isChangeEmailToken,
+  isChangeEmailVerificationToken,
 } from "./verification-token";
 
 export interface AuthEnv {
@@ -229,17 +229,30 @@ export function createAuth(
     ],
 
     user: {
-      // Email self-service (right to rectification, art. 16 GDPR). The link goes
-      // to the NEW address, so only someone controlling it can apply the change.
+      // Email self-service (right to rectification, art. 16 GDPR), in the shape
+      // better-auth documents it for added security: the current address approves
+      // first, and only then is a verification sent to the new one.
       //
-      // No `sendChangeEmailConfirmation`: with it configured, a verified account
-      // takes better-auth's `canSendConfirmation` branch, whose token does not
-      // apply anything — opening that link only mints a second token and sends a
-      // second email. Two hops, two near-identical messages. Without it both
-      // paths fall through to `sendVerificationEmail`, which reads the token and
-      // sends the change-email template: one email, one click, applied.
+      // Both parties hold a key, so neither a stolen session (which can start the
+      // change but not approve it) nor control of a throwaway address (which can
+      // verify but not request) is enough on its own. Two clicks for the
+      // legitimate account, which is the price.
       changeEmail: {
         enabled: true,
+
+        sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
+          await sendChangeEmailApprovalEmail({
+            email: user.email,
+            name: user.name,
+            newEmail,
+            url: buildFrontendAuthUrl(
+              url,
+              "/verify-email",
+              { email: user.email, flow: "change-email-approval" },
+              frontendUrl,
+            ),
+          });
+        },
       },
 
       deleteUser: {
@@ -372,15 +385,21 @@ export function createAuth(
     },
 
     emailVerification: {
-      // This handler serves three flows, and the token is what tells them apart:
-      // a sign-up, a re-send, and a change of address. Sending the sign-up
-      // template for the last one is what a user sees as "an account creation
-      // email" arriving when they only changed their address.
+      // This handler serves a sign-up, a re-send, and the second half of a
+      // change of address; the token is what tells them apart. Sending the
+      // sign-up template for the last one is what a user sees as "an account
+      // creation email" arriving when they only changed their address.
+      //
+      // The first half — the approval the current address has to give — goes
+      // through `sendChangeEmailConfirmation` above and never lands here.
       sendVerificationEmail: async ({ user, url, token }) => {
         const decoded = await decodeVerificationToken(token, authEnv.secret);
-        const change = decoded && isChangeEmailToken(decoded);
 
-        if (change && decoded.updateTo) {
+        if (
+          decoded &&
+          isChangeEmailVerificationToken(decoded) &&
+          decoded.updateTo
+        ) {
           // The confirmation goes to the new address, since that is what proves
           // the person asking for the change controls it.
           await sendChangeEmailEmail({
@@ -393,23 +412,6 @@ export function createAuth(
               frontendUrl,
             ),
           });
-
-          // The old address is told as well. A stolen session is enough to start
-          // a change, and the mailbox it leaves behind is the only place that can
-          // notice — so a failure here must not fail the change itself.
-          if (decoded.email !== user.email) {
-            try {
-              await sendChangeEmailNoticeEmail({
-                email: decoded.email,
-                name: user.name,
-                newEmail: user.email,
-              });
-            } catch (error) {
-              logError("auth.change_email.notice_failed", error, {
-                userId: user.id,
-              });
-            }
-          }
 
           return;
         }
