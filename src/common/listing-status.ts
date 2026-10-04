@@ -4,8 +4,14 @@ import type {
   ListingStatus,
 } from "../generated/prisma/enums";
 
-/** Statuses that keep a listing open to new candidates. */
-const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
+/**
+ * Statuses of an application that still occupies a slot on its listing.
+ *
+ * Exported because the third-party deletion guard has to draw the same line:
+ * it exempts an application once it stops holding capacity, and an ACCEPTED one
+ * for a different reason entirely.
+ */
+export const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
   "PENDING",
   "SHORTLISTED",
 ];

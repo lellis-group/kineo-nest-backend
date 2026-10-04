@@ -162,6 +162,22 @@ function configuration() {
         "RATE_LIMIT_WINDOW",
       ),
       max: positiveInteger(process.env.RATE_LIMIT_MAX, 20, "RATE_LIMIT_MAX"),
+      // better-auth hardcodes a much tighter bucket for the credential
+      // endpoints (sign-in, sign-up, change-password, change-email) and its
+      // `window`/`max` above do not apply to it. Its own default is 3 per 10
+      // seconds, which locks out everyone behind a shared egress IP and stops a
+      // test suite signing in more than three times. Overridable because the
+      // rule is otherwise unreachable.
+      credentialWindow: positiveInteger(
+        process.env.CREDENTIAL_RATE_LIMIT_WINDOW,
+        10,
+        "CREDENTIAL_RATE_LIMIT_WINDOW",
+      ),
+      credentialMax: positiveInteger(
+        process.env.CREDENTIAL_RATE_LIMIT_MAX,
+        3,
+        "CREDENTIAL_RATE_LIMIT_MAX",
+      ),
     },
 
     // ---- Session (better-auth) ----
@@ -369,6 +385,12 @@ export const envValidationSchema = z
     // ---- Rate limiting (better-auth) ----
     RATE_LIMIT_WINDOW: z.coerce.number().int().positive().default(60),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+    CREDENTIAL_RATE_LIMIT_WINDOW: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(10),
+    CREDENTIAL_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(3),
 
     // ---- Session (better-auth) ----
     SESSION_EXPIRES_IN: DurationString.default("604800"),

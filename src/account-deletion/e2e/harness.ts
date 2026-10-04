@@ -146,6 +146,12 @@ export async function bootApp(): Promise<E2EFixture> {
   // rather than relaxed in `configuration.ts`, so the shipped value stands.
   process.env.THROTTLE_DELETION_LIMIT = "1000";
   process.env.THROTTLE_DELETION_TTL = "60000";
+  // Same reasoning for better-auth's own limiter. Its `RATE_LIMIT_*` do not
+  // reach the credential endpoints, which carry a hardcoded 3-per-10s rule; a
+  // suite that signs in once per test spends that on itself and a later test
+  // gets a 429 unrelated to what it asserts.
+  process.env.CREDENTIAL_RATE_LIMIT_WINDOW = "60";
+  process.env.CREDENTIAL_RATE_LIMIT_MAX = "10000";
 
   // `prisma.config.ts` resolves its datasource through `env("DATABASE_URL")`,
   // and `dotenv/config` — which it imports — only fills variables that are not

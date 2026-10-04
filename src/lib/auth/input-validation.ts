@@ -54,6 +54,8 @@ const PATH_FIELD_VALIDATORS: Record<string, Record<string, FieldValidator>> = {
   "/sign-in/email": { email: emailField, password: passwordVerifyField },
   "/verify-password": { password: passwordVerifyField },
   "/change-password": { currentPassword: passwordVerifyField },
+  // `token` stays whitelisted even though `deleteUser.beforeDelete` rejects the
+  // endpoint: dropping it here would only skip validation, not block the field.
   "/delete-user": { password: passwordVerifyField, token: tokenField },
   "/reset-password": { token: tokenField },
   "/revoke-session": { token: tokenField },

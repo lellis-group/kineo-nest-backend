@@ -469,7 +469,7 @@ describe("the three direct deletions still refuse", () => {
 
     if (response.status !== 200) {
       throw new Error(
-        `sign-in failed (${response.status}): ${JSON.stringify(response.body)}`,
+        `sign-in failed (${response.status}): ${JSON.stringify(response.body)} headers=${JSON.stringify(response.headers)}`,
       );
     }
     return response.headers["set-cookie"];
@@ -547,6 +547,83 @@ describe("the three direct deletions still refuse", () => {
     expect(
       await prisma.replacementListing.count({ where: { id: listing.id } }),
     ).toBe(0);
+  });
+
+  it("still refuses after close takes a filled listing out of circulation", async () => {
+    // The sequence that got through. `close` is legal from FILLED and keeps the
+    // accepted application — the placement is written, closing only takes the
+    // posting down. The listing then sits in CLOSED, which is not one of the
+    // recruiting statuses, so a listing-scoped count returned zero and the
+    // cascade destroyed a confirmed placement.
+    const { prisma } = fx;
+    const { owner, listing } = await seedScenario();
+    const cookies = await signIn(owner.email);
+
+    const closed = await request(fx.baseUrl)
+      .patch(`/replacement-listings/${listing.id}/close`)
+      .set("Cookie", cookies);
+
+    expect(closed.status).toBe(200);
+    expect(
+      await prisma.replacementListing
+        .findUniqueOrThrow({
+          where: { id: listing.id },
+        })
+        .then((row) => row.status),
+    ).toBe("CLOSED");
+    expect(
+      await prisma.application
+        .findUniqueOrThrow({
+          where: { id: "app-accepted" },
+        })
+        .then((row) => row.status),
+    ).toBe("ACCEPTED");
+
+    const deleted = await request(fx.baseUrl)
+      .delete(`/replacement-listings/${listing.id}`)
+      .set("Cookie", cookies);
+
+    expect(deleted.status).toBe(409);
+    expect(
+      await prisma.replacementListing.count({ where: { id: listing.id } }),
+    ).toBe(1);
+    expect(
+      await prisma.application.count({ where: { id: "app-accepted" } }),
+    ).toBe(1);
+  });
+
+  it("refuses to delete the practice and the profile in the same state", async () => {
+    // Same guard, two other endpoints, reached without touching the listing
+    // itself — so neither the FILLED check nor a listing-level delete applies.
+    const { prisma } = fx;
+    const { owner, ownerProfile } = await seedScenario();
+    const cookies = await signIn(owner.email);
+
+    await request(fx.baseUrl)
+      .patch("/replacement-listings/listing-1/close")
+      .set("Cookie", cookies)
+      .expect(200);
+
+    for (const url of [
+      "/practices/practice-owner",
+      `/profile/${ownerProfile.id}`,
+    ]) {
+      const response = await request(fx.baseUrl)
+        .delete(url)
+        .set("Cookie", cookies);
+
+      expect(response.status).toBe(409);
+    }
+
+    expect(
+      await prisma.practice.count({ where: { id: "practice-owner" } }),
+    ).toBe(1);
+    expect(await prisma.profile.count({ where: { id: ownerProfile.id } })).toBe(
+      1,
+    );
+    expect(
+      await prisma.application.count({ where: { id: "app-accepted" } }),
+    ).toBe(1);
   });
 });
 

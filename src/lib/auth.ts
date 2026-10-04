@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
+import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { countThirdPartyApplications } from "../common/application-guard";
@@ -23,6 +24,8 @@ export interface AuthEnv {
   trustedOrigins: string[];
   rateLimitWindow: number;
   rateLimitMax: number;
+  credentialRateLimitWindow: number;
+  credentialRateLimitMax: number;
   sessionExpiresIn: number;
   sessionUpdateAge: number;
   cookieCacheEnabled: boolean;
@@ -77,6 +80,16 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       "RATE_LIMIT_WINDOW",
     ),
     rateLimitMax: positiveInt(env.RATE_LIMIT_MAX, 20, "RATE_LIMIT_MAX"),
+    credentialRateLimitWindow: positiveInt(
+      env.CREDENTIAL_RATE_LIMIT_WINDOW,
+      10,
+      "CREDENTIAL_RATE_LIMIT_WINDOW",
+    ),
+    credentialRateLimitMax: positiveInt(
+      env.CREDENTIAL_RATE_LIMIT_MAX,
+      3,
+      "CREDENTIAL_RATE_LIMIT_MAX",
+    ),
     sessionExpiresIn: durationSeconds(env.SESSION_EXPIRES_IN, 60 * 60 * 24 * 7),
     sessionUpdateAge: durationSeconds(env.SESSION_UPDATE_AGE, 60 * 60 * 24),
     cookieCacheEnabled: env.COOKIE_CACHE_ENABLED === "true",
@@ -135,6 +148,10 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     trustedOrigins: config.get<string[]>("cors.origins", []) ?? [],
     rateLimitWindow: config.get<number>("rateLimit.window", 60) ?? 60,
     rateLimitMax: config.get<number>("rateLimit.max", 20) ?? 20,
+    credentialRateLimitWindow:
+      config.get<number>("rateLimit.credentialWindow", 10) ?? 10,
+    credentialRateLimitMax:
+      config.get<number>("rateLimit.credentialMax", 3) ?? 3,
     sessionExpiresIn:
       config.get<number>("session.expiresIn", 60 * 60 * 24 * 7) ??
       60 * 60 * 24 * 7,
@@ -232,10 +249,7 @@ export function createAuth(
         // (AccountDeletionService): it consumes the token without requiring a
         // session, anonymizes the account, flips the audit trail
         // (DataDeletionRequest PENDING -> ANONYMIZED) and purges `verification`
-        // leftovers, all in one transaction. The deletion callbacks
-        // (beforeDelete/afterDelete) are intentionally NOT wired here —
-        // better-auth never deletes the user in this flow, so they would be
-        // dead code.
+        // leftovers, all in one transaction.
         sendDeleteAccountVerification: async ({ user, url }) => {
           // Accountability trail (art. 5(2) GDPR): record the request before any
           // execution, keyed by fingerprint so erasing the account does not
@@ -279,6 +293,26 @@ export function createAuth(
             trailRetentionDays: deletionRequestRetentionDays,
           });
         },
+
+        // Blocks every remaining path to `internalAdapter.deleteUser`, which is
+        // a raw cascade: `User -> Profile -> Practice -> ReplacementListing ->
+        // Application`. Two routes reach it with nothing but the caller's own
+        // session, and neither consults `sendDeleteAccountVerification`:
+        // `POST /delete-user` with a `token` body field, and
+        // `GET /delete-user/callback?token=`. Both consume the same
+        // verification row this config mints, so the emailed link reaches the
+        // hard delete directly. `POST /delete-user` without a token is already
+        // safe: `sendDeleteAccountVerification` returns before this hook.
+        //
+        // Throwing here rather than setting `enabled: false` keeps the request
+        // phase, which only exists inside the handler gated by that flag.
+        beforeDelete: async () => {
+          throw new APIError("BAD_REQUEST", {
+            message:
+              "Account deletion is handled by POST /account/confirm-deletion.",
+            code: "DELETION_ROUTE_DISABLED",
+          });
+        },
       },
     },
 
@@ -292,6 +326,18 @@ export function createAuth(
       enabled: true,
       window: authEnv.rateLimitWindow,
       max: authEnv.rateLimitMax,
+      // Overrides better-auth's built-in 3-per-10s rule for the credential
+      // endpoints, which its own `window`/`max` do not reach.
+      customRules: {
+        "/sign-in/*": {
+          window: authEnv.credentialRateLimitWindow,
+          max: authEnv.credentialRateLimitMax,
+        },
+        "/sign-up/*": {
+          window: authEnv.credentialRateLimitWindow,
+          max: authEnv.credentialRateLimitMax,
+        },
+      },
     },
 
     session: {

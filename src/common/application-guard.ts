@@ -5,6 +5,7 @@ import type {
   Prisma,
 } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
+import { ACTIVE_APPLICATION_STATUSES } from "./listing-status";
 
 /**
  * Statuses that must not be destroyed on someone else's behalf.
@@ -91,13 +92,37 @@ export function thirdPartyActiveApplicationsFilter(
   ownerProfileId: string,
   listingFilter: Prisma.ReplacementListingWhereInput = {},
 ): Prisma.ApplicationWhereInput {
+  // A caller's own status filter would contradict the ACCEPTED branch, which
+  // widens past the recruiting statuses on purpose. None passes one today.
+  const { status: _callerStatus, ...restListingFilter } = listingFilter;
+
   return {
-    listing: {
-      ...listingFilter,
-      status: { in: RECRUITING_LISTING_STATUSES },
-    },
-    applicantId: { not: ownerProfileId },
-    status: { in: PROTECTED_APPLICATION_STATUSES },
+    AND: [
+      {
+        OR: [
+          // An accepted placement counts whatever the listing went on to
+          // become. `close` from FILLED takes the posting out of circulation
+          // while the placement survives it, so a listing-status filter here
+          // would let `close` then `remove` cascade a confirmed placement —
+          // the exact harm the ACCEPTED entry above exists to prevent.
+          {
+            listing: restListingFilter,
+            status: "ACCEPTED",
+          },
+          // The active pair only: those rows block a listing that still
+          // recruits, and must not block one whose owner already took it out
+          // of circulation.
+          {
+            listing: {
+              ...restListingFilter,
+              status: { in: RECRUITING_LISTING_STATUSES },
+            },
+            status: { in: ACTIVE_APPLICATION_STATUSES },
+          },
+        ],
+      },
+      { applicantId: { not: ownerProfileId } },
+    ],
   };
 }
 

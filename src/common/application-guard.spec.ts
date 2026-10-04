@@ -44,12 +44,9 @@ describe("assertNoThirdPartyApplications", () => {
       id: "listing-1",
     });
 
-    expect(captured[0]).toMatchObject({
-      where: {
-        applicantId: { not: "profile-1" },
-        status: { in: ["PENDING", "SHORTLISTED", "ACCEPTED"] },
-      },
-    });
+    expect((captured[0] as { where: { AND: unknown[] } }).where.AND[1]).toEqual(
+      { applicantId: { not: "profile-1" } },
+    );
   });
 
   it("blocks deletion when a third-party placement was accepted", async () => {
@@ -85,15 +82,58 @@ describe("assertNoThirdPartyApplications", () => {
     ).rejects.toBeInstanceOf(ConflictException);
 
     // The counterweight to `confirmDeletion` dropping its guard: the direct
-    // deletions have no detachment step, so FILLED has to stay in the
-    // recruiting statuses or a placed replacement would be destroyed with the
+    // deletions have no detachment step, so the accepting branch must match on
+    // any status at all, or a placed replacement would be destroyed with the
     // listing the moment its owner pressed delete.
     expect(captured[0]).toMatchObject({
       where: {
-        listing: {
-          status: { in: ["DRAFT", "OPEN", "IN_DISCUSSION", "FULL", "FILLED"] },
+        AND: [
+          {
+            OR: [
+              { listing: { id: "listing-1" }, status: "ACCEPTED" },
+              {
+                listing: {
+                  id: "listing-1",
+                  status: {
+                    in: ["DRAFT", "OPEN", "IN_DISCUSSION", "FULL", "FILLED"],
+                  },
+                },
+                status: { in: ["PENDING", "SHORTLISTED"] },
+              },
+            ],
+          },
+          { applicantId: { not: "profile-1" } },
+        ],
+      },
+    });
+  });
+
+  it("counts an accepted placement on a listing that no longer recruits", async () => {
+    // `close` from FILLED keeps the accepted row and moves the listing to
+    // CLOSED, after which a status-scoped filter counted zero and `remove`
+    // cascaded the placement.
+    const captured: unknown[] = [];
+    const prisma = {
+      application: {
+        count: async (args: unknown) => {
+          captured.push(args);
+          return 1;
         },
       },
+    } as unknown as PrismaService;
+
+    await expect(
+      assertNoThirdPartyApplications(prisma, "profile-1", { id: "listing-1" }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    const where = (captured[0] as { where: { AND: Array<{ OR: unknown[] }> } })
+      .where;
+
+    // The accepting branch carries no listing status, so it still matches once
+    // `close` has moved the listing out of the recruiting statuses.
+    expect(where.AND[0].OR).toContainEqual({
+      listing: { id: "listing-1" },
+      status: "ACCEPTED",
     });
   });
 
@@ -117,15 +157,34 @@ describe("assertNoThirdPartyApplications", () => {
 
     expect(captured[0]).toMatchObject({
       where: {
-        listing: {
-          OR: [
-            { createdById: "profile-1" },
-            { practice: { ownerId: "profile-1" } },
-          ],
-          status: {
-            in: ["DRAFT", "OPEN", "IN_DISCUSSION", "FULL", "FILLED"],
+        AND: [
+          {
+            OR: [
+              {
+                listing: {
+                  OR: [
+                    { createdById: "profile-1" },
+                    { practice: { ownerId: "profile-1" } },
+                  ],
+                },
+                status: "ACCEPTED",
+              },
+              {
+                listing: {
+                  OR: [
+                    { createdById: "profile-1" },
+                    { practice: { ownerId: "profile-1" } },
+                  ],
+                  status: {
+                    in: ["DRAFT", "OPEN", "IN_DISCUSSION", "FULL", "FILLED"],
+                  },
+                },
+                status: { in: ["PENDING", "SHORTLISTED"] },
+              },
+            ],
           },
-        },
+          { applicantId: { not: "profile-1" } },
+        ],
       },
     });
   });

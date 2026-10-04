@@ -9,15 +9,36 @@
 -- The audit table is therefore dropped and recreated rather than altered. It
 -- has no foreign key, no incoming reference and only a handful of rows, so
 -- nothing outside it can break. The three rows a local database holds are test
--- fixtures and go with it; a database holding real requests must replace this
--- with an application backfill that recomputes each fingerprint from the
--- pepper, otherwise the trail loses those rows.
+-- fixtures and go with it.
+--
+-- A database holding real requests cannot afford to lose them, and they cannot
+-- be carried over here either: recomputing a fingerprint needs DELETION_PEPPER,
+-- which by design never reaches the database. So the migration refuses to run
+-- rather than dropping them, and the operator backfills first:
+--
+--   1. export DELETION_PEPPER
+--   2. run the application backfill, which reads the old userId/email columns
+--      and writes userIdHash/emailHash
+--   3. re-run `prisma migrate deploy`
+--
+-- Failing loudly is the point. Silently destroying the art. 5(2)
+-- accountability record is the one outcome nobody can recover from.
 
 -- AlterTable
 ALTER TABLE "user" ADD COLUMN "deletedAt" TIMESTAMP(3);
 
 -- CreateIndex
 CREATE INDEX "user_deletedAt_idx" ON "user"("deletedAt");
+
+-- Guard: refuse to destroy a populated audit trail
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM "data_deletion_request" LIMIT 1) THEN
+        RAISE EXCEPTION
+            'data_deletion_request is not empty. Backfill the fingerprints from DELETION_PEPPER before applying this migration; see the header.';
+    END IF;
+END
+$$;
 
 -- DropTable
 DROP TABLE IF EXISTS "data_deletion_request";
