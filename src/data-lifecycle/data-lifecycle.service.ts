@@ -7,6 +7,9 @@ import { PrismaService } from "../prisma.service";
 /** Default retention horizon for the account-deletion audit trail (days). */
 export const DELETION_REQUEST_RETENTION_DAYS = 365;
 
+/** Default delay between anonymizing an account and dropping its row (days). */
+export const ACCOUNT_PURGE_GRACE_DAYS = 30;
+
 /**
  * Scheduled retention sweeps (data minimization, art. 5(1)(e) GDPR): rows that
  * carry PII and are no longer useful must not outlive their expiry.
@@ -30,6 +33,13 @@ export class DataLifecycleService {
     @Inject(ConfigService)
     private readonly config?: ConfigService,
   ) {}
+
+  private get accountPurgeGraceDays(): number {
+    return (
+      this.config?.get<number>("accountPurgeGraceDays") ??
+      ACCOUNT_PURGE_GRACE_DAYS
+    );
+  }
 
   private get deletionRequestRetentionDays(): number {
     const fromConfig = this.config?.get<number>(

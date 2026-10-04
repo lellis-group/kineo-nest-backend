@@ -2,6 +2,7 @@ import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
+import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
 import { isHardenedEnv } from "../../config/env";
 import {
@@ -33,6 +34,8 @@ export interface AuthEnv {
   jwtExpirationTime: string;
   jwtRotationInterval?: number;
   requireEmailVerification: boolean;
+  accountPurgeGraceDays: number;
+  deletionRequestRetentionDays: number;
   frontendUrl: string;
   nodeEnv: string;
 }
@@ -100,6 +103,16 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       ? positiveInt(env.JWT_ROTATION_INTERVAL, 0, "JWT_ROTATION_INTERVAL")
       : undefined,
     requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
+    accountPurgeGraceDays: positiveInt(
+      env.ACCOUNT_PURGE_GRACE_DAYS,
+      30,
+      "ACCOUNT_PURGE_GRACE_DAYS",
+    ),
+    deletionRequestRetentionDays: positiveInt(
+      env.DATA_DELETION_REQUEST_RETENTION_DAYS,
+      365,
+      "DATA_DELETION_REQUEST_RETENTION_DAYS",
+    ),
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
     nodeEnv: env.NODE_ENV || "development",
   };
@@ -153,6 +166,10 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     ),
     requireEmailVerification:
       config.get<boolean>("requireEmailVerification", false) ?? false,
+    accountPurgeGraceDays:
+      config.get<number>("accountPurgeGraceDays", 30) ?? 30,
+    deletionRequestRetentionDays:
+      config.get<number>("dataDeletionRequestRetentionDays", 365) ?? 365,
     frontendUrl,
     nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
   };
@@ -240,6 +257,13 @@ export function createAuth(
         },
 
         sendDeleteAccountVerification: async ({ user, url }) => {
+          // Counted before the email goes out, so the disclosure is about this
+          // account rather than a generic paragraph.
+          const thirdPartyApplications = await countThirdPartyApplications(
+            prisma,
+            user.id,
+          );
+
           // Accountability trail (art. 5(2) GDPR): record the request before
           // any execution. Never blocks the deletion flow on a bookkeeping
           // failure — the hourly sweep keeps the process resilient.
@@ -261,6 +285,9 @@ export function createAuth(
             email: user.email,
             name: user.name,
             url: buildFrontendAuthUrl(url, "/goodbye", undefined, frontendUrl),
+            thirdPartyApplications,
+            purgeGraceDays: authEnv.accountPurgeGraceDays,
+            trailRetentionDays: authEnv.deletionRequestRetentionDays,
           });
         },
       },

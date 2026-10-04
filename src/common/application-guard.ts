@@ -85,6 +85,36 @@ export function thirdPartyActiveApplicationsFilter(
 }
 
 /**
+ * How many applications from other candidates sit on this account's listings.
+ *
+ * Every status, not only the ones the guard blocks: the erasure email tells the
+ * person how many applications are being kept for the candidates who wrote them,
+ * and a count that stopped at the recruiting statuses would understate it — or
+ * report zero for an account whose only third-party applications had been
+ * rejected, right when that account most deserves to be told.
+ */
+export async function countThirdPartyApplications(
+  prisma: ApplicationClient,
+  userId: string,
+): Promise<number> {
+  const profile = await prisma.profile.findUnique({
+    where: { userId },
+    select: { id: true },
+  });
+
+  if (!profile) {
+    return 0;
+  }
+
+  return prisma.application.count({
+    where: {
+      listing: ownedListingsFilter(profile.id),
+      applicantId: { not: profile.id },
+    },
+  });
+}
+
+/**
  * Refuses a deletion that would cascade away applications belonging to other
  * candidates.
  *
