@@ -220,7 +220,7 @@ model DataDeletionRequest {
   createdAt  DateTime                  @default(now())
   executedAt DateTime?
 
+  @@unique([userId], where: { status: "PENDING" }, map: "data_deletion_request_userId_idx")
   @@index([userId, createdAt(sort: Desc)])
-  @@index([userId], where: { status: "PENDING" })
   @@map("data_deletion_request")
 }
