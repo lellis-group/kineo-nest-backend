@@ -36,16 +36,16 @@ describe("Application DTO security", () => {
         ...validApplication,
         listing: {
           id: LISTING_CUID,
-          title: "Remplacement de novembre",
+          title: "November cover",
           startDate: "2026-11-01T08:00:00.000Z",
           endDate: "2026-11-15T08:00:00.000Z",
           specialty: "DENTIST",
           status: "OPEN",
           urgent: false,
-          description: "Cabinet moderne, patientèle fidèle.",
+          description: "A modern practice with a loyal patient base.",
           practice: {
             id: "clh8zq6w70000wqf4vlonix5d",
-            name: "Cabinet des Lilas",
+            name: "Lilas Practice",
             address: "12 rue de la Paix",
             city: "Lyon",
             latitude: 45.75,
@@ -135,11 +135,11 @@ describe("Application DTO security", () => {
     it("trims and bounds the message", () => {
       const result = CreateApplicationSchema.safeParse({
         listingId: LISTING_CUID,
-        message: "  Bonjour, je suis disponible.  ",
+        message: "  Hello, I am available.  ",
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.message).toBe("Bonjour, je suis disponible.");
+        expect(result.data.message).toBe("Hello, I am available.");
       }
 
       expect(
@@ -160,13 +160,13 @@ describe("Application DTO security", () => {
     it("allows newlines but rejects invisible control characters in the message", () => {
       const withNewline = CreateApplicationSchema.safeParse({
         listingId: LISTING_CUID,
-        message: "Bonjour\nDisponible en septembre.",
+        message: "Hello\nAvailable in September.",
       });
       expect(withNewline.success).toBe(true);
 
       const withZeroWidth = CreateApplicationSchema.safeParse({
         listingId: LISTING_CUID,
-        message: "Bonjour\u200Bcaché",
+        message: "Hello\u200Bhidden",
       });
       expect(withZeroWidth.success).toBe(false);
     });
@@ -197,17 +197,17 @@ describe("Application DTO security", () => {
     it("rejects unknown keys and trims the reason", () => {
       expect(
         RejectApplicationSchema.safeParse({
-          rejectionReason: "Pas disponible",
+          rejectionReason: "Not available",
           respondedAt: "2026-09-01T00:00:00.000Z",
         }).success,
       ).toBe(false);
 
       const result = RejectApplicationSchema.safeParse({
-        rejectionReason: "  Pas disponible  ",
+        rejectionReason: "  Not available  ",
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.rejectionReason).toBe("Pas disponible");
+        expect(result.data.rejectionReason).toBe("Not available");
       }
     });
   });
@@ -216,17 +216,17 @@ describe("Application DTO security", () => {
     it("rejects unknown keys and trims the reason", () => {
       expect(
         WithdrawApplicationSchema.safeParse({
-          withdrawnReason: "Autre opportunité",
+          withdrawnReason: "Another opportunity",
           status: "WITHDRAWN",
         }).success,
       ).toBe(false);
 
       const result = WithdrawApplicationSchema.safeParse({
-        withdrawnReason: " Autre opportunité ",
+        withdrawnReason: " Another opportunity ",
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.withdrawnReason).toBe("Autre opportunité");
+        expect(result.data.withdrawnReason).toBe("Another opportunity");
       }
     });
   });

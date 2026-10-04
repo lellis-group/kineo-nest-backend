@@ -69,7 +69,7 @@ async function signInOwner(options: { thenUnverify?: boolean } = {}) {
     data: {
       id: "practice-owner",
       ownerId: profile.id,
-      name: "Cabinet Test",
+      name: "Test Practice",
       address: "1 rue",
       city: "Lyon",
       createdAt: now,
@@ -80,7 +80,7 @@ async function signInOwner(options: { thenUnverify?: boolean } = {}) {
       id: "listing-1",
       practiceId: "practice-owner",
       createdById: profile.id,
-      title: "Remplacement",
+      title: "Cover",
       startDate: new Date("2026-11-02"),
       endDate: new Date("2026-11-16"),
       specialty: "GENERALIST",
@@ -123,7 +123,7 @@ describe("an unverified account", () => {
     const response = await request(fx.baseUrl)
       .patch("/replacement-listings/listing-1")
       .set("Cookie", cookies)
-      .send({ description: "changée" });
+      .send({ description: "changed" });
 
     expect(response.status).toBe(403);
     expect(
@@ -152,7 +152,7 @@ describe("an unverified account", () => {
     const response = await request(fx.baseUrl)
       .post("/practices")
       .set("Cookie", cookies)
-      .send({ name: "Cabinet", address: "2 rue", city: "Lyon" });
+      .send({ name: "Practice", address: "2 rue", city: "Lyon" });
 
     expect(response.status).toBe(403);
   });
@@ -165,7 +165,7 @@ describe("a verified account", () => {
     const response = await request(fx.baseUrl)
       .patch("/replacement-listings/listing-1")
       .set("Cookie", cookies)
-      .send({ description: "changée" });
+      .send({ description: "changed" });
 
     expect(response.status).toBe(200);
   });
@@ -184,7 +184,7 @@ describe("a verified account", () => {
     const response = await request(fx.baseUrl)
       .patch("/replacement-listings/listing-1")
       .set("Cookie", cookies)
-      .send({ description: "changée" });
+      .send({ description: "changed" });
 
     expect(response.status).toBe(403);
   });

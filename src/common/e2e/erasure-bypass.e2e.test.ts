@@ -58,7 +58,7 @@ async function seedScenario() {
     data: {
       id: "practice-owner",
       ownerId: ownerProfile.id,
-      name: "Cabinet Test",
+      name: "Test Practice",
       address: "1 rue",
       city: "Lyon",
       createdAt: now,
@@ -69,7 +69,7 @@ async function seedScenario() {
       id: "listing-1",
       practiceId: practice.id,
       createdById: ownerProfile.id,
-      title: "Remplacement generaliste",
+      title: "General practitioner cover",
       startDate: new Date("2026-11-02"),
       endDate: new Date("2026-11-16"),
       specialty: "GENERALIST",
@@ -102,7 +102,7 @@ async function seedScenario() {
       listingId: listing.id,
       applicantId: candidateProfile.id,
       status: "PENDING",
-      message: "Je suis disponible.",
+      message: "I am available.",
       createdAt: now,
       updatedAt: now,
     },
@@ -153,7 +153,7 @@ async function expectNothingDestroyed() {
   expect(await fx.prisma.application.count()).toBe(1);
   expect(
     await fx.prisma.application.findUnique({ where: { id: "application-1" } }),
-  ).toMatchObject({ message: "Je suis disponible." });
+  ).toMatchObject({ message: "I am available." });
 }
 
 beforeAll(async () => {
@@ -243,7 +243,7 @@ describe("POST /account/confirm-deletion", () => {
       where: { id: "application-1" },
       include: { listing: true },
     });
-    expect(application?.message).toBe("Je suis disponible.");
+    expect(application?.message).toBe("I am available.");
     expect(application?.listing.createdById).toBe(SYSTEM_SCAFFOLD.profileId);
 
     // The trail is keyed, not plaintext.

@@ -52,7 +52,7 @@ async function seedScenario() {
     data: {
       id: "practice-owner",
       ownerId: ownerProfile.id,
-      name: "Cabinet Test",
+      name: "Test Practice",
       address: "1 rue",
       city: "Lyon",
       createdAt: now,
@@ -63,7 +63,7 @@ async function seedScenario() {
       id: "listing-1",
       practiceId: practice.id,
       createdById: ownerProfile.id,
-      title: "Remplacement generaliste",
+      title: "General practitioner cover",
       startDate: new Date("2026-11-02"),
       endDate: new Date("2026-11-16"),
       specialty: "GENERALIST",
@@ -96,7 +96,7 @@ async function seedScenario() {
       listingId: listing.id,
       applicantId: candidateProfile.id,
       status: "PENDING",
-      message: "Je suis disponible.",
+      message: "I am available.",
       createdAt: now,
       updatedAt: now,
     },
@@ -140,7 +140,7 @@ describe("deleting an account that holds another candidate's application", () =>
       await fx.prisma.application.findUnique({
         where: { id: "application-1" },
       }),
-    ).toMatchObject({ message: "Je suis disponible." });
+    ).toMatchObject({ message: "I am available." });
   });
 
   it("refuses DELETE /practices/:id with 409 and keeps the application", async () => {
@@ -193,7 +193,7 @@ describe("deleting an account that holds another candidate's application", () =>
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       id: "listing-1",
-      title: "Remplacement generaliste",
+      title: "General practitioner cover",
       applicationsCount: 0,
     });
     expect(typeof response.body.startDate).toBe("string");

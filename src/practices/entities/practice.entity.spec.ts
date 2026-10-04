@@ -6,7 +6,7 @@ describe("PracticeSchema", () => {
     const parsed = PracticeSchema.parse({
       id: "practice-1",
       ownerId: "profile-1",
-      name: "Cabinet du Parc",
+      name: "Parc Practice",
       address: "12 rue du Parc",
       city: "Lyon",
       latitude: 45.75,

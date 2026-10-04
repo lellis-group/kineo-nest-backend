@@ -55,7 +55,7 @@ async function seedPractice(id: string, latitude: number, longitude: number) {
     data: {
       id,
       ownerId: `profile-${id}`,
-      name: `Cabinet ${id}`,
+      name: `Practice ${id}`,
       address: "1 rue",
       city: "Test",
       latitude,
