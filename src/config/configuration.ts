@@ -176,6 +176,21 @@ function configuration() {
     // better-auth applies its own, much tighter rule to the credential
     // endpoints and ignores rateLimit.max for them: 3 attempts per 10 seconds,
     // which locks out everyone behind a shared egress IP.
+    // Same story for the address change: better-auth rate-limits /change-email
+    // on its own and rateLimit.max does not reach it.
+    changeEmailRateLimit: {
+      window: positiveInteger(
+        process.env.CHANGE_EMAIL_RATE_LIMIT_WINDOW,
+        10,
+        "CHANGE_EMAIL_RATE_LIMIT_WINDOW",
+      ),
+      max: positiveInteger(
+        process.env.CHANGE_EMAIL_RATE_LIMIT_MAX,
+        3,
+        "CHANGE_EMAIL_RATE_LIMIT_MAX",
+      ),
+    },
+
     credentialRateLimit: {
       window: positiveInteger(
         process.env.CREDENTIAL_RATE_LIMIT_WINDOW,
