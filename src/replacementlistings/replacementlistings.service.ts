@@ -18,7 +18,9 @@ import {
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
+import { Prisma } from "../generated/prisma/client";
 import type { ListingStatus } from "../generated/prisma/enums";
+import { ListingStatus as LISTING_STATUSES } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
 import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
@@ -105,6 +107,7 @@ export class ReplacementlistingsService {
 
   private buildListingsWhere(filters: FindReplacementListingsDto) {
     return {
+      status: filters.status,
       specialty: filters.specialty,
       urgent: filters.urgent,
       startDate:
@@ -129,9 +132,13 @@ export class ReplacementlistingsService {
     const limit = filters.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where = {
-      status: "OPEN" as const,
-      ...this.buildListingsWhere(filters),
+    // The public feed is OPEN whatever the caller asked for: a status filter on
+    // a listing somebody else owns would turn the feed into a way to read the
+    // statuses of postings still in circulation.
+    const { status: _statusFilter, ...publicFilters } = filters;
+    const where: Prisma.ReplacementListingWhereInput = {
+      ...this.buildListingsWhere(publicFilters),
+      status: "OPEN",
     };
 
     const [data, total] = await Promise.all([
@@ -165,7 +172,16 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(filters),
     };
 
-    const [data, total] = await Promise.all([
+    const // The buckets count every filter the paginator applies except the
+      // status one: bucketing by a status the caller already filtered on would
+      // zero every other tab.
+      { status: _status, ...countFilters } = filters;
+    const countsWhere = {
+      createdById: profileId,
+      ...this.buildListingsWhere(countFilters),
+    };
+
+    const [data, total, counts] = await Promise.all([
       this.prisma.replacementListing.findMany({
         where,
         skip,
@@ -174,14 +190,43 @@ export class ReplacementlistingsService {
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
+      this.countListingsByStatus(countsWhere),
     ]);
 
     return {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCount(listing)),
       ),
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        counts,
+      },
     };
+  }
+
+  private async countListingsByStatus(
+    where: Prisma.ReplacementListingWhereInput,
+  ) {
+    const grouped = await this.prisma.replacementListing.groupBy({
+      by: ["status"],
+      where,
+      _count: true,
+    });
+
+    const counts = Object.fromEntries(
+      Object.values(LISTING_STATUSES).map((status) => [status, 0]),
+    ) as Record<ListingStatus, number>;
+    let total = 0;
+
+    for (const row of grouped) {
+      counts[row.status] = row._count;
+      total += row._count;
+    }
+
+    return { ...counts, total };
   }
 
   async findOne(id: string, requesterUserId?: string) {
@@ -319,10 +364,25 @@ export class ReplacementlistingsService {
       );
     }
 
+    // A FILLED listing closed out with a placement on it, an OPEN one was closed
+    // with nobody retained. Both leave circulation, and a candidate who was
+    // shortlisted has to be able to tell the two apart.
     const updated = await this.prisma.replacementListing.update({
       where: { id },
-      data: { status: "CLOSED" },
+      data: {
+        status: listing.status === "FILLED" ? "CLOSED" : "CLOSED_NO_CANDIDATE",
+      },
       include: APPLICATIONS_COUNT_INCLUDE,
+    });
+
+    await this.prisma.application.updateMany({
+      where: { listingId: id, status: { in: ACTIVE_APPLICATION_STATUSES } },
+      data: {
+        status: "REJECTED",
+        decisionSource: "PRACTICE_REJECTED",
+        rejectionReason: PLATFORM_REJECTION_REASONS.listingWithdrawn,
+        respondedAt: new Date(),
+      },
     });
 
     return toReplacementListingDto(this.withCount(updated));

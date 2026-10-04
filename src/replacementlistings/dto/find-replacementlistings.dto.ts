@@ -1,6 +1,6 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
-import { Specialty } from "../../generated/prisma/enums";
+import { ListingStatus, Specialty } from "../../generated/prisma/enums";
 
 /**
  * Query parameters are plain strings: `z.coerce.boolean()` would turn the
@@ -27,6 +27,12 @@ export const FindReplacementListingsSchema = z
     urgent: BooleanQueryParam.optional().describe(
       "Filter urgent listings only",
     ),
+    status: z
+      .enum(ListingStatus)
+      .optional()
+      .describe(
+        "Filter by status. Only meaningful on the caller's own listings: the public feed is always OPEN.",
+      ),
     startDateFrom: z.iso
       .datetime()
       .optional()

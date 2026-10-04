@@ -166,8 +166,22 @@ describe("ReplacementListing DTO security", () => {
   describe("FindReplacementListingsSchema", () => {
     it("rejects unknown query parameters", () => {
       expect(
-        FindReplacementListingsSchema.safeParse({ status: "OPEN" }).success,
+        FindReplacementListingsSchema.safeParse({ ownerId: "profile-1" })
+          .success,
       ).toBe(false);
+    });
+
+    it("rejects a status outside the enum", () => {
+      expect(
+        FindReplacementListingsSchema.safeParse({ status: "PUBLISHED" })
+          .success,
+      ).toBe(false);
+    });
+
+    it("accepts a status, which is what buckets the owner's own listings", () => {
+      expect(
+        FindReplacementListingsSchema.safeParse({ status: "OPEN" }).success,
+      ).toBe(true);
     });
 
     it("accepts known filters", () => {
@@ -175,6 +189,7 @@ describe("ReplacementListing DTO security", () => {
         specialty: "DENTIST",
         city: " Lyon ",
         urgent: "true",
+        status: "FILLED",
         page: "2",
       });
       expect(result.success).toBe(true);
