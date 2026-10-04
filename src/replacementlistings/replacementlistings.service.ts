@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { PLATFORM_REJECTION_REASONS } from "../applications/rejection-reasons";
 import {
   assertNoThirdPartyApplications,
   LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
@@ -364,7 +365,7 @@ export class ReplacementlistingsService {
           },
           data: {
             status: "REJECTED",
-            rejectionReason: "The listing has been cancelled",
+            rejectionReason: PLATFORM_REJECTION_REASONS.listingCancelled,
             respondedAt: now,
           },
         });

@@ -24,6 +24,7 @@ import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
+import { PLATFORM_REJECTION_REASONS } from "./rejection-reasons";
 
 // The mapper publishes name and image and nothing else, so a paginated list
 // does not need the email, the verification flag and the timestamps that
@@ -449,7 +450,9 @@ export class ApplicationsService {
           },
           data: {
             status: "REJECTED",
-            rejectionReason: "Another candidate was selected for this listing",
+            decisionSource: "PRACTICE_REJECTED",
+            rejectionReason:
+              PLATFORM_REJECTION_REASONS.anotherCandidateRetained,
             respondedAt: now,
           },
         });
