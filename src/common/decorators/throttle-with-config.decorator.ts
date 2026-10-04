@@ -1,35 +1,25 @@
 import { applyDecorators } from "@nestjs/common";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
-import configuration from "../../config/configuration";
-
-const config = configuration();
+import { THROTTLE_NAMES, type ThrottleName, throttleTier } from "../throttle";
 
 /**
- * Custom decorator that applies throttling based on the application configuration.
- * Uses the throttle settings defined in config/configuration.ts which reads from environment variables.
+ * Applies one configured tier to a route and skips the others.
  *
- * The ThrottlerGuard applies ALL configured throttlers (short, medium, long) to every
- * request. To test a single tier in isolation, this decorator skips the other two
- * throttlers for the target route and only applies the requested one.
- *
- * @param throttleName - The name of the throttle tier to apply ("short", "medium", or "long")
+ * ThrottlerGuard applies every registered throttler to every request, so
+ * testing a single tier in isolation means skipping the rest.
  */
-export function ThrottleWithConfig(throttleName: "short" | "medium" | "long") {
-  const throttleConfig = config.throttle[throttleName];
+export function ThrottleWithConfig(throttleName: ThrottleName) {
+  const { limit, ttl } = throttleTier(throttleName);
 
-  const skipOthers: Record<"short" | "medium" | "long", boolean> = {
-    short: throttleName !== "short",
-    medium: throttleName !== "medium",
-    long: throttleName !== "long",
-  };
+  const skipOthers = Object.fromEntries(
+    THROTTLE_NAMES.filter((name) => name !== throttleName).map((name) => [
+      name,
+      true,
+    ]),
+  );
 
   return applyDecorators(
     SkipThrottle(skipOthers),
-    Throttle({
-      [throttleName]: {
-        limit: throttleConfig.limit,
-        ttl: throttleConfig.ttl,
-      },
-    }),
+    Throttle({ [throttleName]: { limit, ttl } }),
   );
 }
