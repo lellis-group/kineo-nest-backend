@@ -71,14 +71,23 @@ export class PracticesService {
         take: MAX_GEO_CANDIDATES,
       });
 
-      const practices = candidates
+      const located = candidates.filter(
+        (
+          practice,
+        ): practice is typeof practice & {
+          latitude: number;
+          longitude: number;
+        } => practice.latitude !== null && practice.longitude !== null,
+      );
+
+      const practices = located
         .map((practice) => ({
           practice,
           distance: this.distanceInKm(
             lat,
             lng,
-            practice.latitude!,
-            practice.longitude!,
+            practice.latitude,
+            practice.longitude,
           ),
         }))
         .filter(({ distance }) => distance <= radiusKm)
