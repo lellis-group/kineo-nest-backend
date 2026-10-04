@@ -11,6 +11,14 @@ import { BaseExceptionFilter, HttpAdapterHost } from "@nestjs/core";
 import { ZodSerializationException, ZodValidationException } from "nestjs-zod";
 import { ZodError, type ZodIssue } from "zod";
 
+// Query strings carry single-use tokens, so they are kept out of the logged path
+// and out of the response body.
+function pathOnly(url?: string): string | undefined {
+  if (!url) return undefined;
+  const queryStart = url.indexOf("?");
+  return queryStart === -1 ? url : url.slice(0, queryStart);
+}
+
 @Catch(HttpException)
 export class HttpExceptionFilter extends BaseExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
@@ -65,13 +73,13 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       const status = exception.getStatus();
 
       this.logger.error(
-        `HTTP ${status} on ${request?.method} ${request?.url}: ${exception.message}`,
+        `HTTP ${status} on ${request?.method} ${pathOnly(request?.url)}: ${exception.message}`,
       );
 
       const sanitizedResponse = {
         statusCode: status,
         message: status >= 500 ? "Internal server error" : exception.message,
-        path: request?.url,
+        path: pathOnly(request?.url),
         timestamp: new Date().toISOString(),
       };
 
