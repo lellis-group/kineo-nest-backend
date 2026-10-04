@@ -94,6 +94,14 @@ enum Specialty {
   OTHER
 }
 
+/// Who moved a settled application to its final status.
+enum DecisionSource {
+  PRACTICE_ACCEPTED
+  PRACTICE_REJECTED
+  CANDIDATE_WITHDREW
+  SYSTEM
+}
+
 enum ListingStatus {
   DRAFT
   OPEN
@@ -101,6 +109,7 @@ enum ListingStatus {
   FULL
   FILLED
   CLOSED
+  CLOSED_NO_CANDIDATE
   CANCELLED
 }
 
@@ -189,6 +198,7 @@ model Application {
   applicantId     String
   applicant       Profile            @relation(fields: [applicantId], references: [id], onDelete: Cascade)
   status          ApplicationStatus  @default(PENDING)
+  decisionSource  DecisionSource?
   message         String?
   rejectionReason String?
   withdrawnReason String?
@@ -199,6 +209,7 @@ model Application {
 
   @@unique([listingId, applicantId])
   @@index([applicantId])
+  @@index([applicantId, status])
   @@index([listingId, createdAt(sort: Desc)], where: { status: "PENDING" }, map: "app_listing_pending_idx")
   @@index([listingId, createdAt(sort: Desc)], where: { status: "SHORTLISTED" }, map: "app_listing_shortlisted_idx")
   @@index([applicantId, createdAt(sort: Desc)], where: { status: "PENDING" }, map: "app_applicant_pending_idx")

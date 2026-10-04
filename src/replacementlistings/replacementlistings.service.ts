@@ -10,29 +10,23 @@ import {
   assertNoThirdPartyApplications,
   LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
+import {
+  ACTIVE_APPLICATION_STATUSES,
+  isTerminalListingStatus,
+  RECRUITING_LISTING_STATUSES,
+} from "../common/listing-status";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
-import type {
-  ApplicationStatus,
-  ListingStatus,
-} from "../generated/prisma/enums";
+import type { ListingStatus } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
 import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
 
-const ACTIVE_LISTING_STATUSES: ListingStatus[] = [
-  "DRAFT",
-  "OPEN",
-  "IN_DISCUSSION",
-  "FULL",
-  "FILLED",
-];
-const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
-  "PENDING",
-  "SHORTLISTED",
-];
+// A listing in one of these still counts against the owner's quota: a draft
+// and a filled listing are both work in progress that has to be dealt with.
+const ACTIVE_LISTING_STATUSES: ListingStatus[] = RECRUITING_LISTING_STATUSES;
 
 const APPLICATIONS_COUNT_INCLUDE = {
   _count: {
@@ -252,11 +246,7 @@ export class ReplacementlistingsService {
   async update(id: string, userId: string, dto: UpdateReplacementListingDto) {
     const listing = await this.assertOwnership(id, userId);
 
-    if (
-      listing.status === "FILLED" ||
-      listing.status === "CLOSED" ||
-      listing.status === "CANCELLED"
-    ) {
+    if (isTerminalListingStatus(listing.status)) {
       throw new BadRequestException("This listing can no longer be modified");
     }
 
@@ -342,7 +332,11 @@ export class ReplacementlistingsService {
           throw new ForbiddenException();
         }
 
-        if (listing.status === "CLOSED" || listing.status === "CANCELLED") {
+        if (
+          listing.status === "CLOSED" ||
+          listing.status === "CLOSED_NO_CANDIDATE" ||
+          listing.status === "CANCELLED"
+        ) {
           throw new BadRequestException(
             "This listing is already closed or cancelled",
           );

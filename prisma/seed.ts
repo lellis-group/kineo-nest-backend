@@ -2,6 +2,7 @@ import { hashPassword } from "better-auth/crypto";
 import { Prisma } from "../src/generated/prisma/client";
 import {
   ApplicationStatus,
+  DecisionSource,
   ListingStatus,
   ProfileType,
   Specialty,
@@ -173,6 +174,26 @@ function shuffle<T>(array: T[]): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+/**
+ * Mirrors what the service writes when it settles an application: the practice
+ * decides an acceptance or a rejection, the candidate decides a withdrawal, and
+ * PENDING and SHORTLISTED are not decisions yet.
+ */
+function decisionSourceFor(
+  status: ApplicationStatus,
+): DecisionSource | undefined {
+  switch (status) {
+    case ApplicationStatus.ACCEPTED:
+      return DecisionSource.PRACTICE_ACCEPTED;
+    case ApplicationStatus.REJECTED:
+      return DecisionSource.PRACTICE_REJECTED;
+    case ApplicationStatus.WITHDRAWN:
+      return DecisionSource.CANDIDATE_WITHDREW;
+    default:
+      return undefined;
+  }
 }
 
 async function main() {
@@ -390,6 +411,7 @@ async function main() {
     ListingStatus.FILLED,
     ListingStatus.DRAFT,
     ListingStatus.CLOSED,
+    ListingStatus.CLOSED_NO_CANDIDATE,
   ];
 
   let listingVariant = 0;
@@ -511,6 +533,11 @@ async function main() {
         listingId: listing.id,
         applicantId: applicant.id,
         status,
+        // Without this every settled row reads as "nobody has decided yet", so
+        // the decision filters on a candidate's screen return nothing while the
+        // status totals count the same rows. The seed is where a freshly created
+        // database gets the value the service writes.
+        decisionSource: decisionSourceFor(status),
         message: getRandomItem(applicationMessageTemplates)(
           listing.title,
           listing.startDate.toLocaleDateString("fr-FR"),

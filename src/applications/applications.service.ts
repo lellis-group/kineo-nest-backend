@@ -7,7 +7,12 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
+import {
+  ACTIVE_APPLICATION_STATUSES,
+  APPLICABLE_LISTING_STATUSES,
+  deriveListingStatus,
+  isTerminalListingStatus,
+} from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
@@ -32,6 +37,13 @@ export class ApplicationsService {
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * Realigns a listing's status with the applications it actually holds.
+   *
+   * The rule lives in deriveListingStatus, which is also what the quota check
+   * in create() reads. This method used to redraw it inline, and the two copies
+   * agreed by coincidence.
+   */
   private async recalcListingStatus(
     tx: Prisma.TransactionClient,
     listingId: string,
@@ -40,36 +52,24 @@ export class ApplicationsService {
       where: { id: listingId },
     });
 
-    if (
-      !listing ||
-      listing.status === "FILLED" ||
-      listing.status === "CLOSED" ||
-      listing.status === "CANCELLED"
-    ) {
+    if (!listing) {
       return;
     }
 
-    const activeCount = await tx.application.count({
+    const activeApplications = await tx.application.count({
       where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
     });
 
-    let nextStatus = listing.status;
+    const status = deriveListingStatus({
+      current: listing.status,
+      activeApplications,
+      maxApplications: listing.maxApplications,
+    });
 
-    if (activeCount === 0) {
-      nextStatus = "OPEN";
-    } else if (
-      listing.maxApplications &&
-      activeCount >= listing.maxApplications
-    ) {
-      nextStatus = "FULL";
-    } else {
-      nextStatus = "IN_DISCUSSION";
-    }
-
-    if (nextStatus !== listing.status) {
+    if (status !== listing.status) {
       await tx.replacementListing.update({
         where: { id: listingId },
-        data: { status: nextStatus },
+        data: { status },
       });
     }
   }
@@ -146,7 +146,7 @@ export class ApplicationsService {
               "You cannot apply to your own listing",
             );
           }
-          if (listing.status !== "OPEN" && listing.status !== "IN_DISCUSSION") {
+          if (!APPLICABLE_LISTING_STATUSES.includes(listing.status)) {
             throw new BadRequestException(
               "This listing is not accepting applications",
             );
@@ -178,11 +178,13 @@ export class ApplicationsService {
           await tx.replacementListing.update({
             where: { id: listing.id },
             data: {
-              status:
-                listing.maxApplications &&
-                activeListingCount + 1 >= listing.maxApplications
-                  ? "FULL"
-                  : "IN_DISCUSSION",
+              // The same derivation the settle paths use, with the
+              // application being created included in the count.
+              status: deriveListingStatus({
+                current: listing.status,
+                activeApplications: activeListingCount + 1,
+                maxApplications: listing.maxApplications,
+              }),
             },
           });
 
@@ -411,11 +413,7 @@ export class ApplicationsService {
             "Only pending or shortlisted applications can be accepted",
           );
         }
-        if (
-          listing.status === "FILLED" ||
-          listing.status === "CLOSED" ||
-          listing.status === "CANCELLED"
-        ) {
+        if (isTerminalListingStatus(listing.status)) {
           throw new BadRequestException(
             "This listing can no longer accept an application",
           );
@@ -424,7 +422,11 @@ export class ApplicationsService {
         const now = new Date();
         const updated = await tx.application.update({
           where: { id },
-          data: { status: "ACCEPTED", respondedAt: now },
+          data: {
+            status: "ACCEPTED",
+            decisionSource: "PRACTICE_ACCEPTED",
+            respondedAt: now,
+          },
         });
         await tx.application.updateMany({
           where: {
@@ -475,10 +477,7 @@ export class ApplicationsService {
           throw new ForbiddenException();
         }
 
-        if (
-          application.status !== "PENDING" &&
-          application.status !== "SHORTLISTED"
-        ) {
+        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw new BadRequestException(
             "Only pending or shortlisted applications can be rejected",
           );
@@ -488,6 +487,7 @@ export class ApplicationsService {
           where: { id },
           data: {
             status: "REJECTED",
+            decisionSource: "PRACTICE_REJECTED",
             rejectionReason: dto.rejectionReason,
             respondedAt: new Date(),
           },
@@ -527,10 +527,7 @@ export class ApplicationsService {
           throw new ForbiddenException();
         }
 
-        if (
-          application.status !== "PENDING" &&
-          application.status !== "SHORTLISTED"
-        ) {
+        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw new BadRequestException(
             "Only pending or shortlisted applications can be withdrawn",
           );
@@ -540,6 +537,7 @@ export class ApplicationsService {
           where: { id },
           data: {
             status: "WITHDRAWN",
+            decisionSource: "CANDIDATE_WITHDREW",
             withdrawnReason: dto.withdrawnReason,
           },
         });
