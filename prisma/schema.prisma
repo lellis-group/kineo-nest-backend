@@ -42,6 +42,10 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  // The hourly retention sweep filters on `expiresAt` alone. Without this it is
+  // a sequential scan of the whole table on both `session` and `verification`,
+  // in the process that is serving requests.
+  @@index([expiresAt])
   @@map("session")
 }
 
@@ -74,6 +78,10 @@ model Verification {
   updatedAt  DateTime @updatedAt
 
   @@index([identifier], type: Hash)
+  // The sweep deletes on `expiresAt` alone; the erasure purges a prefixed
+  // `identifier`, which the hash index cannot serve as a range either.
+  @@index([expiresAt])
+  @@index([identifier, expiresAt], map: "verification_identifier_expiresAt_idx", type: BTree)
   @@map("verification")
 }
 

@@ -405,7 +405,10 @@ describe("AccountDeletionService", () => {
     await service.confirmDeletion("abc");
 
     // Token consumption first, then the purge. Both identifiers better-auth
-    // writes must be matched, by prefix, against the user id in `value`.
+    // writes must be matched, by prefix, against the user id in `value`. The
+    // shapes here are literals this file chose; the prefixes are better-auth's,
+    // so the suite that proves they still match real rows is
+    // `confirm-deletion.e2e.test.ts`.
     expect(verificationDeletes).toHaveLength(2);
     expect(verificationDeletes[1]).toMatchObject({
       where: {

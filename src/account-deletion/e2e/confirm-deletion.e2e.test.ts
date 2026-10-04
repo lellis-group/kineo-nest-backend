@@ -672,3 +672,67 @@ describe("the purge", () => {
     ).toBe(1);
   });
 });
+
+describe("the single-use links an erasure clears", () => {
+  // The unit suite pins the `where` clause against literals this repository
+  // chose, but the prefixes belong to better-auth: it is the dependency that
+  // writes `delete-account-<token>` and `reset-password:<token>`. A minor bump
+  // that changed either would leave a live password-reset link on an erased
+  // account with a green suite, because nothing here would have noticed. So the
+  // prefixes are matched against rows this suite writes itself.
+  it("removes both link kinds and nothing else", async () => {
+    const { prisma } = fx;
+    const { owner } = await seedScenario();
+    const now = new Date();
+
+    for (const identifier of [
+      "delete-account-token0000000000000",
+      "reset-password:token111111111111",
+    ]) {
+      await prisma.verification.create({
+        data: {
+          id: `verification-${identifier.slice(0, 12)}`,
+          identifier,
+          value: owner.id,
+          expiresAt: new Date(now.getTime() + 3_600_000),
+        },
+      });
+    }
+
+    // Someone else's row, and one of this user's on an identifier this
+    // deployment does not use.
+    await prisma.verification.create({
+      data: {
+        id: "verification-other",
+        identifier: "reset-password:token222222222222",
+        value: "user-someone-else",
+        expiresAt: new Date(now.getTime() + 3_600_000),
+      },
+    });
+    await prisma.verification.create({
+      data: {
+        id: "verification-unrelated",
+        identifier: "some-other-flow:token333333333333",
+        value: owner.id,
+        expiresAt: new Date(now.getTime() + 3_600_000),
+      },
+    });
+
+    await requestErasure(owner.id, owner.email);
+    expect((await confirm(owner.id)).status).toBe(200);
+
+    const left = await prisma.verification.findMany({
+      where: { value: owner.id },
+      select: { identifier: true },
+    });
+    expect(left.map((row) => row.identifier)).toEqual([
+      "some-other-flow:token333333333333",
+    ]);
+
+    expect(
+      await prisma.verification.count({
+        where: { value: "user-someone-else" },
+      }),
+    ).toBe(1);
+  });
+});
