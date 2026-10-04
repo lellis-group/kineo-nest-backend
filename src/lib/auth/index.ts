@@ -98,12 +98,12 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     ),
     changeEmailRateLimitWindow: positiveInt(
       env.CHANGE_EMAIL_RATE_LIMIT_WINDOW,
-      10,
+      900,
       "CHANGE_EMAIL_RATE_LIMIT_WINDOW",
     ),
     changeEmailRateLimitMax: positiveInt(
       env.CHANGE_EMAIL_RATE_LIMIT_MAX,
-      3,
+      10,
       "CHANGE_EMAIL_RATE_LIMIT_MAX",
     ),
     sessionExpiresIn: durationSeconds(env.SESSION_EXPIRES_IN, 60 * 60 * 24 * 7),
@@ -168,9 +168,9 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     credentialRateLimitMax:
       config.get<number>("credentialRateLimit.max", 3) ?? 3,
     changeEmailRateLimitWindow:
-      config.get<number>("changeEmailRateLimit.window", 10) ?? 10,
+      config.get<number>("changeEmailRateLimit.window", 900) ?? 900,
     changeEmailRateLimitMax:
-      config.get<number>("changeEmailRateLimit.max", 3) ?? 3,
+      config.get<number>("changeEmailRateLimit.max", 10) ?? 10,
     sessionExpiresIn:
       config.get<number>("session.expiresIn", 60 * 60 * 24 * 7) ??
       60 * 60 * 24 * 7,

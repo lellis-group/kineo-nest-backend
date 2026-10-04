@@ -96,6 +96,16 @@ describe("readAuthEnv", () => {
     });
   });
 
+  it("defaults the address-change limit to what the two-step flow costs", () => {
+    // Pinned because it is a decision, not an oversight: an address change sends
+    // emails and needs two rounds of them, so the credential-tight 3/10s would
+    // lock out a user who mistypes and corrects.
+    expect(readAuthEnv({ ...REQUIRED_ENV }).changeEmailRateLimitMax).toBe(10);
+    expect(readAuthEnv({ ...REQUIRED_ENV }).changeEmailRateLimitWindow).toBe(
+      900,
+    );
+  });
+
   it("reads the erasure horizons the confirmation email quotes", () => {
     expect(
       readAuthEnv({
