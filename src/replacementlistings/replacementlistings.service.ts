@@ -297,7 +297,14 @@ export class ReplacementlistingsService {
       LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
     );
 
-    return this.prisma.replacementListing.delete({ where: { id } });
+    // Mapped like every other read: the route serializes with the listing DTO,
+    // which expects ISO dates and an application count, and a raw Prisma row
+    // satisfies neither.
+    const deleted = await this.prisma.replacementListing.delete({
+      where: { id },
+    });
+
+    return toReplacementListingDto({ ...deleted, applicationsCount: 0 });
   }
 
   async close(id: string, userId: string) {

@@ -8,15 +8,18 @@
     "build": "nest build",
     "start": "bun dist/main.js",
     "typecheck": "bun x tsc -p tsconfig.json --noEmit",
-    "test": "bun test src",
-    "test:watch": "bun test src --watch",
+    "test": "bun test src --path-ignore-patterns '**/e2e/**'",
+    "test:watch": "bun test src --watch --path-ignore-patterns '**/e2e/**'",
     "lint": "biome check src prisma",
     "lint:fix": "biome check --write src prisma",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
-    "db:check": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code"
+    "db:check": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
+    "test:e2e": "bun run test:e2e:cascade",
+    "test:all": "bun run test && bun run test:e2e",
+    "test:e2e:cascade": "KINEO_E2E_SUITE=cascade bun test src/common/e2e/third-party-cascade.e2e.test.ts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.3",
@@ -52,7 +55,9 @@
     "@types/compression": "^1.8.1",
     "@types/node": "^26.2.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/supertest": "^7.2.1",
     "prisma": "^7.9.1",
+    "supertest": "^7.3.1",
     "typescript": "^6.0.3"
   }
 }

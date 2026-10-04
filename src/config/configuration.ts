@@ -141,6 +141,22 @@ function configuration() {
       max: positiveInteger(process.env.RATE_LIMIT_MAX, 20, "RATE_LIMIT_MAX"),
     },
 
+    // better-auth applies its own, much tighter rule to the credential
+    // endpoints and ignores rateLimit.max for them: 3 attempts per 10 seconds,
+    // which locks out everyone behind a shared egress IP.
+    credentialRateLimit: {
+      window: positiveInteger(
+        process.env.CREDENTIAL_RATE_LIMIT_WINDOW,
+        10,
+        "CREDENTIAL_RATE_LIMIT_WINDOW",
+      ),
+      max: positiveInteger(
+        process.env.CREDENTIAL_RATE_LIMIT_MAX,
+        3,
+        "CREDENTIAL_RATE_LIMIT_MAX",
+      ),
+    },
+
     // ---- Session (better-auth) ----
     session: {
       expiresIn: durationSeconds(

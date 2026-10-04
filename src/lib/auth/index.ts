@@ -22,6 +22,8 @@ export interface AuthEnv {
   trustedOrigins: string[];
   rateLimitWindow: number;
   rateLimitMax: number;
+  credentialRateLimitWindow: number;
+  credentialRateLimitMax: number;
   sessionExpiresIn: number;
   sessionUpdateAge: number;
   cookieCacheEnabled: boolean;
@@ -73,6 +75,16 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       "RATE_LIMIT_WINDOW",
     ),
     rateLimitMax: positiveInt(env.RATE_LIMIT_MAX, 20, "RATE_LIMIT_MAX"),
+    credentialRateLimitWindow: positiveInt(
+      env.CREDENTIAL_RATE_LIMIT_WINDOW,
+      10,
+      "CREDENTIAL_RATE_LIMIT_WINDOW",
+    ),
+    credentialRateLimitMax: positiveInt(
+      env.CREDENTIAL_RATE_LIMIT_MAX,
+      3,
+      "CREDENTIAL_RATE_LIMIT_MAX",
+    ),
     sessionExpiresIn: durationSeconds(env.SESSION_EXPIRES_IN, 60 * 60 * 24 * 7),
     sessionUpdateAge: durationSeconds(env.SESSION_UPDATE_AGE, 60 * 60 * 24),
     cookieCacheEnabled: env.COOKIE_CACHE_ENABLED !== "false",
@@ -120,6 +132,10 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     trustedOrigins: config.get<string[]>("cors.origins", []) ?? [],
     rateLimitWindow: config.get<number>("rateLimit.window", 60) ?? 60,
     rateLimitMax: config.get<number>("rateLimit.max", 20) ?? 20,
+    credentialRateLimitWindow:
+      config.get<number>("credentialRateLimit.window", 10) ?? 10,
+    credentialRateLimitMax:
+      config.get<number>("credentialRateLimit.max", 3) ?? 3,
     sessionExpiresIn:
       config.get<number>("session.expiresIn", 60 * 60 * 24 * 7) ??
       60 * 60 * 24 * 7,
@@ -245,6 +261,18 @@ export function createAuth(
       enabled: true,
       window: authEnv.rateLimitWindow,
       max: authEnv.rateLimitMax,
+      // better-auth's own rule for the credential endpoints is 3 attempts per
+      // 10 seconds and is not reachable through rateLimit.max.
+      customRules: {
+        "/sign-in/email": {
+          window: authEnv.credentialRateLimitWindow,
+          max: authEnv.credentialRateLimitMax,
+        },
+        "/sign-up/email": {
+          window: authEnv.credentialRateLimitWindow,
+          max: authEnv.credentialRateLimitMax,
+        },
+      },
     },
 
     session: {
