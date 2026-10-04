@@ -69,7 +69,7 @@ export function resetPasswordEmailTemplate({
           <tr><td style="line-height:32px; font-size:0;" height="32">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Bonjour <strong style="color:#FFFFFF;">${displayName}</strong>,</p>
+              <p style="padding:0; margin:0;">Hello <strong style="color:#FFFFFF;">${displayName}</strong>,</p>
             </td>
           </tr>
           <tr><td style="line-height:18px; font-size:0;" height="18">&nbsp;</td></tr>
@@ -81,7 +81,7 @@ export function resetPasswordEmailTemplate({
           <tr><td style="line-height:18px; font-size:0;" height="18">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe :</p>
+              <p style="padding:0; margin:0;">Click the button below to choose a new password:</p>
             </td>
           </tr>
           <tr><td style="line-height:34px; font-size:0;" height="34">&nbsp;</td></tr>
@@ -111,7 +111,7 @@ export function resetPasswordEmailTemplate({
           <tr><td style="line-height:10px; font-size:0;" height="10">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; font-size:14px; line-height:1.6; color:#8A8680; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Pour toute question, contactez notre support.</p>
+              <p style="padding:0; margin:0;">For any question, contact our support.</p>
             </td>
           </tr>
           <tr><td style="line-height:40px; font-size:0;" height="40">&nbsp;</td></tr>

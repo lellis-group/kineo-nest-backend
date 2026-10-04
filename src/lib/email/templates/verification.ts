@@ -69,7 +69,7 @@ export function verificationEmailTemplate({
           <tr><td style="line-height:32px; font-size:0;" height="32">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Bonjour <strong style="color:#FFFFFF;">${displayName}</strong>,</p>
+              <p style="padding:0; margin:0;">Hello <strong style="color:#FFFFFF;">${displayName}</strong>,</p>
             </td>
           </tr>
           <tr><td style="line-height:18px; font-size:0;" height="18">&nbsp;</td></tr>
