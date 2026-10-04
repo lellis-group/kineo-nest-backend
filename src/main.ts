@@ -2,77 +2,13 @@ import "reflect-metadata";
 import "dotenv/config";
 
 import { ConfigService } from "@nestjs/config";
-import { NestFactory } from "@nestjs/core";
-import type { NestExpressApplication } from "@nestjs/platform-express";
-import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
-import compression from "compression";
-import helmet from "helmet";
-import { cleanupOpenApiDoc } from "nestjs-zod";
 
-import { AppModule } from "./app.module";
-import { isHardenedEnv } from "./config/env";
+import { createApp } from "./app";
 import { errorMessage } from "./lib/log";
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    bodyParser: false,
-  });
-
-  app.use(compression());
-
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: [`'self'`],
-          scriptSrc: [`'self'`, `'unsafe-inline'`, "cdn.jsdelivr.net"],
-          styleSrc: [
-            `'self'`,
-            `'unsafe-inline'`,
-            "cdn.jsdelivr.net",
-            "fonts.googleapis.com",
-          ],
-          imgSrc: [`'self'`, "data:", "cdn.jsdelivr.net"],
-          fontSrc: [`'self'`, "fonts.gstatic.com", "cdn.jsdelivr.net", "data:"],
-          connectSrc: [`'self'`, "api.scalar.com"],
-        },
-      },
-    }),
-  );
-
-  const configService = app.get(ConfigService);
-
-  if (configService.get<boolean>("trustProxy", false)) {
-    app.set("trust proxy", 1);
-  }
-
-  const port = configService.get<number>("port", 3000);
-
-  const corsOrigins = configService.get<string[]>("cors.origins", []);
-
-  app.enableCors({
-    origin: corsOrigins,
-    credentials: configService.get<boolean>("cors.credentials", true),
-  });
-
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle(configService.get<string>("swagger.title", "Kineo API"))
-    .setDescription(
-      configService.get<string>(
-        "swagger.description",
-        "Kineo API documentation",
-      ),
-    )
-    .setVersion(configService.get<string>("swagger.version", "1.0"))
-    .addTag(configService.get<string>("swagger.tag", "Kineo"))
-    .build();
-
-  const documentFactory = () =>
-    cleanupOpenApiDoc(SwaggerModule.createDocument(app, swaggerConfig));
-
-  if (!isHardenedEnv(configService.get<string>("nodeEnv"))) {
-    SwaggerModule.setup("api", app, documentFactory);
-  }
+  const app = await createApp();
+  const port = app.get(ConfigService).get<number>("port", 3000);
 
   await app.listen(port, "0.0.0.0");
 
@@ -96,12 +32,8 @@ async function bootstrap() {
       console.log("Graceful shutdown completed");
       process.exit(0);
     } catch (err) {
-      console.error("Error during graceful shutdown:", err);
-      try {
-        process.exit(1);
-      } catch {
-        process.kill(process.pid, "SIGKILL");
-      }
+      console.error("Error during graceful shutdown:", errorMessage(err));
+      process.exit(1);
     }
   };
 
@@ -109,7 +41,7 @@ async function bootstrap() {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-bootstrap().catch((error) => {
+void bootstrap().catch((error) => {
   console.error("Failed to start server", errorMessage(error));
   process.exit(1);
 });
