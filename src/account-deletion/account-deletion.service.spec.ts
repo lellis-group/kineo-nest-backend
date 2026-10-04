@@ -42,7 +42,8 @@ function makeService(scenario: Scenario) {
     },
   };
   const prisma = {
-    $transaction: async (fn: (tx: typeof tx) => Promise<void>) => fn(tx),
+    $transaction: async (run: (transaction: typeof tx) => Promise<void>) =>
+      run(tx),
   } as unknown as PrismaService;
 
   return { service: new AccountDeletionService(prisma), calls };
