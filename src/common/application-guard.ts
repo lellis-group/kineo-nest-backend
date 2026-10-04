@@ -5,7 +5,10 @@ import type {
   Prisma,
 } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
-import { ACTIVE_APPLICATION_STATUSES } from "./listing-status";
+import {
+  ACTIVE_APPLICATION_STATUSES,
+  RECRUITING_LISTING_STATUSES,
+} from "./listing-status";
 
 /**
  * Statuses that must not be destroyed on someone else's behalf.
@@ -27,21 +30,25 @@ export const PROTECTED_APPLICATION_STATUSES: ApplicationStatus[] = [
   "ACCEPTED",
 ];
 
-/**
- * Statuses that no longer recruit candidates. A listing in one of them cannot
- * receive a new application, so any `PENDING` row it still carries is a
- * leftover from before the listing left circulation and must not keep its owner
- * blocked from deleting.
- */
-const RECRUITING_LISTING_STATUSES: ListingStatus[] = [
-  "DRAFT",
-  "OPEN",
-  "IN_DISCUSSION",
-  "FULL",
-  "FILLED",
-];
-
 type ApplicationClient = PrismaService | Prisma.TransactionClient;
+
+/**
+ * The listings a profile owns, directly or through a practice it owns.
+ *
+ * Written out three times over — here, in the erasure and in the profile
+ * delete — which is how the two halves of the account teardown could disagree
+ * about whose applications are at stake.
+ */
+export function ownedListingsFilter(
+  ownerProfileId: string,
+): Prisma.ReplacementListingWhereInput {
+  return {
+    OR: [
+      { createdById: ownerProfileId },
+      { practice: { ownerId: ownerProfileId } },
+    ],
+  };
+}
 
 /**
  * One message per call site, all naming the three statuses that block.
@@ -148,12 +155,11 @@ export async function countThirdPartyApplications(
     return 0;
   }
 
-  const ownedListings: Prisma.ReplacementListingWhereInput = {
-    OR: [{ createdById: profile.id }, { practice: { ownerId: profile.id } }],
-  };
-
   return prisma.application.count({
-    where: { listing: ownedListings, applicantId: { not: profile.id } },
+    where: {
+      listing: ownedListingsFilter(profile.id),
+      applicantId: { not: profile.id },
+    },
   });
 }
 

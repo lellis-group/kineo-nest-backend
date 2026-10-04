@@ -237,4 +237,92 @@ describe("ApplicationsService", () => {
     expect(result.withdrawnReason).toBe("Found another opportunity");
     expect(listingStatusUpdated).toBe("OPEN");
   });
+  it("cannot write over a decision that landed after its own read", async () => {
+    // The interleaving, made deterministic instead of raced: `shortlist` reads
+    // the row as PENDING, then a `reject` settles it, then the write is issued.
+    // A read-then-write shortlist writes unconditionally and leaves the row
+    // SHORTLISTED while still carrying the practice's rejectionReason and
+    // decisionSource — a combination no transition produces. Making the status
+    // part of the write is what closes the window.
+    const pending = {
+      id: "application-1",
+      listingId: "listing-1",
+      applicantId: "applicant-1",
+      status: "PENDING" as const,
+      message: null,
+      rejectionReason: null,
+      withdrawnReason: null,
+      viewedAt: null,
+      respondedAt: null,
+      createdAt: new Date("2026-08-20T08:00:00.000Z"),
+      updatedAt: new Date("2026-08-20T08:00:00.000Z"),
+    };
+
+    // What the row looks like by the time the write is issued.
+    let settled = false;
+    let unconditionalWrite: unknown;
+
+    const relations = {
+      listing: {
+        id: "listing-1",
+        createdById: "owner-1",
+        title: "Remplacement",
+        startDate: new Date("2026-11-02"),
+        endDate: new Date("2026-11-16"),
+        practice: { id: "practice-1", name: "Cabinet", city: "Lyon" },
+      },
+      applicant: {
+        id: "applicant-1",
+        user: { name: "Candidat", image: null, deletedAt: null },
+      },
+    };
+
+    const prisma = {
+      profile: { findUnique: async () => ({ id: "owner-1" }) },
+      application: {
+        findUnique: async () => ({ ...pending, ...relations }),
+        findUniqueOrThrow: async () => ({
+          ...pending,
+          ...relations,
+          status: "SHORTLISTED",
+          respondedAt: new Date(),
+        }),
+        updateMany: async (args: unknown) => {
+          // The condition travels with the write.
+          expect(args).toMatchObject({
+            where: { id: "application-1", status: "PENDING" },
+          });
+          return { count: settled ? 0 : 1 };
+        },
+        update: async (args: unknown) => {
+          unconditionalWrite = args;
+          return pending;
+        },
+      },
+      replacementListing: {
+        findUnique: async () => ({
+          id: "listing-1",
+          createdById: "owner-1",
+          practice: {},
+        }),
+      },
+    } as unknown as PrismaService;
+
+    const service = new ApplicationsService(prisma, {
+      get: () => undefined,
+    } as unknown as ConfigService);
+
+    // Still PENDING: the write lands.
+    await expect(
+      service.shortlist("application-1", "owner-user-1"),
+    ).resolves.toBeDefined();
+    expect(unconditionalWrite).toBeUndefined();
+
+    // Settled by a concurrent rejection: refused, not resurrected.
+    settled = true;
+    await expect(
+      service.shortlist("application-1", "owner-user-1"),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(unconditionalWrite).toBeUndefined();
+  });
 });

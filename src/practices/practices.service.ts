@@ -271,20 +271,30 @@ export class PracticesService {
   }
 
   async remove(id: string, userId: string) {
-    const practice = await this.findOne(id, userId);
-    const ownerId = await getOwnedProfileId(this.prisma, userId);
+    // Serializable, for the same reason the listing delete is: the ownership
+    // read, the guard's count and the cascade have to see one snapshot, or an
+    // application committed in the gap goes with the practice.
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const practice = await tx.practice.findUnique({ where: { id } });
 
-    if (practice.ownerId !== ownerId) {
-      throw new ForbiddenException();
-    }
+      if (!practice) {
+        throw new NotFoundException(`Practice ${id} not found`);
+      }
 
-    await assertNoThirdPartyApplications(
-      this.prisma,
-      ownerId,
-      { practiceId: id },
-      PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      const ownerId = await getOwnedProfileId(tx, userId);
 
-    return this.prisma.practice.delete({ where: { id } });
+      if (practice.ownerId !== ownerId) {
+        throw new ForbiddenException();
+      }
+
+      await assertNoThirdPartyApplications(
+        tx,
+        ownerId,
+        { practiceId: id },
+        PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+      );
+
+      return tx.practice.delete({ where: { id } });
+    });
   }
 }

@@ -16,6 +16,8 @@ import {
   LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
 import {
+  ACTIVE_APPLICATION_STATUSES,
+  RECRUITING_LISTING_STATUSES,
   recalcListingStatus,
   TERMINAL_LISTING_STATUSES,
 } from "../common/listing-status";
@@ -32,18 +34,6 @@ import type { CreateReplacementListingDto } from "./dto/create-replacementlistin
 import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
-
-const ACTIVE_LISTING_STATUSES: ListingStatus[] = [
-  "DRAFT",
-  "OPEN",
-  "IN_DISCUSSION",
-  "FULL",
-  "FILLED",
-];
-const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
-  "PENDING",
-  "SHORTLISTED",
-];
 
 /**
  * Machine-readable discriminators for the transition refusals of this module.
@@ -168,7 +158,7 @@ export class ReplacementlistingsService {
           const count = await tx.replacementListing.count({
             where: {
               createdById: profileId,
-              status: { in: ACTIVE_LISTING_STATUSES },
+              status: { in: RECRUITING_LISTING_STATUSES },
             },
           });
           if (count >= maxListings) {
@@ -481,27 +471,35 @@ export class ReplacementlistingsService {
   }
 
   async remove(id: string, userId: string) {
-    const listing = await this.assertOwnership(id, userId);
-
-    if (listing.status === "FILLED") {
-      throw refuse(
-        "A filled listing cannot be deleted, close it instead",
-        LISTING_TRANSITION_CODES.FILLED_CANNOT_BE_DELETED,
-      );
-    }
-
-    const profileId = await getOwnedProfileId(this.prisma, userId);
-
-    await assertNoThirdPartyApplications(
+    // Serializable, and the listing re-read inside it. Outside a transaction the
+    // guard counted zero, a candidate's application committed in the gap, and
+    // the cascade then took it — the destruction the guard exists to prevent,
+    // reachable by racing it. The FILLED check had the same window: it ran on a
+    // read a concurrent `accept` could overtake.
+    const deleted = await runSerializableTransaction(
       this.prisma,
-      profileId,
-      { id },
-      LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    const deleted = await this.prisma.replacementListing.delete({
-      where: { id },
-    });
+        if (listing.status === "FILLED") {
+          throw refuse(
+            "A filled listing cannot be deleted, close it instead",
+            LISTING_TRANSITION_CODES.FILLED_CANNOT_BE_DELETED,
+          );
+        }
+
+        const profileId = await getOwnedProfileId(tx, userId);
+
+        await assertNoThirdPartyApplications(
+          tx,
+          profileId,
+          { id },
+          LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+        );
+
+        return tx.replacementListing.delete({ where: { id } });
+      },
+    );
 
     // Mapped like every other listing this service returns. The delete handler
     // is annotated with the listing DTO, whose dates are strings and which

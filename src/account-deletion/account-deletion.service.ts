@@ -12,6 +12,7 @@ import {
   AUTO_REJECTION_PLATFORM_REASONS,
   REASON_CANDIDATE_UNAVAILABLE,
 } from "../applications/rejection-reasons";
+import { ownedListingsFilter } from "../common/application-guard";
 import { detachThirdPartyApplications } from "../common/ghost-listing";
 import { recalcListingStatus } from "../common/listing-status";
 import { getOwnedProfileIdSafe } from "../common/profile-lookup";
@@ -281,9 +282,7 @@ export class AccountDeletionService {
       return;
     }
 
-    const listingFilter: Prisma.ReplacementListingWhereInput = {
-      OR: [{ createdById: profileId }, { practice: { ownerId: profileId } }],
-    };
+    const listingFilter = ownedListingsFilter(profileId);
 
     // The practice's own words about the candidates who applied. Runs BEFORE
     // the detachment below, and that ordering is load-bearing: the scrub is

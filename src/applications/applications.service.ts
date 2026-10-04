@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
+  ACTIVE_APPLICATION_STATUSES,
   recalcListingStatus,
   TERMINAL_LISTING_STATUSES,
 } from "../common/listing-status";
@@ -26,8 +27,6 @@ import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
 import { REASON_ANOTHER_CANDIDATE_SELECTED } from "./rejection-reasons";
-
-const ACTIVE_STATUSES: ApplicationStatus[] = ["PENDING", "SHORTLISTED"];
 
 /**
  * Turns a comma-separated query value into a Prisma filter.
@@ -151,7 +150,7 @@ export class ApplicationsService {
             const activeCount = await tx.application.count({
               where: {
                 applicantId: profile.id,
-                status: { in: ACTIVE_STATUSES },
+                status: { in: ACTIVE_APPLICATION_STATUSES },
               },
             });
 
@@ -180,7 +179,10 @@ export class ApplicationsService {
           }
 
           const activeListingCount = await tx.application.count({
-            where: { listingId: listing.id, status: { in: ACTIVE_STATUSES } },
+            where: {
+              listingId: listing.id,
+              status: { in: ACTIVE_APPLICATION_STATUSES },
+            },
           });
           if (
             listing.maxApplications &&
@@ -404,14 +406,14 @@ export class ApplicationsService {
       throw new ForbiddenException();
     }
 
-    if (application.status !== "PENDING") {
-      throw new BadRequestException("Only pending applications can be edited");
-    }
-
-    const updated = await this.prisma.application.update({
-      where: { id },
-      data: { message: dto.message },
-    });
+    // Conditional on the status, so the check and the write cannot be split by
+    // a concurrent decision. `reject` is serializable, so it and this update
+    // used to interleave: the edit landed on a row a rejection had just settled.
+    const updated = await this.claimPending(
+      application.id,
+      { message: dto.message },
+      "Only pending applications can be edited",
+    );
 
     return toApplicationDto(updated);
   }
@@ -423,18 +425,43 @@ export class ApplicationsService {
       throw new ForbiddenException();
     }
 
-    if (application.status !== "PENDING") {
-      throw new BadRequestException(
-        "Only pending applications can be shortlisted",
-      );
-    }
-
-    const updated = await this.prisma.application.update({
-      where: { id },
-      data: { status: "SHORTLISTED", respondedAt: new Date() },
-    });
+    // Conditional for the same reason as `update`, and the reason it matters
+    // more here: without it, a `reject` that committed between this read and
+    // the write left the row SHORTLISTED while still carrying the practice's
+    // rejectionReason and decisionSource — a combination no transition produces,
+    // and one that shows the applicant as shortlisted instead of refused.
+    const updated = await this.claimPending(
+      application.id,
+      { status: "SHORTLISTED", respondedAt: new Date() },
+      "Only pending applications can be shortlisted",
+    );
 
     return toApplicationDto(updated);
+  }
+
+  /**
+   * Updates an application only while it is still PENDING, in one statement.
+   *
+   * A read-then-write pair cannot hold that invariant against a concurrent
+   * `reject` or `withdraw`, which are serializable. `updateMany` makes the
+   * condition part of the write, so the loser of the race updates nothing and is
+   * refused with the same message the read would have given.
+   */
+  private async claimPending(
+    id: string,
+    data: Prisma.ApplicationUpdateManyMutationInput,
+    refusal: string,
+  ) {
+    const result = await this.prisma.application.updateMany({
+      where: { id, status: "PENDING" },
+      data,
+    });
+
+    if (result.count === 0) {
+      throw new BadRequestException(refusal);
+    }
+
+    return this.prisma.application.findUniqueOrThrow({ where: { id } });
   }
 
   async accept(id: string, userId: string) {
@@ -454,7 +481,7 @@ export class ApplicationsService {
         if (!listing || listing.createdById !== profileId) {
           throw new NotFoundException(`Application ${id} not found`);
         }
-        if (!ACTIVE_STATUSES.includes(application.status)) {
+        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw new BadRequestException(
             "Only pending or shortlisted applications can be accepted",
           );
@@ -465,7 +492,7 @@ export class ApplicationsService {
         // had already taken out of circulation — the status was
         // `CLOSED_NO_CANDIDATE`, a terminal status this list did not mention.
         // It only failed to reopen a listing because the applications on a
-        // closed one have always been settled, so the `ACTIVE_STATUSES` check
+        // closed one have always been settled, so the `ACTIVE_APPLICATION_STATUSES` check
         // above refused them first. That is a coincidence between two guards,
         // not a property of either: the day `close` stops settling them, the
         // listing reopens through this path.
@@ -488,7 +515,7 @@ export class ApplicationsService {
           where: {
             listingId: application.listingId,
             id: { not: id },
-            status: { in: ACTIVE_STATUSES },
+            status: { in: ACTIVE_APPLICATION_STATUSES },
           },
           data: {
             status: "REJECTED",

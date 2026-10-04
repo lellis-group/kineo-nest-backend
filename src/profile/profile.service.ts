@@ -7,8 +7,10 @@ import {
 } from "@nestjs/common";
 import {
   assertNoThirdPartyApplications,
+  ownedListingsFilter,
   PROFILE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
+import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
@@ -124,19 +126,28 @@ export class ProfileService {
   }
 
   async remove(id: string, userId: string) {
-    const profile = await this.findOne(id, userId);
+    // Serializable, for the same reason the listing delete is: the ownership
+    // read, the guard's count and the cascade have to see one snapshot, or an
+    // application committed in the gap goes with the profile.
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const profile = await tx.profile.findUnique({ where: { id } });
 
-    if (profile.userId !== userId) {
-      throw new ForbiddenException();
-    }
+      if (!profile) {
+        throw new NotFoundException(`Profile ${id} not found`);
+      }
 
-    await assertNoThirdPartyApplications(
-      this.prisma,
-      id,
-      { OR: [{ createdById: id }, { practice: { ownerId: id } }] },
-      PROFILE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      if (profile.userId !== userId) {
+        throw new ForbiddenException();
+      }
 
-    return this.prisma.profile.delete({ where: { id } });
+      await assertNoThirdPartyApplications(
+        tx,
+        id,
+        ownedListingsFilter(id),
+        PROFILE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+      );
+
+      return tx.profile.delete({ where: { id } });
+    });
   }
 }

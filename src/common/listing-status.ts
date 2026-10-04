@@ -17,6 +17,26 @@ export const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
 ];
 
 /**
+ * Statuses that no longer recruit candidates.
+ *
+ * A listing in one of them cannot receive a new application, so a `PENDING` row
+ * it still carries is a leftover from before it left circulation and must not
+ * keep its owner blocked from deleting. `FILLED` is the exception that matters:
+ * it is terminal, and it carries the `ACCEPTED` application the guard below
+ * protects.
+ *
+ * Shared with the third-party deletion guard, which has to agree with the quota
+ * check here about which listings are still in play.
+ */
+export const RECRUITING_LISTING_STATUSES: ListingStatus[] = [
+  "DRAFT",
+  "OPEN",
+  "IN_DISCUSSION",
+  "FULL",
+  "FILLED",
+];
+
+/**
  * Statuses a listing can no longer leave.
  *
  * Exported because the listing service needs it to decide what `close` and
