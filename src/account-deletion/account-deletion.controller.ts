@@ -68,7 +68,7 @@ export class AccountDeletionController {
   @ApiResponse({
     status: 409,
     description:
-      "Listings still hold applications from other candidates (pending, shortlisted, or accepted)",
+      "No pending erasure request matches this confirmation (code NO_PENDING_REQUEST)",
   })
   @ApiResponse({
     status: 410,
