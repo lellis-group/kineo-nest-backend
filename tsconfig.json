@@ -14,5 +14,6 @@
     "types": ["node", "bun"]
   },
   "include": ["src/**/*.ts", "prisma/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/generated"]
+  // No `src/generated` here: it would be a no-op, since the client is imported.
+  "exclude": ["node_modules", "dist"]
 }
