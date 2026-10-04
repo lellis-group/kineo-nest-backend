@@ -10,6 +10,7 @@ import helmet from "helmet";
 import { cleanupOpenApiDoc } from "nestjs-zod";
 
 import { AppModule } from "./app.module";
+import { isHardenedEnv } from "./config/env";
 import { errorMessage } from "./lib/log";
 
 async function bootstrap() {
@@ -69,7 +70,9 @@ async function bootstrap() {
   const documentFactory = () =>
     cleanupOpenApiDoc(SwaggerModule.createDocument(app, swaggerConfig));
 
-  SwaggerModule.setup("api", app, documentFactory);
+  if (!isHardenedEnv(configService.get<string>("nodeEnv"))) {
+    SwaggerModule.setup("api", app, documentFactory);
+  }
 
   await app.listen(port, "0.0.0.0");
 

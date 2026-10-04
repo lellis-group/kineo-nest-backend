@@ -3,6 +3,7 @@ import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { durationSeconds } from "../../config/configuration";
+import { isHardenedEnv } from "../../config/env";
 import {
   sendChangeEmailEmail,
   sendDeleteAccountEmail,
@@ -256,7 +257,7 @@ export function createAuth(
     },
 
     advanced: {
-      useSecureCookies: authEnv.nodeEnv === "production",
+      useSecureCookies: isHardenedEnv(authEnv.nodeEnv),
     },
 
     emailAndPassword: {

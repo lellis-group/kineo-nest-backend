@@ -10,6 +10,7 @@ import { ConfigService } from "@nestjs/config";
 import { BaseExceptionFilter, HttpAdapterHost } from "@nestjs/core";
 import { ZodSerializationException, ZodValidationException } from "nestjs-zod";
 import { ZodError, type ZodIssue } from "zod";
+import { isHardenedEnv } from "../../../config/env";
 
 // Query strings carry single-use tokens, so they are kept out of the logged path
 // and out of the response body.
@@ -33,12 +34,8 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
   }
 
   private get isProduction(): boolean {
-    return (
-      (
-        this.config?.get<string>("nodeEnv", "development") ??
-        process.env.NODE_ENV ??
-        "development"
-      ).toString() === "production"
+    return isHardenedEnv(
+      this.config?.get<string>("nodeEnv") ?? process.env.NODE_ENV,
     );
   }
 
