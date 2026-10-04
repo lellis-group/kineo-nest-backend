@@ -84,6 +84,9 @@ export function verificationEmailTemplate({
               <p style="padding:0; margin:0;">Cliquez sur le bouton ci-dessous pour valider votre adresse :</p>
             </td>
           </tr>
+          ${
+            href
+              ? `
           <tr><td style="line-height:34px; font-size:0;" height="34">&nbsp;</td></tr>
           <tr>
             <td align="center" style="padding:0 36px;">
@@ -95,7 +98,9 @@ export function verificationEmailTemplate({
                 </tr>
               </table>
             </td>
-          </tr>
+          </tr>`
+              : ""
+          }
           <tr><td style="line-height:34px; font-size:0;" height="34">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; font-size:14px; line-height:1.6; color:#8A8680; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">

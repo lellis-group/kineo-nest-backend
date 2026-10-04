@@ -16,7 +16,14 @@ import { HttpExceptionFilter } from "./http-exception.filter";
  * one.
  */
 
-function run(exception: Error, hardened: boolean) {
+function run(
+  exception: Error,
+  hardened: boolean,
+  request: { method: string; url: string } = {
+    method: "POST",
+    url: "/account/confirm-deletion",
+  },
+) {
   let payload: Record<string, unknown> | undefined;
 
   const response = {
@@ -31,7 +38,7 @@ function run(exception: Error, hardened: boolean) {
   const host = {
     switchToHttp: () => ({
       getResponse: () => response,
-      getRequest: () => ({ method: "POST", url: "/account/confirm-deletion" }),
+      getRequest: () => request,
     }),
   } as unknown as ArgumentsHost;
 
@@ -87,5 +94,30 @@ describe("HttpExceptionFilter (hardened)", () => {
     );
 
     expect(payload).not.toHaveProperty("code");
+  });
+
+  it("drops the query string from a generated 404", () => {
+    // Nest composes that message from the raw URL, so echoing it verbatim put
+    // the query string in the body — and in the log line above it. A mistyped
+    // route carrying a single-use erasure link is exactly how a token reaches
+    // log storage, which is what redacting `path` was meant to prevent.
+    const token = "eyJhbGciOiJIUzI1NiJ9.payload.signature";
+    const payload = run(
+      new NotFoundException(
+        `Cannot GET /account/confirm-deletionx?token=${token}`,
+      ),
+      true,
+      { method: "GET", url: `/account/confirm-deletionx?token=${token}` },
+    );
+
+    expect(payload?.message).toBe("Cannot GET /account/confirm-deletionx");
+    expect(JSON.stringify(payload)).not.toContain(token);
+  });
+
+  it("leaves an application's own 404 message alone", () => {
+    // A question mark in a hand-written message is not a URL.
+    const payload = run(new NotFoundException("Ce lien est invalide ?"), true);
+
+    expect(payload?.message).toBe("Ce lien est invalide ?");
   });
 });

@@ -18,6 +18,33 @@ function pathOnly(url?: string): string | undefined {
   return queryStart === -1 ? url : url.slice(0, queryStart);
 }
 
+/**
+ * Nest builds its catch-all 404 message from the raw request URL:
+ * `Cannot GET /path?token=…`. Echoed verbatim, that puts the query string in the
+ * response body and in the log line — which is how a mistyped route carrying a
+ * single-use link leaked it into log storage, which is what redacting `path`
+ * two lines below was supposed to prevent.
+ *
+ * Narrow on purpose: only the auto-generated form is rewritten, and only its
+ * URL. An application's own 404 message can legitimately contain a question
+ * mark, and there is no reason to touch it.
+ */
+const GENERATED_NOT_FOUND = /^Cannot ([A-Z]+) (.+)$/;
+
+function withoutQueryString(message: string): string {
+  const match = GENERATED_NOT_FOUND.exec(message);
+  const url = match?.[2];
+
+  if (match && url) {
+    const redacted = pathOnly(url);
+    if (redacted !== undefined && redacted !== url) {
+      return `Cannot ${match[1]} ${redacted}`;
+    }
+  }
+
+  return message;
+}
+
 @Catch(HttpException)
 export class HttpExceptionFilter extends BaseExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
@@ -67,14 +94,15 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       const request = ctx.getRequest();
       const status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
+      const message = withoutQueryString(exception.message);
 
       this.logger.error(
-        `HTTP ${status} on ${request?.method} ${pathOnly(request?.url)}: ${exception.message}`,
+        `HTTP ${status} on ${request?.method} ${pathOnly(request?.url)}: ${message}`,
       );
 
       const sanitizedResponse = {
         statusCode: status,
-        message: status >= 500 ? "Internal server error" : exception.message,
+        message: status >= 500 ? "Internal server error" : message,
         // Preserved from an exception that carries one. A single status can
         // mean several unrelated things — 409 covers both "a third party
         // blocks this" and "no matching pending request exists" — and without a

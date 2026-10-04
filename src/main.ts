@@ -96,7 +96,7 @@ async function bootstrap() {
       console.log("Graceful shutdown completed");
       process.exit(0);
     } catch (err) {
-      console.error("Error during graceful shutdown:", err);
+      console.error(`Error during graceful shutdown: ${errorMessage(err)}`);
       try {
         process.exit(1);
       } catch {

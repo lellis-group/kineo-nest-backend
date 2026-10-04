@@ -122,4 +122,49 @@ describe("email templates", () => {
       expect(html).not.toContain("seront conservées");
     });
   });
+
+  describe("a rejected link URL", () => {
+    // `safeUrl` returns undefined for a scheme it does not allow, so an
+    // unconditional interpolation renders href="undefined": a button that looks
+    // live and goes nowhere. Unreachable from the auth layer, whose URLs are all
+    // built from a validated FRONTEND_URL, which makes it a silent dead
+    // account-recovery link rather than an attack.
+    const REJECTED = "javascript:alert(1)";
+
+    it("omits the anchor in the verification template", () => {
+      const html = verificationEmailTemplate({
+        url: REJECTED,
+      });
+
+      expect(html).not.toContain("href=");
+      expect(html).not.toContain("undefined");
+    });
+
+    it("omits the anchor in the reset-password template", () => {
+      const html = resetPasswordEmailTemplate({
+        url: REJECTED,
+      });
+
+      expect(html).not.toContain("href=");
+      expect(html).not.toContain("undefined");
+    });
+
+    it("omits the anchor in the notification template", () => {
+      const html = notificationEmailTemplate({
+        title: "Test",
+        message: "Test",
+        ctaLabel: "Confirmer",
+        url: REJECTED,
+      });
+
+      expect(html).not.toContain("href=");
+      expect(html).not.toContain("undefined");
+    });
+
+    it("still renders the anchor for an allowed URL", () => {
+      expect(
+        verificationEmailTemplate({ url: "https://app.kineo.test/verify" }),
+      ).toContain('href="https://app.kineo.test/verify"');
+    });
+  });
 });
