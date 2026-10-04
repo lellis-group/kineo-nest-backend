@@ -12,9 +12,8 @@ type Client = PrismaService | Prisma.TransactionClient;
  * the schema, and still has to be recognisable in the owner's own list as "the
  * one you erased" rather than as an empty row that looks like a bug.
  */
-export const ANONYMIZED_LISTING_TITLE = "Annonce retirée";
-export const ANONYMIZED_DESCRIPTION =
-  "Annonce retirée à la demande de son auteur.";
+export const ANONYMIZED_LISTING_TITLE = "Withdrawn listing";
+export const ANONYMIZED_DESCRIPTION = "Withdrawn at the request of its author.";
 const ANONYMIZED_DATE = new Date("1970-01-01T00:00:00.000Z");
 
 /**

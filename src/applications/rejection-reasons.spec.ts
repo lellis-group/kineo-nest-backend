@@ -34,12 +34,12 @@ describe("platform rejection reasons", () => {
   });
 
   it("does not claim a reason a practice typed itself", () => {
-    expect(isPlatformRejectionReason("Profil déjà pourvu")).toBe(false);
+    expect(isPlatformRejectionReason("Already staffed")).toBe(false);
   });
 
   it("is keyed by the event it describes", () => {
     expect(PLATFORM_REJECTION_REASONS.listingCancelled).toBe(
-      "L'annonce a été annulée",
+      "This listing was cancelled",
     );
   });
 });

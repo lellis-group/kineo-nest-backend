@@ -11,11 +11,11 @@
  */
 
 export const PLATFORM_REJECTION_REASONS = {
-  anotherCandidateRetained: "Un autre candidat a été retenu pour cette annonce",
-  listingCancelled: "L'annonce a été annulée",
-  listingWithdrawn: "L'annonce n'est plus en ligne",
+  anotherCandidateRetained: "Another candidate was selected for this listing",
+  listingCancelled: "This listing was cancelled",
+  listingWithdrawn: "This listing is no longer online",
   applicantAccountErased:
-    "Le compte du candidat a été supprimé, la candidature a été retirée",
+    "The candidate's account was erased, so the application was withdrawn",
 } as const;
 
 export type PlatformRejectionReason =
