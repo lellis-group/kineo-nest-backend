@@ -18,7 +18,7 @@
     "test:e2e": "bun run test:e2e:deletion && bun run test:e2e:bypass && bun run test:e2e:guard && bun run test:e2e:geo",
     "test:e2e:deletion": "KINEO_E2E_SUITE=deletion bun test src/account-deletion/e2e/confirm-deletion.e2e.test.ts",
     "test:e2e:bypass": "KINEO_E2E_SUITE=bypass bun test src/account-deletion/e2e/delete-user-bypass.e2e.test.ts",
-    "test:e2e:guard": "KINEO_E2E_SUITE=guard bun test src/account-deletion/e2e/email-verified-guard.e2e.test.ts",
+    "test:e2e:guard": "KINEO_E2E_SUITE=guard REQUIRE_EMAIL_VERIFICATION=true bun test src/account-deletion/e2e/email-verified-guard.e2e.test.ts",
     "test:e2e:geo": "KINEO_E2E_SUITE=geo bun test src/practices/e2e",
     "test:all": "bun run test && bun run test:e2e"
   },

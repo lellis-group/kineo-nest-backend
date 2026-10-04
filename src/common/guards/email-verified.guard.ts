@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   Injectable,
 } from "@nestjs/common";
-import { Observable } from "rxjs";
+import { ConfigService } from "@nestjs/config";
 
 import { PrismaService } from "../../prisma.service";
 
@@ -36,10 +36,24 @@ const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
  *
  * `deletedAt` is checked alongside it so a purged or anonymized account is
  * refused even if a session cookie outlives its rows.
+ *
+ * The verification requirement itself is read from `REQUIRE_EMAIL_VERIFICATION`
+ * rather than assumed. It used to be unconditional, which contradicted the
+ * shipped default: better-auth only sends a verification email on sign-up when
+ * that flag is on, so with the default configuration every write answered 403
+ * and no verification email had ever been sent. `deletedAt` is checked before
+ * the flag, so an anonymized account stays refused either way.
  */
 @Injectable()
 export class EmailVerifiedGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  private get requireEmailVerification(): boolean {
+    return this.config.get<boolean>("requireEmailVerification", false) ?? false;
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -64,7 +78,13 @@ export class EmailVerifiedGuard implements CanActivate {
       select: { emailVerified: true, deletedAt: true },
     });
 
-    if (!user || user.deletedAt || !user.emailVerified) {
+    if (!user || user.deletedAt) {
+      throw new ForbiddenException(
+        "Email must be verified to perform this action",
+      );
+    }
+
+    if (this.requireEmailVerification && !user.emailVerified) {
       throw new ForbiddenException(
         "Email must be verified to perform this action",
       );

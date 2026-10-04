@@ -16,6 +16,52 @@ function positiveInteger(
   return parsed;
 }
 
+/**
+ * A throttle window, in milliseconds.
+ *
+ * Bounded above because `@nestjs/throttler` arms a `setTimeout` with the value
+ * and Node clamps any delay past 2^31-1 ms to 1 ms. A `THROTTLE_LONG_TTL` of
+ * 30 days is a plausible thing to type and passes every other check, and it
+ * would silently disable the tier instead of limiting it.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** The confirmation token lives 24h, so the pending trail must outlive it. */
+const MIN_PENDING_REQUEST_RETENTION_DAYS = 2;
+
+function boundedDays(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+  min: number,
+): number {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min) {
+    throw new Error(`${name} must be an integer of at least ${min} days`);
+  }
+  return parsed;
+}
+
+function timerMilliseconds(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_TIMER_MS) {
+    throw new Error(
+      `${name} must be an integer between 1 and ${MAX_TIMER_MS} ms, got: ${value}`,
+    );
+  }
+  return parsed;
+}
+
 function optionalPositiveInteger(
   value: string | undefined,
   name: string,
@@ -76,7 +122,13 @@ export function durationSeconds(
 function configuration() {
   return {
     // ---- Env ----
-    nodeEnv: process.env.NODE_ENV || "development",
+    // `production` when unset, so every gate reading `isHardenedEnv` closes by
+    // default. `configuration()` used to substitute `development`, which meant
+    // the missing-value branch of `isHardenedEnv` was unreachable from the
+    // running application: an operator who never set NODE_ENV — the Dockerfile
+    // does not — got Swagger, the auth reference, non-Secure cookies and
+    // unsanitised error bodies.
+    nodeEnv: process.env.NODE_ENV || "production",
 
     // ---- Server ----
     port: positiveInteger(process.env.PORT, 3000, "PORT"),
@@ -90,7 +142,16 @@ function configuration() {
       credentials: true,
     },
 
-    trustProxy: process.env.TRUST_PROXY === "true",
+    // Defaults to on outside development and test. The app is designed to sit
+    // behind a separate frontend origin, so a proxy is the expected topology,
+    // and leaving it off makes `req.ip` the proxy for every caller — which the
+    // throttler and every IP-based control then treat as one client. It stays
+    // opt-out because a proxy that appends to rather than overwrites
+    // `X-Forwarded-For` would make the header forgeable.
+    trustProxy:
+      process.env.TRUST_PROXY === undefined || process.env.TRUST_PROXY === ""
+        ? isHardenedEnv(process.env.NODE_ENV)
+        : process.env.TRUST_PROXY === "true",
 
     // ---- Throttler (NestJS ThrottlerModule) ----
     //
@@ -102,7 +163,7 @@ function configuration() {
     // behaviour exactly, so an installation that sets nothing is unaffected.
     throttle: {
       short: {
-        ttl: positiveInteger(
+        ttl: timerMilliseconds(
           process.env.THROTTLE_SHORT_TTL,
           1_000,
           "THROTTLE_SHORT_TTL",
@@ -114,7 +175,7 @@ function configuration() {
         ),
       },
       medium: {
-        ttl: positiveInteger(
+        ttl: timerMilliseconds(
           process.env.THROTTLE_MEDIUM_TTL,
           10_000,
           "THROTTLE_MEDIUM_TTL",
@@ -126,7 +187,7 @@ function configuration() {
         ),
       },
       long: {
-        ttl: positiveInteger(
+        ttl: timerMilliseconds(
           process.env.THROTTLE_LONG_TTL,
           60_000,
           "THROTTLE_LONG_TTL",
@@ -141,7 +202,7 @@ function configuration() {
       // email link: far tighter than the generic tiers, and per window rather
       // than per second, so guessing a token is not a viable strategy.
       deletion: {
-        ttl: positiveInteger(
+        ttl: timerMilliseconds(
           process.env.THROTTLE_DELETION_TTL,
           900_000,
           "THROTTLE_DELETION_TTL",
@@ -272,17 +333,17 @@ function configuration() {
       }
       return parsed;
     })(),
-    pendingDeletionRequestRetentionDays: (() => {
-      const raw = process.env.PENDING_DELETION_REQUEST_RETENTION_DAYS;
-      if (!raw) return 30;
-      const parsed = Number(raw);
-      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-        throw new Error(
-          "PENDING_DELETION_REQUEST_RETENTION_DAYS must be a positive integer",
-        );
-      }
-      return parsed;
-    })(),
+    // Two days minimum, and the floor is load-bearing: the confirmation token
+    // lives 24h. A one-day horizon lets `purgeExpired` drop the PENDING trail
+    // row while the emailed link is still valid, and every confirmation then
+    // fails with NO_PENDING_REQUEST — forever, since each new request is swept
+    // again just as fast.
+    pendingDeletionRequestRetentionDays: boundedDays(
+      process.env.PENDING_DELETION_REQUEST_RETENTION_DAYS,
+      30,
+      "PENDING_DELETION_REQUEST_RETENTION_DAYS",
+      MIN_PENDING_REQUEST_RETENTION_DAYS,
+    ),
     accountPurgeGraceDays: (() => {
       const raw = process.env.ACCOUNT_PURGE_GRACE_DAYS;
       if (!raw) return 30;
@@ -337,12 +398,14 @@ const DurationString = z.string().refine(
 export const envValidationSchema = z
   .object({
     // ---- Critical (required, no fallback) ----
-    BETTER_AUTH_SECRET: z.string().min(1),
+    // better-auth derives its session cookies and its request-signing HMAC from
+    // this value. `min(1)` let a four-character secret boot successfully.
+    BETTER_AUTH_SECRET: z.string().min(32),
     DATABASE_URL: z.string().min(1),
 
     // ---- Server ----
     PORT: z.coerce.number().int().positive().max(65535).default(3000),
-    NODE_ENV: NodeEnvEnum.default("development"),
+    NODE_ENV: NodeEnvEnum.default("production"),
     BETTER_AUTH_URL: z.string().url().default("http://localhost:3000"),
 
     // ---- CORS / Frontend ----
@@ -368,18 +431,38 @@ export const envValidationSchema = z
     FRONTEND_URL: z.string().url().default("http://localhost:3001"),
 
     // ---- Proxy ----
-    TRUST_PROXY: BoolEnum.default("false"),
+    TRUST_PROXY: BoolEnum.optional(),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
     // The TTLs default to the windows `configuration.ts` has always used, so
     // setting nothing keeps the shipped behaviour.
-    THROTTLE_SHORT_TTL: z.coerce.number().int().positive().default(1_000),
+    THROTTLE_SHORT_TTL: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(MAX_TIMER_MS)
+      .default(1_000),
     THROTTLE_SHORT_LIMIT: z.coerce.number().int().positive().default(500),
-    THROTTLE_MEDIUM_TTL: z.coerce.number().int().positive().default(10_000),
+    THROTTLE_MEDIUM_TTL: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(MAX_TIMER_MS)
+      .default(10_000),
     THROTTLE_MEDIUM_LIMIT: z.coerce.number().int().positive().default(1500),
-    THROTTLE_LONG_TTL: z.coerce.number().int().positive().default(60_000),
+    THROTTLE_LONG_TTL: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(MAX_TIMER_MS)
+      .default(60_000),
     THROTTLE_LONG_LIMIT: z.coerce.number().int().positive().default(3500),
-    THROTTLE_DELETION_TTL: z.coerce.number().int().positive().default(900_000),
+    THROTTLE_DELETION_TTL: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(MAX_TIMER_MS)
+      .default(900_000),
     THROTTLE_DELETION_LIMIT: z.coerce.number().int().positive().default(5),
 
     // ---- Rate limiting (better-auth) ----
@@ -444,7 +527,7 @@ export const envValidationSchema = z
     PENDING_DELETION_REQUEST_RETENTION_DAYS: z.coerce
       .number()
       .int()
-      .positive()
+      .min(MIN_PENDING_REQUEST_RETENTION_DAYS)
       .optional(),
     ACCOUNT_PURGE_GRACE_DAYS: z.coerce.number().int().positive().optional(),
     DELETION_PEPPER: z.string().min(32).optional(),

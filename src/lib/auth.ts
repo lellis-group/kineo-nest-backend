@@ -105,7 +105,7 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       : undefined,
     requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
-    nodeEnv: env.NODE_ENV || "development",
+    nodeEnv: env.NODE_ENV || "production",
     deletionPepper: env.DELETION_PEPPER || secret,
     accountPurgeGraceDays: positiveInt(
       env.ACCOUNT_PURGE_GRACE_DAYS,
@@ -132,9 +132,14 @@ export interface ConfigGetter {
 export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
   const secret = config.get<string>("auth.secret");
   if (!secret) {
-    // ConfigModule validation guarantees BETTER_AUTH_SECRET; this covers
-    // hand-rolled ConfigService doubles in unit tests.
-    return readAuthEnv();
+    // Throwing rather than falling back to `readAuthEnv()`: that path re-parses
+    // raw, unvalidated `process.env` and builds a differently-defaulted auth
+    // instance — a second source of truth that fails silently, which is the
+    // same class of bug as the `@Throttle()` overrides this branch removed.
+    // Unit tests supply the key through their ConfigService double.
+    throw new Error(
+      "auth.secret is missing from the validated configuration; BETTER_AUTH_SECRET is required",
+    );
   }
   const frontendUrl =
     config.get<string>("frontendUrl", "http://localhost:3001") ??
@@ -169,7 +174,7 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     requireEmailVerification:
       config.get<boolean>("requireEmailVerification", false) ?? false,
     frontendUrl,
-    nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
+    nodeEnv: config.get<string>("nodeEnv", "production") ?? "production",
     deletionPepper: config.get<string>("deletionPepper", secret) ?? secret,
     accountPurgeGraceDays:
       config.get<number>("accountPurgeGraceDays", 30) ?? 30,

@@ -433,6 +433,22 @@ describe("AccountDeletionService", () => {
     expect(calls).not.toContain("user.update");
   });
 
+  it("refuses a pepper too short to key the trail with", async () => {
+    // Rejected in the env schema too, but the schema is not the only caller:
+    // `deletionHash` takes whatever key it is handed, and a one-character pepper
+    // produces exactly the dictionary-reversible digest this exists to prevent.
+    const { service, calls } = makeService({
+      token: liveToken,
+      user: pendingUser,
+      pepper: "a",
+    });
+
+    await expect(service.confirmDeletion("abc")).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(calls).not.toContain("user.update");
+  });
+
   it("takes the published listings out of circulation", async () => {
     const { service, updates } = makeService({
       token: liveToken,

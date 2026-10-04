@@ -24,6 +24,9 @@ import { PrismaService } from "../prisma.service";
 /** Prefix of the single-use deletion token rows in the `verification` table. */
 const DELETE_ACCOUNT_IDENTIFIER_PREFIX = "delete-account-";
 
+/** Mirrors the `min(32)` in the env schema, re-checked here. */
+const MIN_PEPPER_LENGTH = 32;
+
 /** Prefix better-auth gives password-reset rows in the same table. */
 const RESET_PASSWORD_IDENTIFIER_PREFIX = "reset-password:";
 
@@ -108,7 +111,7 @@ export class AccountDeletionService {
    * The key backing every fingerprint this service writes.
    *
    * Resolved per call and validated, rather than cached in the constructor: a
-   * missing key must fail loudly here instead of degrading into an empty
+   * missing or short key must fail loudly here instead of degrading into a weak
    * pepper. `createHmac` accepts one without complaint and returns a
    * well-formed but unkeyed digest, which is a plain SHA-256 over a
    * lowercased email — reversible with a dictionary, and precisely what
@@ -118,9 +121,9 @@ export class AccountDeletionService {
   private get pepper(): string {
     const pepper = this.config.get<string>("deletionPepper");
 
-    if (!pepper) {
+    if (!pepper || pepper.length < MIN_PEPPER_LENGTH) {
       throw new ServiceUnavailableException(
-        "Account erasure is unavailable: DELETION_PEPPER is not configured",
+        `Account erasure is unavailable: DELETION_PEPPER must be at least ${MIN_PEPPER_LENGTH} characters`,
       );
     }
 
