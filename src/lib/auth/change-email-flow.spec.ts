@@ -82,10 +82,19 @@ describe("sendVerificationEmail", () => {
       token,
     } as never);
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].subject).toBe("Confirm your new email address");
-    expect(sent[0].subject).not.toBe("Verify your email address");
-    expect(sent[0].to).toBe("new@example.com");
+    // Two messages, two addresses, two jobs: the new one carries the link, the
+    // old one is told. Neither is the sign-up template.
+    expect(sent.map((mail) => mail.subject)).toEqual([
+      "Confirm your new email address",
+      "Your email address is being changed",
+    ]);
+    expect(
+      sent.every((mail) => mail.subject !== "Verify your email address"),
+    ).toBe(true);
+
+    const toNew = sent.find((mail) => mail.to === "new@example.com");
+    expect(toNew?.subject).toBe("Confirm your new email address");
+    expect(toNew?.html).toContain("flow=change-email");
   });
 
   it("tells the frontend which flow the link belongs to", async () => {
@@ -101,9 +110,39 @@ describe("sendVerificationEmail", () => {
       token,
     } as never);
 
-    const html = sent[0].html ?? "";
+    const html = sent.find((mail) => mail.to === "new@example.com")?.html ?? "";
     expect(html).toContain("flow=change-email");
     expect(html).toContain("new%40example.com");
+  });
+
+  it("warns the address being replaced, without a button to press", async () => {
+    const token = await signToken({
+      email: "old@example.com",
+      updateTo: "new@example.com",
+      requestType: "change-email-verification",
+    });
+
+    await handler()({
+      user: { email: "new@example.com", name: "Alice", id: "user-1" } as never,
+      url: `http://localhost:3000/api/auth/verify-email?token=${token}`,
+      token,
+    } as never);
+
+    const toOld = sent.find((mail) => mail.to === "old@example.com");
+    expect(toOld?.subject).toBe("Your email address is being changed");
+    expect(toOld?.subject).not.toBe("Verify your email address");
+    expect(toOld?.html).toContain("new@example.com");
+    expect(toOld?.html).not.toContain("flow=change-email");
+  });
+
+  it("does not warn an address when the change does not come from one", async () => {
+    await handler()({
+      user: { email: "user@example.com", name: "Alice", id: "user-1" } as never,
+      url: "http://localhost:3000/api/auth/verify-email?token=t",
+      token: await signToken({ email: "user@example.com" }),
+    } as never);
+
+    expect(sent).toHaveLength(1);
   });
 
   it("falls back to the sign-up template when the token cannot be read", async () => {

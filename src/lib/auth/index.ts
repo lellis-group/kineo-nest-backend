@@ -7,6 +7,7 @@ import { durationSeconds } from "../../config/configuration";
 import { isHardenedEnv } from "../../config/env";
 import {
   sendChangeEmailEmail,
+  sendChangeEmailNoticeEmail,
   sendDeleteAccountEmail,
   sendResetPasswordEmail,
   sendVerificationEmail,
@@ -357,6 +358,8 @@ export function createAuth(
         const change = decoded && isChangeEmailToken(decoded);
 
         if (change && decoded.updateTo) {
+          // The confirmation goes to the new address, since that is what proves
+          // the person asking for the change controls it.
           await sendChangeEmailEmail({
             email: user.email,
             name: user.name,
@@ -367,6 +370,23 @@ export function createAuth(
               frontendUrl,
             ),
           });
+
+          // The old address is told as well. A stolen session is enough to start
+          // a change, and the mailbox it leaves behind is the only place that can
+          // notice — so a failure here must not fail the change itself.
+          if (decoded.email !== user.email) {
+            try {
+              await sendChangeEmailNoticeEmail({
+                email: decoded.email,
+                name: user.name,
+                newEmail: user.email,
+              });
+            } catch (error) {
+              logError("auth.change_email.notice_failed", error, {
+                userId: user.id,
+              });
+            }
+          }
 
           return;
         }

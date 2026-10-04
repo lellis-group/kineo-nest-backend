@@ -119,6 +119,38 @@ export async function sendDeleteAccountEmail({
   });
 }
 
+/**
+ * The heads-up for the address being replaced.
+ *
+ * It carries no button, and deliberately so: there is no route that cancels a
+ * pending change, so a call to action here would be a promise the API cannot
+ * keep. What the owner of the old address can do is protect the account, and the
+ * notice says so.
+ */
+export async function sendChangeEmailNoticeEmail({
+  email,
+  name,
+  newEmail,
+}: {
+  email: string;
+  name?: string | null;
+  newEmail: string;
+}) {
+  return sendNotificationEmail({
+    email,
+    name,
+    subject: "Your email address is being changed",
+    title: "Email address change requested",
+    message: [
+      `A request was made to change the email address on your account to ${newEmail}.`,
+      "",
+      "Nothing is applied yet: the change only takes effect once the person who controls the new address confirms it from there.",
+      "",
+      "If you did not make this request, change your password now and contact support. A session that was stolen is enough to start this.",
+    ].join("\n"),
+  });
+}
+
 export async function sendNotificationEmail({
   email,
   name,
