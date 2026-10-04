@@ -3,6 +3,7 @@ import { REASON_ANOTHER_CANDIDATE_SELECTED } from "../src/applications/rejection
 import { SYSTEM_SCAFFOLD } from "../src/common/system-scaffold";
 import { Prisma } from "../src/generated/prisma/client";
 import {
+  ApplicationDecisionSource,
   ApplicationStatus,
   ListingStatus,
   ProfileType,
@@ -12,10 +13,32 @@ import { createPrismaClient } from "../src/lib/prisma";
 
 const prisma = createPrismaClient();
 
+/**
+ * Who decided a seeded application, mirroring what the transitions write.
+ *
+ * NULL while an application is still open: nobody has decided anything yet.
+ */
+function decisionSourceFor(
+  status: ApplicationStatus,
+): ApplicationDecisionSource | null {
+  switch (status) {
+    case ApplicationStatus.ACCEPTED:
+      return ApplicationDecisionSource.PRACTICE_ACCEPTED;
+    case ApplicationStatus.REJECTED:
+      return ApplicationDecisionSource.PRACTICE_REJECTED;
+    case ApplicationStatus.WITHDRAWN:
+      return ApplicationDecisionSource.CANDIDATE_WITHDREW;
+    default:
+      return null;
+  }
+}
+
 /** Must stay in sync with the `system_scaffold` migration. */
 const SYSTEM_SCAFFOLD_EMAIL = "system@deleted.invalid";
 const SYSTEM_PRACTICE_NAME = "Annonce retirée par son auteur";
 
+// Obvious on purpose: this is fixture data for a local database, and a seed
+// password nobody can guess is a password nobody can log in with.
 const PASSWORD = "Password123!";
 const USER_COUNT = 40;
 const LISTINGS_PER_PRACTICE = 3;
@@ -231,6 +254,13 @@ async function main() {
       : undefined,
   });
 
+  // Neither table has a foreign key to `user`, so the cascade above never
+  // touched them and both would otherwise keep rows for accounts that no longer
+  // exist — which makes "was my request processed?" ambiguous in exactly the
+  // database people demo with.
+  await prisma.verification.deleteMany();
+  await prisma.dataDeletionRequest.deleteMany();
+
   if (!keepsSystemScaffold) {
     // Database migrated before the seed learned about the scaffold, or reset
     // from scratch. Re-create it here so a seeded database is usable for the
@@ -326,7 +356,9 @@ async function main() {
     const row = Math.floor(i / firstNames.length);
     const firstName = firstNames[i % firstNames.length];
     const lastName = lastNames[(i + row * 7) % lastNames.length];
-    const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@medecin.fr`;
+    // `.invalid` is reserved by RFC 2606 and can never be a deliverable domain, so
+    // a seeded address cannot receive mail or be registered by a third party.
+    const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@medecin.invalid`;
     const city = cities[i % cities.length];
     const coordinates = cityCoordinates[city];
     const specialty = specialties[i % specialties.length];
@@ -472,6 +504,10 @@ async function main() {
     ListingStatus.FILLED,
     ListingStatus.DRAFT,
     ListingStatus.CLOSED,
+    // Every lifecycle state stays represented, so a reviewer exercising the
+    // bucket tabs sees the one that says nobody was retained.
+    ListingStatus.CLOSED_NO_CANDIDATE,
+    ListingStatus.CANCELLED,
   ];
 
   let listingVariant = 0;
@@ -596,6 +632,13 @@ async function main() {
         listingId: listing.id,
         applicantId: applicant.id,
         status,
+        // The backfill migration only sees the rows that exist when it runs, and
+        // migrations run before seeding. Without this every settled row in a
+        // freshly seeded database reads NULL, `countApplicationsByDecisionSource`
+        // files them all under `undecided`, and the `decisionSource` filter
+        // returns nothing — which is the exact failure that migration existed to
+        // repair, re-created by the seed.
+        decisionSource: decisionSourceFor(status),
         message: getRandomItem(applicationMessageTemplates)(
           listing.title,
           listing.startDate.toLocaleDateString("fr-FR"),
@@ -629,7 +672,7 @@ async function main() {
   console.log(`- ${createdListings.length} listings created.`);
   console.log(`- ${applicationsCreated} applications created.`);
   console.log(
-    "You can log in with any generated email (e.g., alice.martin@medecin.fr) and the password: Password123!",
+    "You can log in with any generated email (e.g., alice.martin@medecin.invalid) and the password: Password123!",
   );
 }
 

@@ -26,7 +26,6 @@ import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type {
   ApplicationDecisionSource,
-  ApplicationStatus,
   ListingStatus,
 } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";

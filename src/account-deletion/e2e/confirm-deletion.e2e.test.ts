@@ -736,3 +736,30 @@ describe("the single-use links an erasure clears", () => {
     ).toBe(1);
   });
 });
+
+describe("the middleware the server actually runs", () => {
+  // The suites used to build a bare `createNestApplication()` over `AppModule`,
+  // which skipped everything `createApp()` configures. These assertions exist so
+  // "the e2e suites boot the real application" stops being a claim about code
+  // they no longer use.
+
+  it("serves the security headers helmet installs", async () => {
+    const response = await request(fx.baseUrl).get("/health");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-security-policy"]).toContain(
+      "default-src",
+    );
+  });
+
+  it("serves the API documentation outside a hardened environment", async () => {
+    // The gate reads `nodeEnv`, which the harness sets to `test`. A regression
+    // that closed the gate unconditionally would lock developers out of their
+    // own reference; one that opened it unconditionally would publish the route
+    // inventory in production.
+    const response = await request(fx.baseUrl).get("/api-json");
+
+    expect(response.status).toBe(200);
+  });
+});

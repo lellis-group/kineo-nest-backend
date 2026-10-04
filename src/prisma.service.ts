@@ -3,7 +3,7 @@ import { Inject, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/prisma/client";
-import { prismaClientOptions, resolveDatabaseUrl } from "./lib/prisma";
+import { prismaClientOptions } from "./lib/prisma";
 
 function resolveAdapter(config?: ConfigService) {
   // Pre-DI contexts (seed, standalone better-auth): fall back to process.env.

@@ -17,14 +17,13 @@
 
 import { execFileSync } from "node:child_process";
 import type { INestApplication } from "@nestjs/common";
-import { Test } from "@nestjs/testing";
 import { Client } from "pg";
 import { SYSTEM_SCAFFOLD } from "../../common/system-scaffold";
 
 /**
  * Name of the throwaway database this process owns.
  *
- * Derived from `KINE_E2E_SUITE`, which `package.json` sets per suite, so the
+ * Derived from `KINEO_E2E_SUITE`, which `package.json` sets per suite, so the
  * three suites that `test:e2e` runs in three separate processes each create
  * their own. They used to share one name, and `bun test src` — which loads
  * every spec in a single process — had two of them race between
@@ -164,22 +163,17 @@ export async function bootApp(): Promise<E2EFixture> {
 
   // Imported dynamically, and only now. `lib/prisma.ts` builds its adapter at
   // module scope from `process.env.DATABASE_URL`, so a static import of
-  // `AppModule` — or of anything that reaches it — would capture the developer's
+  // anything that reaches it — `app.ts` included — would capture the developer's
   // own database before the line above runs. The whole graph has to come up
   // after the environment is set, or the app silently talks to `mydb` while the
   // assertions read the throwaway one.
-  const { AppModule } = await import("../../app.module");
-  const { PrismaService } = await import("../../prisma.service");
-  const moduleRef = await Test.createTestingModule({
-    imports: [AppModule],
-  }).compile();
-
-  // No `ValidationPipe` here: the project validates through `ZodValidationPipe`
-  // and the response interceptor, both bound globally by `AppModule`. Adding a
-  // Nest pipe would need `class-validator`, which is not a dependency — and a
-  // test that booted a different middleware stack than production would not be
-  // testing production.
-  const app = moduleRef.createNestApplication();
+  //
+  // `createApp()` rather than a `Test.createTestingModule` over `AppModule`: the
+  // latter built a bare Nest application with none of the middleware the server
+  // runs — no helmet, no compression, no CORS, no `trust proxy`, no Swagger gate.
+  // This suite was described as booting the real application, and it was not.
+  const { createApp } = await import("../../app");
+  const app = await createApp();
   app.enableShutdownHooks();
 
   // `getHttpAdapter().getInstance()` is the Nest application, not the Node

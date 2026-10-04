@@ -8,13 +8,22 @@ jobs:
   quality:
     runs-on: ubuntu-latest
 
+    # The job only reads the repository and runs its own scripts, so the token
+    # needs no write access. The default is usually broader than that, and this
+    # workflow installs dependencies and executes `bunx`.
+    permissions:
+      contents: read
+
     # The e2e suites boot the real AppModule, run `prisma migrate deploy` and
     # drive HTTP against it, so they need a live server. `services:` provides
     # one that is ready before any step runs, which the previous `DATABASE_URL`
     # pointing at a localhost nothing was listening on never did.
+    #
+    # postgres:18 to match docker-compose.yml. A major version the rest of the
+    # repository never uses is a substrate nothing develops against.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
         env:
           POSTGRES_USER: kineo
           POSTGRES_PASSWORD: kineo
@@ -33,19 +42,38 @@ jobs:
       # so it has to point at `postgres` rather than at the app database.
       TEST_DATABASE_ADMIN_URL: postgresql://kineo:kineo@localhost:5432/postgres
       BETTER_AUTH_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_ci_secret
+      # Empty database, replayed from the migration history by the drift gate.
+      SHADOW_DATABASE_URL: postgresql://kineo:kineo@localhost:5432/kineo_shadow
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      # Pinned by SHA: a retagged action changes what runs here without a commit
+      # to this repository. The version comment records which tag was pinned.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4
+          # Matches `packageManager` in package.json. The two drifting apart is
+          # how a lockfile stops being installable with `--frozen-lockfile`.
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bunx --bun prisma validate
       - run: bunx prisma generate
       - run: bun run build
+      # `bun run build` compiles src/ with the shipped tsconfig, which excludes
+      # the specs. They are ~3300 lines of tests that `bun test` executes without
+      # type-checking, so a type error in them merges green. `prisma/seed.ts` is
+      # outside the tsconfig entirely, for the same reason.
+      - run: bun run typecheck:tests
       - run: bun run lint
       # `bun run test`, not `bun test src`: the bare invocation also collects
       # `**/e2e/**`, and the harness deliberately refuses to share a process —
       # so the two suites it loaded failed here on every push.
       - run: bun run test
       - run: bun run test:e2e
+      # Proves the seed matches the schema. Nothing else runs it, so a column
+      # added in a migration and not in the seed would merge unnoticed and the
+      # first person to run `db:seed` would find out.
+      - run: bun run db:seed
+      # Replays the whole migration history into an empty database and diffs it
+      # against schema.prisma. This is the check that catches a migration
+      # renamed after it shipped, or hand-edited away from what the CLI emits.
+      - run: bun run db:check

@@ -1,9 +1,5 @@
 import { ConflictException } from "@nestjs/common";
-import type {
-  ApplicationStatus,
-  ListingStatus,
-  Prisma,
-} from "../generated/prisma/client";
+import type { ApplicationStatus, Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
 import {
   ACTIVE_APPLICATION_STATUSES,

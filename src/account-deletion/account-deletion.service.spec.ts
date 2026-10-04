@@ -1004,9 +1004,11 @@ describe("AccountDeletionService", () => {
           },
         }),
     } as unknown as PrismaService;
+    // `scenario` was never in scope here — a leftover from copying `makeService`
+    // out. It only passed because the token lookup fails first, so nothing ever
+    // reached the pepper. Nothing type-checked the specs, so nothing said so.
     const config = {
-      get: (key: string) =>
-        key === "deletionPepper" ? (scenario.pepper ?? pepper) : undefined,
+      get: (key: string) => (key === "deletionPepper" ? pepper : undefined),
     } as unknown as ConfigService;
 
     await expect(

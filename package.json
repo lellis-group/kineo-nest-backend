@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun --watch src/main.ts",
     "build": "bun x tsc",
+    "typecheck:tests": "bun x tsc -p tsconfig.test.json",
     "start": "bun dist/main.js",
     "test": "bun test src --path-ignore-patterns '**/e2e/**'",
     "test:watch": "bun test src --watch --path-ignore-patterns '**/e2e/**'",
@@ -15,6 +16,7 @@
     "db:push": "bunx --bun prisma db push",
     "db:migrate": "bunx --bun prisma migrate dev",
     "db:seed": "bunx --bun prisma db seed",
+    "db:check": "bunx --bun prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
     "test:e2e": "bun run test:e2e:deletion && bun run test:e2e:bypass && bun run test:e2e:guard && bun run test:e2e:geo",
     "test:e2e:deletion": "KINEO_E2E_SUITE=deletion bun test src/account-deletion/e2e/confirm-deletion.e2e.test.ts",
     "test:e2e:bypass": "KINEO_E2E_SUITE=bypass bun test src/account-deletion/e2e/delete-user-bypass.e2e.test.ts",

@@ -88,7 +88,7 @@ describe("DataLifecycleService", () => {
 
     const [where] = selectedFilters(calls, "session");
     const { expiresAt } = where as { expiresAt?: { lt?: Date } };
-    expect(expiresAt?.lt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(expiresAt?.lt?.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it("bounds the trail with two horizons anchored on the last state change", async () => {
