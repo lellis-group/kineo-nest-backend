@@ -26,12 +26,12 @@ import { PaginatedPractices, Practice } from "./entities/practice.entity";
 import { PracticesService } from "./practices.service";
 
 @ApiTags("Practices")
+@UseGuards(EmailVerifiedGuard)
 @Controller("practices")
 export class PracticesController {
   constructor(private readonly practicesService: PracticesService) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({
     summary: "Create a practice owned by the current user's profile",

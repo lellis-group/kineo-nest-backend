@@ -29,6 +29,7 @@ import {
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 @ApiTags("Replacement Listings")
+@UseGuards(EmailVerifiedGuard)
 @Controller("replacement-listings")
 export class ReplacementlistingsController {
   constructor(
@@ -36,7 +37,6 @@ export class ReplacementlistingsController {
   ) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({
     summary: "Create a draft replacement listing for a practice you own",
