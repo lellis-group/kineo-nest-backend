@@ -11,6 +11,15 @@ import { createPrismaClient } from "./prisma";
  * is explicitly turned on.
  */
 
+/**
+ * A complete `AuthEnv`, not a partial one.
+ *
+ * It was missing `jwtExpirationTime` before this branch and `credentialRateLimit*`
+ * after it, and nothing noticed: `tsconfig.json` excludes the specs and `bun test`
+ * does not type-check them. The omissions were harmless — `jwtExpirationTime` is
+ * only read when `jwtEnabled`, which is false here — but the double claimed to be
+ * a whole `AuthEnv` while handing `createAuth` undefined rate limits.
+ */
 const baseEnv: AuthEnv = {
   baseUrl: "http://localhost:3000",
   secret: "s".repeat(32),
@@ -19,9 +28,12 @@ const baseEnv: AuthEnv = {
   sessionUpdateAge: 86400,
   rateLimitWindow: 60,
   rateLimitMax: 20,
+  credentialRateLimitWindow: 10,
+  credentialRateLimitMax: 3,
   cookieCacheEnabled: false,
   cookieCacheMaxAge: 300,
   jwtEnabled: false,
+  jwtExpirationTime: "15m",
   requireEmailVerification: false,
   frontendUrl: "http://localhost:3001",
   nodeEnv: "development",

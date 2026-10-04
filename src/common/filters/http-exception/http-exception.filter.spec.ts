@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
-  ArgumentsHost,
+  type ArgumentsHost,
   ConflictException,
   GoneException,
+  type HttpException,
   NotFoundException,
 } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
@@ -17,7 +18,7 @@ import { HttpExceptionFilter } from "./http-exception.filter";
  */
 
 function run(
-  exception: Error,
+  exception: HttpException,
   hardened: boolean,
   request: { method: string; url: string } = {
     method: "POST",
@@ -44,7 +45,9 @@ function run(
 
   const filter = new HttpExceptionFilter(
     { httpAdapter: {} } as unknown as HttpAdapterHost,
-    { get: () => (hardened ? "production" : "development") } as ConfigService,
+    {
+      get: () => (hardened ? "production" : "development"),
+    } as unknown as ConfigService,
   );
 
   filter.catch(exception, host);

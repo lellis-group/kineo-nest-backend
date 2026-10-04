@@ -194,6 +194,18 @@ To recompute the fingerprint, compute it with `deletionHash(email, DELETION_PEPP
 - **Losing the pepper does not lose the trail, it makes it unreachable.** The rows survive; the query that would match them cannot be built. A rotated pepper means every future confirmation also fails to find its pending request, so back the pepper up with the database and treat losing it as a production incident.
 - **`emailHash` is written and never read by the application.** It exists for this procedure, and for nothing else.
 
+#### If the RGPD migration refuses to run
+
+`20261011120000_rgpd_anonymization` rebuilds the trail with keyed fingerprints, which SQL cannot produce — the pepper never reaches the database. So it drops the old table, and **refuses to run if that table holds rows** rather than destroying them.
+
+You should never see this. It means the database was live before the migration shipped, which for this project means a restore. The recovery:
+
+1. `DELETION_PEPPER` must be in hand, or the rows cannot be carried over at all.
+2. Read the old `userId` and `email` columns, compute `deletionHash(value, DELETION_PEPPER)` from `src/lib/hash.ts` for each, and write the pairs into a staging table keyed by the old ids.
+3. Drop the guard temporarily by hand, or rename the migration aside, apply it, then restore the staged rows into the rebuilt table mapped by hash.
+
+Step 3 is deliberately manual. Every automated version of it either loses rows or needs the pepper in the database, and the whole point of the change is that the pepper is not there.
+
 **Not implemented**: `Conversation`/`Message` (messaging module), originally planned in the ERD, is out of scope for now — deferred until a real need emerges.
 
 ---
@@ -360,6 +372,7 @@ The applications are now **moved onto ghost listings** before the anonymization,
 Most of the following came out of a series of security-audit remediation commits on the `fix/security-audit-remediation` branch; the audit document itself is not in the repository.
 
 - **Access control**: ownership checks on every mutating route across all four modules; `404` (not `403`) returned for private resources to avoid enumeration.
+- **`listingId` and `applicantId` on the application payload are deliberate**, and an audit flagged them once as leaked internal identifiers. They are not. An application response carries a third party's `applicantId` on exactly one route — `GET /applications/listing/:listingId`, restricted to the listing owner — and that same payload already embeds `applicant.id` with the identical value. On the two routes that do not load the relation at all (`POST /applications`, `GET /applications/mine`) the field is the caller's own. So no id is exposed that is not already in the body, and removing the fields would be a silent breaking change rather than a fix: `ZodSerializerInterceptor` calls `schema.parse`, `z.object()` strips unknown keys, and no backend test would notice the frontend losing them.
 - **Verified email on writes**: `EmailVerifiedGuard` is applied at **controller** level on all four business controllers, and reads the HTTP method — `POST`/`PUT`/`PATCH`/`DELETE` are gated, reads are not. It reads the flag from the database row rather than the session payload, because the erasure is exactly the case where that snapshot lies: the row says `emailVerified = false` while the cookie still says `true`. `deletedAt` is checked alongside it, before `REQUIRE_EMAIL_VERIFICATION` — an erased account is refused either way. The requirement itself is read from that flag rather than assumed: it used to be unconditional, which contradicted the shipped default, since better-auth only sends a verification email on sign-up when the flag is on. Every write then answered `403` and no email had ever been sent to satisfy it.
 - **Hardening closed by default**: `NODE_ENV` defaults to `production` and `TRUST_PROXY` defaults to on outside development. Both used to default the other way, and `configuration()` substituting a value meant the missing-value branch of `isHardenedEnv` was unreachable from the running application: an operator who never set `NODE_ENV` — which is what the `Dockerfile` does — got Swagger, the auth reference, non-`Secure` cookies and unsanitised error bodies.
 - **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades).
@@ -377,9 +390,9 @@ Most of the following came out of a series of security-audit remediation commits
 
 The e2e suites each own their own database and must run in separate processes, because `lib/prisma.ts` binds its adapter to `DATABASE_URL` at import time. `bun run test` passes `--path-ignore-patterns '**/e2e/**'` to keep them apart, so `bun run test` and `bun run test:e2e` are the two entry points.
 
-**What CI checks**: `prisma validate`, `bun run build` (the shipped tsconfig), `bun run typecheck:tests` (the seed, which the build config cannot reach), `bun run lint`, `bun run test`, `bun run test:e2e`, `bun run db:seed`, `bun run db:check`. The last one replays the whole migration history into an empty database and diffs it against `schema.prisma` — it is what catches a migration renamed after it shipped.
+**What CI checks**: `prisma validate`, `bun run build` (the shipped tsconfig), `bun run typecheck:tests` (the specs, the e2e suites and the seed, none of which the build config reaches), `bun run lint`, `bun run test`, `bun run test:e2e`, `bun run db:seed`, `bun run db:check`. The last one replays the whole migration history into an empty database and diffs it against `schema.prisma` — it is what catches a migration renamed after it shipped.
 
-Still not done: email notifications on status changes are written (templates + mailer) but not yet wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`. The specs are not type-checked (see §8). And the two search paths still disagree about `_`: the geographic one hand-writes `ILIKE` and escapes it, while the plain one hands the term to Prisma's `contains`, which escapes `%` but treats `_` as a single-character wildcard. Prisma exposes no `ESCAPE`, and moving those endpoints onto raw SQL to escape one character would add injection surface for tidier search results, so it is pinned by a test instead.
+Still not done: email notifications on status changes are written (templates + mailer) but not yet wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`. And the two search paths still disagree about `_`: the geographic one hand-writes `ILIKE` and escapes it, while the plain one hands the term to Prisma's `contains`, which escapes `%` but treats `_` as a single-character wildcard. Prisma exposes no `ESCAPE`, and moving those endpoints onto raw SQL to escape one character would add injection surface for tidier search results, so it is pinned by a test instead.
 
 ---
 
@@ -421,4 +434,11 @@ Still not done: email notifications on status changes are written (templates + m
 - **A 404 in a guard test is a broken test, not a refusal.** Rethrow it: it means the fixture never reached the guard, and counting it as a "refused" passes for the wrong reason.
 - **The e2e suites refuse to share a process** (`KINEO_E2E_SUITE` guard in `e2e/harness.ts`), because `lib/prisma.ts` binds its adapter to `DATABASE_URL` at import time. Run them with `bun run test:e2e`. `bun test src` on its own would load them all into one process and fail on the database names colliding.
 - **The e2e suites need `TEST_DATABASE_ADMIN_URL`** (defaults to the `docker-compose.yml` credentials) and create a database per suite. With any other `DATABASE_URL`, point it at a maintenance database whose credentials can `CREATE DATABASE`. `TEST_DATABASE_NAME` overrides the generated name when you want to inspect what a run left behind.
-- **The specs are not type-checked.** `tsconfig.test.json` covers `prisma/seed.ts`, which the build config cannot reach, but the specs are excluded: their Prisma fakes are deliberately loose, and typing them properly is its own change. `bun test` executes them without checking them, so a type error in a spec merges green. Adding that check is the obvious next cleanup — the loose fakes hide real bugs, and it already found one.
+- **The specs are type-checked, and it was worth doing.** `tsconfig.test.json` covers everything `tsconfig.json` cannot reach: the specs, the e2e suites and `prisma/seed.ts`. `bun run typecheck:tests` runs it, CI calls it, and `strict` is unchanged. It was 70 errors across 5 files when it was switched on, and the causes were real rather than cosmetic:
+  - a recorder declared `Record<string, unknown>[]` and used as a keyed record — an array *is* an object, so `updates.user = data` ran at runtime while reading a property that was never an index, and two assertions carried casts to hide it;
+  - `PrismaService` used as a type 19 times in one file with no import;
+  - `CreateReplacementListingDto` had gained a required `title` in a migration and the spec never noticed;
+  - `toReplacementListingDto` dropped its index signature through the spread, so **its return type described only the four dates it rewrites** — `id`, `status` and the rest were invisible to the type system in production code too, not only in tests;
+  - a `ConfigService` double typed as a complete `AuthEnv` while missing three required fields.
+
+  The lesson generalises: an untyped test suite is not merely less safe, it hides drift in the code it exercises. `bun test` never type-checks, so none of the above was visible anywhere in the repository.

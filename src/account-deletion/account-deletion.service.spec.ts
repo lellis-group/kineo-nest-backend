@@ -52,10 +52,20 @@ type Scenario = {
 
 function makeService(scenario: Scenario) {
   const calls: string[] = [];
-  const updates: Record<string, unknown>[] = [];
-  const listingUpdates: { id: string }[] = [];
-  const applicationUpdates: { id: string }[] = [];
-  const verificationDeletes: { where: unknown }[] = [];
+  /**
+   * Writes that reached one row, keyed by model: `user`, `profile`, `practice`
+   * and `replacementListing`.
+   *
+   * Declared an array once, which type-checking caught. An array is an object, so
+   * `updates.user = data` ran fine at runtime while reading a property that was
+   * never an index, and two assertions below had casts to paper over it.
+   */
+  const updates: Record<string, Record<string, unknown>> = {};
+  /** Writes that reached many rows, keyed by model. */
+  const bulkUpdates: Record<string, Array<Record<string, unknown>>> = {};
+  const listingUpdates: Array<Record<string, unknown>> = [];
+  const applicationUpdates: Array<Record<string, unknown>> = [];
+  const verificationDeletes: Array<{ where: unknown }> = [];
   /** Ghost listings created to carry the third-party applications away. */
   const ghosts: Record<string, unknown>[] = [];
 
@@ -144,7 +154,7 @@ function makeService(scenario: Scenario) {
           status?: unknown;
           listingId?: string;
         };
-        select?: { listingId?: boolean; id?: boolean };
+        select?: Record<string, boolean>;
       }) => {
         calls.push("application.findMany");
         if (where.status === "ACCEPTED") {
@@ -191,7 +201,7 @@ function makeService(scenario: Scenario) {
         data: Record<string, unknown>;
       }) => {
         calls.push("application.updateMany");
-        (updates.applications ??= []).push({ where, ...data });
+        (bulkUpdates.applications ??= []).push({ where, ...data });
 
         // `updateMany` is filtered by the caller, and the fake has to honour
         // the filter for the ordering assertions to mean anything: the scrub
@@ -244,6 +254,7 @@ function makeService(scenario: Scenario) {
     service: new AccountDeletionService(prisma, config),
     calls,
     updates,
+    bulkUpdates,
     listingUpdates,
     applicationUpdates,
     verificationDeletes,
@@ -374,8 +385,8 @@ describe("AccountDeletionService", () => {
 
     for (const { scenario, type, code } of cases) {
       const { service } = makeService({
-        token: liveToken,
         user: pendingUser,
+        // Spread last, so a case that supplies its own token wins.
         ...scenario,
       });
 
@@ -467,7 +478,7 @@ describe("AccountDeletionService", () => {
   });
 
   it("moves a third party's accepted application off the listing before it dies", async () => {
-    const { service, ghosts, updates } = makeService({
+    const { service, bulkUpdates, ghosts } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -486,7 +497,7 @@ describe("AccountDeletionService", () => {
     // `Application.listingId` cascades, so an accepted application left on the
     // erased account's listing dies with it — the candidate's message and the
     // practice's decision, neither of which they asked to lose.
-    const moved = (updates.applications as Record<string, unknown>[]).find(
+    const moved = bulkUpdates.applications?.find(
       (update) => update.listingId !== undefined,
     );
     expect(moved).toBeDefined();
@@ -552,7 +563,7 @@ describe("AccountDeletionService", () => {
   });
 
   it("nulls the rejection reason a practice wrote about the person", async () => {
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
     });
@@ -562,13 +573,13 @@ describe("AccountDeletionService", () => {
     // Sent applications: the text was authored by the practice, and the
     // practice could read it back through `findMine` for the whole grace
     // period. The reverse direction has its own scrub.
-    const sent = updates.applications?.find(
+    const sent = bulkUpdates.applications?.find(
       (update) => update.message === null && update.withdrawnReason === null,
     );
     expect(sent).toMatchObject({ rejectionReason: null });
 
     // Received applications: the reason the person wrote is removed there too.
-    const received = updates.applications?.find(
+    const received = bulkUpdates.applications?.find(
       (update) =>
         update.rejectionReason === null && update.message === undefined,
     );
@@ -576,14 +587,14 @@ describe("AccountDeletionService", () => {
   });
 
   it("redacts the free text the account holder wrote on both sides", async () => {
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
     });
 
     await service.confirmDeletion("abc");
 
-    const applications = updates.applications as Record<string, unknown>[];
+    const applications = bulkUpdates.applications ?? [];
 
     // Selected by content, not by position: the writes happen in an order the
     // erasure depends on, and indexing them would make any reordering read as
@@ -616,7 +627,9 @@ describe("AccountDeletionService", () => {
   });
 
   it("rejects an expired link with 410", async () => {
-    const { service, calls } = makeService({ token: expiredToken });
+    const { service, calls } = makeService({
+      token: expiredToken,
+    });
 
     expect(calls).not.toContain("user.update");
 
@@ -672,7 +685,7 @@ describe("AccountDeletionService", () => {
     // reads "you have a replacement to turn up for" — for a practice that no
     // longer exists and a posting that is gone. `close` and `cancel` already
     // settle their applications for the same reason.
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -700,7 +713,9 @@ describe("AccountDeletionService", () => {
 
     await service.confirmDeletion("abc");
 
-    const settled = (updates.applications as Record<string, unknown>[]).find(
+    const settled = (
+      bulkUpdates.applications as Record<string, unknown>[]
+    ).find(
       (update) =>
         update.status === "REJECTED" && update.rejectionReason !== undefined,
     );
@@ -727,7 +742,7 @@ describe("AccountDeletionService", () => {
     // candidate's message and timestamps is the point, but a practice's prose
     // about a candidate is the practice's own free text, and it is exactly what
     // this scrub exists to erase.
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -748,7 +763,7 @@ describe("AccountDeletionService", () => {
     // still on the account's listings. Checking the `where` clause alone would
     // pass whatever the order, because the predicate is identical either way —
     // only the moment the rows moved differs.
-    const applications = updates.applications ?? [];
+    const applications = bulkUpdates.applications ?? [];
     const scrubIndex = applications.findIndex(
       (update) =>
         update.rejectionReason === null && update.status === undefined,
@@ -766,7 +781,7 @@ describe("AccountDeletionService", () => {
     // Order matters in both directions. Scrub first, so the practice's prose
     // goes; detach second, so `REASON_LISTING_ERASED` — ours, not theirs —
     // lands on the row afterwards and is not scrubbed away with it.
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -782,7 +797,7 @@ describe("AccountDeletionService", () => {
 
     await service.confirmDeletion("abc");
 
-    const applications = updates.applications as Record<string, unknown>[];
+    const applications = bulkUpdates.applications ?? [];
     const withOurReason = applications.findIndex(
       (update) => update.rejectionReason === REASON_LISTING_ERASED,
     );
@@ -808,7 +823,7 @@ describe("AccountDeletionService", () => {
     // `REASON_LISTING_ERASED` says. It goes on every preserved row, on top of
     // whatever reason survived, so the banner always explains the state the
     // candidate is actually in.
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -825,7 +840,7 @@ describe("AccountDeletionService", () => {
 
     await service.confirmDeletion("abc");
 
-    const stamped = (updates.applications ?? []).find(
+    const stamped = (bulkUpdates.applications ?? []).find(
       (update) => update.rejectionReason === REASON_LISTING_ERASED,
     ) as { where: { id: { in: string[] } } } | undefined;
 
@@ -845,7 +860,7 @@ describe("AccountDeletionService", () => {
     // `close` settles the applications before the status flips, so it cannot
     // still be sitting on a row the erasure preserves. Listing it as protected
     // would claim a guarantee no row can rely on — see `PLATFORM_REJECTION_REASONS`.
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -869,7 +884,7 @@ describe("AccountDeletionService", () => {
 
     await service.confirmDeletion("abc");
 
-    const scrub = (updates.applications ?? []).find(
+    const scrub = (bulkUpdates.applications ?? []).find(
       (update) =>
         update.rejectionReason === null && update.status === undefined,
     ) as { where: { rejectionReason: { notIn: string[] } } } | undefined;
@@ -892,7 +907,7 @@ describe("AccountDeletionService", () => {
   });
 
   it("settles a rejected row but never touches a withdrawal", async () => {
-    const { service, updates } = makeService({
+    const { service, bulkUpdates } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -920,7 +935,7 @@ describe("AccountDeletionService", () => {
 
     await service.confirmDeletion("abc");
 
-    const settle = (updates.applications ?? []).find(
+    const settle = (bulkUpdates.applications ?? []).find(
       (update) => update.rejectionReason === REASON_LISTING_ERASED,
     ) as { where: { id: { in: string[] } } } | undefined;
 
@@ -931,7 +946,7 @@ describe("AccountDeletionService", () => {
     expect(settle?.where.id.in).toContain("a-rejected");
     expect(settle?.where.id.in).toContain("a-pending");
     expect(settle?.where.id.in).not.toContain("a-withdrawn");
-    const move = (updates.applications ?? []).find(
+    const move = (bulkUpdates.applications ?? []).find(
       (update) => update.listingId !== undefined,
     ) as { where: { id: { in: string[] } } } | undefined;
     expect(move?.where.id.in).toEqual([
@@ -944,7 +959,7 @@ describe("AccountDeletionService", () => {
   it("preserves a third-party application whatever its status", async () => {
     // A `REJECTED` row still holds the candidate's message and the practice's
     // decision, and both belong to someone who never asked to be erased.
-    const { service, ghosts, updates } = makeService({
+    const { service, bulkUpdates, ghosts } = makeService({
       token: liveToken,
       user: pendingUser,
       ownedListings: ["listing-1"],
@@ -967,7 +982,7 @@ describe("AccountDeletionService", () => {
     await service.confirmDeletion("abc");
 
     expect(ghosts).toHaveLength(1);
-    const moved = (updates.applications as Record<string, unknown>[]).find(
+    const moved = bulkUpdates.applications?.find(
       (update) => update.listingId !== undefined,
     );
     // One ghost, both settled rows on it — so the unique
@@ -1052,7 +1067,7 @@ describe("AccountDeletionService", () => {
   });
 
   it("reopens a filled listing and restores the candidates it had auto-rejected", async () => {
-    const { service, updates, listingUpdates, applicationUpdates } =
+    const { service, bulkUpdates, listingUpdates, applicationUpdates } =
       makeService({
         token: liveToken,
         user: pendingUser,
@@ -1082,7 +1097,7 @@ describe("AccountDeletionService", () => {
     // finds the pool it started with instead of a FILLED listing with nobody
     // in it. Only the auto-written reason is targeted: a rejection a human
     // typed stays rejected.
-    const restore = updates.applications?.find(
+    const restore = bulkUpdates.applications?.find(
       (update) => update.status === "PENDING",
     );
     expect(restore).toMatchObject({

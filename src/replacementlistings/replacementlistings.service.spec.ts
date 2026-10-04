@@ -6,6 +6,7 @@ import {
   REASON_LISTING_CLOSED,
   REASON_LISTING_CLOSED_NO_CANDIDATE,
 } from "../applications/rejection-reasons";
+import type { PrismaService } from "../prisma.service";
 import { ListingStatusCountsSchema } from "./entities/replacementlisting.entity";
 import {
   LISTING_TRANSITION_CODES,
@@ -56,6 +57,7 @@ describe("ReplacementlistingsService", () => {
 
     await service.create("user-1", {
       practiceId: "practice-1",
+      title: "Remplacement généraliste",
       startDate: "2026-09-10T08:00:00.000Z",
       endDate: "2026-09-12T08:00:00.000Z",
       specialty: "GENERALIST",

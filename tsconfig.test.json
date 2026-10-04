@@ -1,16 +1,10 @@
 {
-  "$comment": "Type-checks the files the shipped build never sees. tsconfig.json has rootDir=src and excludes *.spec.ts, so `bun x tsc` compiles neither prisma/seed.ts nor a single spec — and `bun test` executes the specs without checking them, so nothing in the repository type-checks them. This covers the seed, which is ordinary application code that has to agree with the schema. The specs are excluded on purpose: their Prisma fakes are deliberately loose, and typing them properly is a separate refactor rather than something to smuggle in with a CI gate.",
+  "$comment": "Type-checks everything `bun x tsc` never sees. The shipped tsconfig.json has rootDir=src and excludes the specs, so the build compiles neither them nor prisma/seed.ts — and `bun test` runs the specs without checking them, so nothing in the repository did. Turning this on immediately found a test double referencing an undeclared variable and a create DTO that had gained a required field, neither of which any other step could see.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "."
   },
   "include": ["src/**/*.ts", "prisma/**/*.ts"],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/generated",
-    "src/**/*.spec.ts",
-    "src/**/e2e/**"
-  ]
+  "exclude": ["node_modules", "dist", "src/generated"]
 }
