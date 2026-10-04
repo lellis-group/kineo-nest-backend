@@ -7,9 +7,11 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
-import { ApplicationStatus, Prisma } from "../generated/prisma/client";
+import { Prisma } from "../generated/prisma/client";
+import type { ApplicationStatus } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
 import { toApplicationDto } from "./application.mapper";
 import { CreateApplicationDto } from "./dto/create-application.dto";
@@ -17,8 +19,6 @@ import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
-
-const ACTIVE_STATUSES: ApplicationStatus[] = ["PENDING", "SHORTLISTED"];
 
 @Injectable()
 export class ApplicationsService {
@@ -45,7 +45,7 @@ export class ApplicationsService {
     }
 
     const activeCount = await tx.application.count({
-      where: { listingId, status: { in: ACTIVE_STATUSES } },
+      where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
     });
 
     let nextStatus = listing.status;
@@ -119,7 +119,7 @@ export class ApplicationsService {
             const activeCount = await tx.application.count({
               where: {
                 applicantId: profile.id,
-                status: { in: ACTIVE_STATUSES },
+                status: { in: ACTIVE_APPLICATION_STATUSES },
               },
             });
 
@@ -148,7 +148,10 @@ export class ApplicationsService {
           }
 
           const activeListingCount = await tx.application.count({
-            where: { listingId: listing.id, status: { in: ACTIVE_STATUSES } },
+            where: {
+              listingId: listing.id,
+              status: { in: ACTIVE_APPLICATION_STATUSES },
+            },
           });
           if (
             listing.maxApplications &&
@@ -396,7 +399,7 @@ export class ApplicationsService {
         if (!listing || listing.createdById !== profileId) {
           throw new NotFoundException(`Application ${id} not found`);
         }
-        if (!ACTIVE_STATUSES.includes(application.status)) {
+        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw new BadRequestException(
             "Only pending or shortlisted applications can be accepted",
           );
@@ -420,7 +423,7 @@ export class ApplicationsService {
           where: {
             listingId: application.listingId,
             id: { not: id },
-            status: { in: ACTIVE_STATUSES },
+            status: { in: ACTIVE_APPLICATION_STATUSES },
           },
           data: {
             status: "REJECTED",

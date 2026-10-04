@@ -6,6 +6,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import {
+  assertNoThirdPartyApplications,
+  LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+} from "../common/application-guard";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import type {
@@ -285,6 +289,13 @@ export class ReplacementlistingsService {
         "A filled listing cannot be deleted, close it instead",
       );
     }
+
+    await assertNoThirdPartyApplications(
+      this.prisma,
+      listing.createdById,
+      { id: listing.id },
+      LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+    );
 
     return this.prisma.replacementListing.delete({ where: { id } });
   }
