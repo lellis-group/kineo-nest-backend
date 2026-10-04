@@ -2,18 +2,18 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
-import { durationSeconds } from "../config/configuration";
-import { emailVerificationStatusPlugin } from "./auth/email-verification-status";
-import { inputValidationHook } from "./auth/input-validation";
+import { durationSeconds } from "../../config/configuration";
 import {
   sendChangeEmailEmail,
   sendDeleteAccountEmail,
   sendResetPasswordEmail,
   sendVerificationEmail,
-} from "./email";
-import { buildFrontendAuthUrl } from "./email/links";
-import { logError } from "./log";
-import { createPrismaClient } from "./prisma";
+} from "../email";
+import { buildFrontendAuthUrl } from "../email/links";
+import { logError } from "../log";
+import { createPrismaClient } from "../prisma";
+import { emailVerificationStatusPlugin } from "./email-verification-status";
+import { inputValidationHook } from "./input-validation";
 
 export interface AuthEnv {
   secret: string;
