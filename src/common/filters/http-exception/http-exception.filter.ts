@@ -63,7 +63,6 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       const response = ctx.getResponse();
       const request = ctx.getRequest();
       const status = exception.getStatus();
-      const exceptionResponse = exception.getResponse();
 
       this.logger.error(
         `HTTP ${status} on ${request?.method} ${request?.url}: ${exception.message}`,
