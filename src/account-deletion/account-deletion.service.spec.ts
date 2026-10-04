@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { GoneException, NotFoundException } from "@nestjs/common";
+import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import type { PrismaService } from "../prisma.service";
 import { AccountDeletionService } from "./account-deletion.service";
 import { ANONYMIZED_LISTING_TITLE } from "./anonymize";
@@ -21,6 +22,9 @@ type Scenario = {
   profile?: { id: string; userId: string } | null;
   listings?: { id: string; status: string }[];
   applications?: { id: string; status: string }[];
+  thirdPartyApplications?: { id: string; listingId: string }[];
+  ghostListing?: { id: string } | null;
+  scaffoldMissing?: boolean;
 };
 
 function makeService(scenario: Scenario) {
@@ -56,7 +60,14 @@ function makeService(scenario: Scenario) {
         return {};
       },
     },
+    // The scaffold the third-party applications are parked on.
+    practice: {
+      findUnique: async () =>
+        scenario.scaffoldMissing ? null : { id: SYSTEM_SCAFFOLD.practiceId },
+    },
     replacementListing: {
+      findFirst: async () => scenario.ghostListing ?? null,
+      create: async () => ({ id: "listing-ghost" }),
       findMany: async () => scenario.listings ?? [],
       updateMany: async (args: unknown) => {
         calls.push("replacementListing.updateMany");
@@ -65,6 +76,11 @@ function makeService(scenario: Scenario) {
       },
     },
     application: {
+      findMany: async (args: unknown) => {
+        calls.push("application.findMany");
+        writes.detachedWhere = args;
+        return scenario.thirdPartyApplications ?? [];
+      },
       updateMany: async (args: unknown) => {
         calls.push("application.updateMany");
         writes.applications = args;

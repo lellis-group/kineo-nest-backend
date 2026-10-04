@@ -1,4 +1,5 @@
 import { hashPassword } from "better-auth/crypto";
+import { SYSTEM_SCAFFOLD } from "../src/common/system-scaffold";
 import { Prisma } from "../src/generated/prisma/client";
 import {
   ApplicationStatus,
@@ -238,6 +239,60 @@ async function backfillErasureFingerprints() {
   return rows.length;
 }
 
+/**
+ * The rows an account erasure parks other candidates' applications on.
+ *
+ * Fixed ids, one per installation, created here rather than in a migration
+ * because this is data and not schema. Idempotent, so it survives a reseed.
+ *
+ * The user row is not an account: `deletedAt` stays NULL, because the purge
+ * sweep matches on that column and this row must never be a candidate for it.
+ */
+async function ensureSystemScaffold() {
+  const now = new Date();
+
+  await prisma.user.upsert({
+    where: { id: SYSTEM_SCAFFOLD.userId },
+    create: {
+      id: SYSTEM_SCAFFOLD.userId,
+      email: SYSTEM_SCAFFOLD.email,
+      emailVerified: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    update: {},
+  });
+
+  await prisma.profile.upsert({
+    where: { id: SYSTEM_SCAFFOLD.profileId },
+    create: {
+      id: SYSTEM_SCAFFOLD.profileId,
+      userId: SYSTEM_SCAFFOLD.userId,
+      specialty: Specialty.GENERALIST,
+      profileType: ProfileType.INSTALLED,
+      verified: true,
+      isPublic: false,
+      createdAt: now,
+      updatedAt: now,
+    },
+    update: {},
+  });
+
+  await prisma.practice.upsert({
+    where: { id: SYSTEM_SCAFFOLD.practiceId },
+    create: {
+      id: SYSTEM_SCAFFOLD.practiceId,
+      ownerId: SYSTEM_SCAFFOLD.profileId,
+      name: "System (annonces retirees)",
+      address: "-",
+      city: "-",
+      isPublic: false,
+      createdAt: now,
+    },
+    update: {},
+  });
+}
+
 async function main() {
   // Before the wipe, and never fatal: a trail row that cannot be repaired must
   // not stop the rest of the seed.
@@ -256,11 +311,15 @@ async function main() {
 
   await prisma.application.deleteMany();
   await prisma.replacementListing.deleteMany();
-  await prisma.practice.deleteMany();
+  await prisma.practice.deleteMany({});
   await prisma.profile.deleteMany();
   await prisma.account.deleteMany();
   await prisma.session.deleteMany();
+  // The scaffold user is not a person: its `deletedAt` stays NULL, because the
+  // purge sweep matches on that column.
   await prisma.user.deleteMany();
+
+  await ensureSystemScaffold();
 
   console.log("--- Creating users, Better Auth accounts, and profiles ---");
 

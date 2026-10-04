@@ -1,5 +1,6 @@
 import type { Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
+import { detachThirdPartyApplications } from "./ghost-listing";
 
 type Client = PrismaService | Prisma.TransactionClient;
 
@@ -68,12 +69,20 @@ export async function anonymizeAccount(
       }
     : { id: "__no_such_listing__" };
 
-  const listingIds = (
-    await prisma.replacementListing.findMany({
-      where: practiceFilter,
-      select: { id: true, status: true },
-    })
-  ).map((listing) => listing);
+  const listingIds = await prisma.replacementListing.findMany({
+    where: practiceFilter,
+    select: { id: true, status: true },
+  });
+
+  // Before anything is scrubbed: the applications other candidates wrote are
+  // moved onto a ghost listing, so neither they nor the practice that received
+  // them lose the thread.
+  const detachment = profile
+    ? await detachThirdPartyApplications(prisma, {
+        ownerProfileId: profile.id,
+        listingIds: listingIds.map((listing) => listing.id),
+      })
+    : { ghostListingId: "", detachedApplications: 0 };
 
   // A listing holding an accepted placement stays as it is: the placement is a
   // real one, agreed with a candidate, and the candidate is still waiting for an
@@ -164,7 +173,7 @@ export async function anonymizeAccount(
   });
 
   return {
-    detachedApplications: 0,
+    detachedApplications: detachment.detachedApplications,
     anonymizedListings: openListingIds.length,
     settledApplications: settledApplications.count,
     protectedPlacements: protectedListingIds.length,
