@@ -146,7 +146,10 @@ export class ReplacementlistingsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
@@ -186,7 +189,10 @@ export class ReplacementlistingsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),

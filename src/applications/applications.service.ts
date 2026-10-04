@@ -242,7 +242,10 @@ export class ApplicationsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: {
           applicant: { include: { user: { select: USER_CARD_SELECT } } },
         },
@@ -281,7 +284,10 @@ export class ApplicationsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: { listing: { include: { practice: true } } },
       }),
       this.prisma.application.count({ where }),

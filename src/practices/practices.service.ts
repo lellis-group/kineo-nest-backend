@@ -114,7 +114,12 @@ export class PracticesService {
     };
 
     const [data, total] = await Promise.all([
-      this.prisma.practice.findMany({ where, skip, take: limit }),
+      this.prisma.practice.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
       this.prisma.practice.count({ where }),
     ]);
 
