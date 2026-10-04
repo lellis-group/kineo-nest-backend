@@ -289,8 +289,6 @@ function configuration() {
 
 export default configuration;
 
-export type AppConfig = ReturnType<typeof configuration>;
-
 // ============================================================
 // Environment variable validation schema (Zod).
 // Used by ConfigModule.forRoot({ validationSchema }) to validate that all

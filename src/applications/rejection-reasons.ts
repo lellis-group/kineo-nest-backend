@@ -18,9 +18,6 @@ export const PLATFORM_REJECTION_REASONS = {
     "The candidate's account was erased, so the application was withdrawn",
 } as const;
 
-export type PlatformRejectionReason =
-  (typeof PLATFORM_REJECTION_REASONS)[keyof typeof PLATFORM_REJECTION_REASONS];
-
 export const PLATFORM_REJECTION_REASON_VALUES: string[] = Object.values(
   PLATFORM_REJECTION_REASONS,
 );

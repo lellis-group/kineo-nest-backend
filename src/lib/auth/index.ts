@@ -443,5 +443,3 @@ export function createAuth(
  * (see `AppModule`), so the validated config stays the single source of truth.
  */
 export const auth = createAuth();
-
-export type BetterAuthInstance = ReturnType<typeof createAuth>;

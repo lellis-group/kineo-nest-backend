@@ -3,7 +3,6 @@ import { APIError, createAuthEndpoint } from "better-auth/api";
 import { z } from "zod";
 import {
   decodeVerificationToken,
-  isChangeEmailToken,
   verificationTarget,
 } from "./verification-token";
 
@@ -51,15 +50,17 @@ export function emailVerificationStatusPlugin(): BetterAuthPlugin {
           // On a change, the flow is complete once the new address belongs to
           // the account and is verified. Until then nobody owns it, and the page
           // must offer to start over rather than claim a success.
+          //
+          // No branch on the token type: `verificationTarget` already resolves
+          // the address each token is about, so a change and a sign-up ask the
+          // same question of their respective address. The distinction used to
+          // make the two branches differ, back when the lookup ran on the
+          // account a link was not about.
           const target = verificationTarget(decoded);
           const record =
             await ctx.context.internalAdapter.findUserByEmail(target);
 
-          const fulfilled = isChangeEmailToken(decoded)
-            ? record !== null && record.user.emailVerified === true
-            : record?.user.emailVerified === true;
-
-          return ctx.json({ verified: fulfilled });
+          return ctx.json({ verified: record?.user.emailVerified === true });
         },
       ),
     },
