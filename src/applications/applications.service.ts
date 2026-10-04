@@ -20,6 +20,11 @@ import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
 
+// The mapper publishes name and image and nothing else, so a paginated list
+// does not need the email, the verification flag and the timestamps that
+// `include: { user: true }` pulled in on every row.
+const USER_CARD_SELECT = { name: true, image: true } as const;
+
 @Injectable()
 export class ApplicationsService {
   constructor(
@@ -228,7 +233,9 @@ export class ApplicationsService {
         skip,
         take: limit,
         orderBy: { createdAt: "desc" },
-        include: { applicant: { include: { user: true } } },
+        include: {
+          applicant: { include: { user: { select: USER_CARD_SELECT } } },
+        },
       }),
       this.prisma.application.count({ where }),
       this.countApplicationsByStatus({ listingId }),
