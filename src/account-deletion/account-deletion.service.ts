@@ -3,13 +3,7 @@ import { deletionHash, deletionPepper } from "../lib/hash";
 import { logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 import { anonymizeAccount, type ErasureOutcome } from "./anonymize";
-
-/** Prefix of the single-use deletion token rows in the `verification` table. */
-export const DELETE_ACCOUNT_IDENTIFIER_PREFIX = "delete-account-";
-
-export function deleteAccountIdentifier(token: string): string {
-  return `${DELETE_ACCOUNT_IDENTIFIER_PREFIX}${token}`;
-}
+import { deleteAccountIdentifier } from "./deletion-token";
 
 export interface ErasureResult extends ErasureOutcome {
   anonymizedAt: string;
