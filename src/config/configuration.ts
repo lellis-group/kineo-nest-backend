@@ -117,6 +117,18 @@ function configuration() {
           "THROTTLE_MEDIUM_LIMIT",
         ),
       },
+      deletion: {
+        ttl: positiveInteger(
+          process.env.THROTTLE_DELETION_TTL,
+          900_000,
+          "THROTTLE_DELETION_TTL",
+        ),
+        limit: positiveInteger(
+          process.env.THROTTLE_DELETION_LIMIT,
+          5,
+          "THROTTLE_DELETION_LIMIT",
+        ),
+      },
       long: {
         ttl: positiveInteger(
           process.env.THROTTLE_LONG_TTL,

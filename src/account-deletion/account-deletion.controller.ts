@@ -2,7 +2,7 @@ import { Body, Controller, HttpCode, Post } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
-import { ThrottleWithConfig } from "../common/decorators/throttle-with-config.decorator";
+import { ThrottleDeletion } from "../common/throttle";
 import { AccountDeletionService } from "./account-deletion.service";
 import { ConfirmAccountDeletionDto } from "./dto/confirm-account-deletion.dto";
 import { AccountDeletionResult } from "./entities/account-deletion-result.entity";
@@ -24,7 +24,7 @@ export class AccountDeletionController {
   @Post("confirm-deletion")
   @AllowAnonymous()
   @HttpCode(200)
-  @ThrottleWithConfig("short")
+  @ThrottleDeletion()
   @ApiOperation({
     summary: "Confirm account anonymization with the email link token",
   })
