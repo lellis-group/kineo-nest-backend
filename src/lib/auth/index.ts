@@ -11,6 +11,7 @@ import {
   sendVerificationEmail,
 } from "../email";
 import { buildFrontendAuthUrl } from "../email/links";
+import { deletionHash, deletionPepper } from "../hash";
 import { logError } from "../log";
 import { createPrismaClient } from "../prisma";
 import { emailVerificationStatusPlugin } from "./email-verification-status";
@@ -233,8 +234,12 @@ export function createAuth(
           // any execution. Never blocks the deletion flow on a bookkeeping
           // failure — the hourly sweep keeps the process resilient.
           try {
+            const pepper = deletionPepper();
             await prisma.dataDeletionRequest.create({
-              data: { userId: user.id, email: user.email },
+              data: {
+                userIdHash: deletionHash(user.id, pepper),
+                emailHash: deletionHash(user.email, pepper),
+              },
             });
           } catch (error) {
             logError("account.deletion.request.audit_failed", error, {

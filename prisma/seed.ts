@@ -7,6 +7,8 @@ import {
   ProfileType,
   Specialty,
 } from "../src/generated/prisma/enums";
+import { deletionHash, deletionPepper } from "../src/lib/hash";
+import { errorMessage } from "../src/lib/log";
 import { createPrismaClient } from "../src/lib/prisma";
 
 const prisma = createPrismaClient();
@@ -196,7 +198,60 @@ function decisionSourceFor(
   }
 }
 
+/**
+ * Recomputes the fingerprints on an erasure trail written before this column
+ * existed.
+ *
+ * The two migrations around it are deliberately split: the first adds the
+ * columns, the second makes them NOT NULL and drops the plaintext ones. A
+ * database that still holds trail rows fails the second one rather than losing
+ * them — art. 5(2) is an accountability record and is not ours to rewrite — and
+ * this step is the repair in between.
+ *
+ * A no-op once the plaintext columns are gone, which is the normal state.
+ */
+async function backfillErasureFingerprints() {
+  let pepper: string;
+  try {
+    pepper = deletionPepper();
+  } catch {
+    console.log(
+      "--- Skipping the erasure trail backfill: DELETION_PEPPER is not set ---",
+    );
+    return 0;
+  }
+
+  const rows = await prisma.$queryRaw<
+    { id: string; userId: string; email: string }[]
+  >`SELECT "id", "userId", "email" FROM "data_deletion_request"
+    WHERE "userIdHash" IS NULL OR "emailHash" IS NULL`;
+
+  for (const row of rows) {
+    await prisma.$executeRaw`
+      UPDATE "data_deletion_request"
+      SET "userIdHash" = ${deletionHash(row.userId, pepper)},
+          "emailHash" = ${deletionHash(row.email, pepper)},
+          "updatedAt" = NOW()
+      WHERE "id" = ${row.id}`;
+  }
+
+  return rows.length;
+}
+
 async function main() {
+  // Before the wipe, and never fatal: a trail row that cannot be repaired must
+  // not stop the rest of the seed.
+  try {
+    const repaired = await backfillErasureFingerprints();
+    if (repaired > 0) {
+      console.log(`--- Repaired ${repaired} erasure trail rows ---`);
+    }
+  } catch (error) {
+    console.log(
+      `--- Erasure trail backfill skipped: ${errorMessage(error)} ---`,
+    );
+  }
+
   console.log("--- Cleaning the database ---");
 
   await prisma.application.deleteMany();
