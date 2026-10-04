@@ -1,7 +1,7 @@
 {
   "name": "kineo-nest-backend",
   "private": true,
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.2",
   "type": "module",
   "scripts": {
     "dev": "nest start --watch",
