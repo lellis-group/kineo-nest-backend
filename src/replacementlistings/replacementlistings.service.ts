@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -16,6 +15,7 @@ import {
   RECRUITING_LISTING_STATUSES,
 } from "../common/listing-status";
 import { getOwnedProfileId } from "../common/profile-lookup";
+import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import type { ListingStatus } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
@@ -76,7 +76,8 @@ export class ReplacementlistingsService {
             },
           });
           if (count >= maxListings) {
-            throw new BadRequestException(
+            throw refusal(
+              REFUSAL_CODES.listingQuotaReached,
               `You cannot have more than ${maxListings} active listings`,
             );
           }
@@ -232,7 +233,10 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status !== "DRAFT") {
-      throw new BadRequestException("Only draft listings can be published");
+      throw refusal(
+        REFUSAL_CODES.listingNotDraft,
+        "Only draft listings can be published",
+      );
     }
 
     const updated = await this.prisma.replacementListing.update({
@@ -247,7 +251,10 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (isTerminalListingStatus(listing.status)) {
-      throw new BadRequestException("This listing can no longer be modified");
+      throw refusal(
+        REFUSAL_CODES.listingNotModifiable,
+        "This listing can no longer be modified",
+      );
     }
 
     const startDate = dto.startDate
@@ -255,7 +262,10 @@ export class ReplacementlistingsService {
       : listing.startDate;
     const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
     if (startDate >= endDate) {
-      throw new BadRequestException("startDate must be before endDate");
+      throw refusal(
+        REFUSAL_CODES.listingInvalidDates,
+        "startDate must be before endDate",
+      );
     }
 
     const updated = await this.prisma.replacementListing.update({
@@ -275,7 +285,8 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status === "FILLED") {
-      throw new BadRequestException(
+      throw refusal(
+        REFUSAL_CODES.listingFilledCannotBeDeleted,
         "A filled listing cannot be deleted, close it instead",
       );
     }
@@ -301,7 +312,8 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status !== "OPEN" && listing.status !== "FILLED") {
-      throw new BadRequestException(
+      throw refusal(
+        REFUSAL_CODES.listingNotCloseable,
         "Only open or filled listings can be closed",
       );
     }
@@ -337,7 +349,8 @@ export class ReplacementlistingsService {
           listing.status === "CLOSED_NO_CANDIDATE" ||
           listing.status === "CANCELLED"
         ) {
-          throw new BadRequestException(
+          throw refusal(
+            REFUSAL_CODES.listingAlreadyClosed,
             "This listing is already closed or cancelled",
           );
         }

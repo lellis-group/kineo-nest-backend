@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -14,6 +13,7 @@ import {
   isTerminalListingStatus,
 } from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
+import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type { ApplicationStatus } from "../generated/prisma/enums";
@@ -129,7 +129,8 @@ export class ApplicationsService {
             });
 
             if (activeCount >= maxApplications) {
-              throw new BadRequestException(
+              throw refusal(
+                REFUSAL_CODES.applicationQuotaReached,
                 `You cannot have more than ${maxApplications} active applications`,
               );
             }
@@ -147,7 +148,8 @@ export class ApplicationsService {
             );
           }
           if (!APPLICABLE_LISTING_STATUSES.includes(listing.status)) {
-            throw new BadRequestException(
+            throw refusal(
+              REFUSAL_CODES.applicationListingNotAccepting,
               "This listing is not accepting applications",
             );
           }
@@ -162,7 +164,8 @@ export class ApplicationsService {
             listing.maxApplications &&
             activeListingCount >= listing.maxApplications
           ) {
-            throw new BadRequestException(
+            throw refusal(
+              REFUSAL_CODES.applicationListingLimitReached,
               "This listing has reached its application limit",
             );
           }
@@ -198,7 +201,11 @@ export class ApplicationsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
       ) {
-        throw new ConflictException("You already applied to this listing");
+        throw new ConflictException({
+          statusCode: 409,
+          code: REFUSAL_CODES.applicationAlreadyExists,
+          message: "You already applied to this listing",
+        });
       }
       throw error;
     }
@@ -359,7 +366,10 @@ export class ApplicationsService {
     }
 
     if (application.status !== "PENDING") {
-      throw new BadRequestException("Only pending applications can be edited");
+      throw refusal(
+        REFUSAL_CODES.applicationNotPending,
+        "Only pending applications can be edited",
+      );
     }
 
     const updated = await this.prisma.application.update({
@@ -378,7 +388,8 @@ export class ApplicationsService {
     }
 
     if (application.status !== "PENDING") {
-      throw new BadRequestException(
+      throw refusal(
+        REFUSAL_CODES.applicationNotShortlistable,
         "Only pending applications can be shortlisted",
       );
     }
@@ -409,12 +420,14 @@ export class ApplicationsService {
           throw new NotFoundException(`Application ${id} not found`);
         }
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
-          throw new BadRequestException(
+          throw refusal(
+            REFUSAL_CODES.applicationNotAcceptable,
             "Only pending or shortlisted applications can be accepted",
           );
         }
         if (isTerminalListingStatus(listing.status)) {
-          throw new BadRequestException(
+          throw refusal(
+            REFUSAL_CODES.applicationListingNotAccepting,
             "This listing can no longer accept an application",
           );
         }
@@ -478,7 +491,8 @@ export class ApplicationsService {
         }
 
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
-          throw new BadRequestException(
+          throw refusal(
+            REFUSAL_CODES.applicationNotRejectable,
             "Only pending or shortlisted applications can be rejected",
           );
         }
@@ -528,7 +542,8 @@ export class ApplicationsService {
         }
 
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
-          throw new BadRequestException(
+          throw refusal(
+            REFUSAL_CODES.applicationNotWithdrawable,
             "Only pending or shortlisted applications can be withdrawn",
           );
         }
