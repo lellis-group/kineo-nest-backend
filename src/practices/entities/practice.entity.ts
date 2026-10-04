@@ -3,7 +3,6 @@ import { z } from "zod";
 
 export const PracticeSchema = z.object({
   id: z.string(),
-  ownerId: z.string(),
   name: z.string(),
   address: z.string(),
   city: z.string(),
