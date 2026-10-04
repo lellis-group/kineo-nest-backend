@@ -13,7 +13,7 @@ export function notificationEmailTemplate({
   url?: string;
   ctaLabel?: string;
 }) {
-  const displayName = escapeHtml(name ?? "Cher utilisateur");
+  const displayName = escapeHtml(name ?? "there");
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message).replace(/\n/g, "<br>");
   const href = safeUrl(url);
@@ -125,13 +125,13 @@ export function notificationEmailTemplate({
           <tr><td style="line-height:22px; font-size:0;" height="22">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; background-color:#201F1E;">
-              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">© ${new Date().getFullYear()} Kinéo. Tous droits réservés.</p>
+              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">© ${new Date().getFullYear()} Kinéo. All rights reserved.</p>
             </td>
           </tr>
           <tr><td style="line-height:8px; font-size:0;" height="8">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px 40px 36px; background-color:#201F1E;">
-              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">This email was sent automatically, please do not reply.</p>
             </td>
           </tr>
         </table>

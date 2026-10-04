@@ -12,7 +12,7 @@ describe("escapeHtml", () => {
   });
 
   it("leaves a plain string untouched", () => {
-    expect(escapeHtml("Kinéo — replacement")).toBe("Kinéo — replacement");
+    expect(escapeHtml("Kineo — replacement")).toBe("Kineo — replacement");
   });
 });
 
@@ -47,7 +47,7 @@ describe("email templates", () => {
     const html = notificationEmailTemplate({
       name: "<img src=x onerror=alert(1)>",
       title: "Notification",
-      message: "Bonjour",
+      message: "Hello",
     });
 
     expect(html).not.toContain("<img src=x");
@@ -57,35 +57,35 @@ describe("email templates", () => {
   it("renders a free-text message as text and turns newlines into breaks", () => {
     const html = notificationEmailTemplate({
       title: "Notification",
-      message: "ligne 1\n<script>alert(1)</script>",
+      message: "line 1\n<script>alert(1)</script>",
     });
 
     expect(html).not.toContain("<script>alert(1)</script>");
-    expect(html).toContain("ligne 1<br>");
+    expect(html).toContain("line 1<br>");
   });
 
   it("drops the call to action when the url is not http(s)", () => {
     const html = notificationEmailTemplate({
       title: "Notification",
-      message: "Bonjour",
+      message: "Hello",
       url: "javascript:alert(1)",
-      ctaLabel: "Confirmer",
+      ctaLabel: "Confirm",
     });
 
     expect(html).not.toContain("javascript:alert(1)");
-    expect(html).not.toContain("Confirmer");
+    expect(html).not.toContain("Confirm");
   });
 
   it("keeps the call to action for an http(s) url", () => {
     const html = notificationEmailTemplate({
       title: "Notification",
-      message: "Bonjour",
+      message: "Hello",
       url: "https://app.example.com/confirm?token=abc",
-      ctaLabel: "Confirmer",
+      ctaLabel: "Confirm",
     });
 
     expect(html).toContain('href="https://app.example.com/confirm?token=abc"');
-    expect(html).toContain("Confirmer");
+    expect(html).toContain("Confirm");
   });
 
   it("escapes the name and the link in the verification and reset templates", () => {
