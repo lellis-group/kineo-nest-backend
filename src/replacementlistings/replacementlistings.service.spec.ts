@@ -608,6 +608,30 @@ describe("ReplacementlistingsService", () => {
       });
     });
 
+    it("applies the other filters to the counters as well", async () => {
+      // The tabs describe what is on screen. They used to count the owner's
+      // whole inventory, which put `meta.total = 6` beside `meta.counts.total =
+      // 40` in one response, so the paginator and the bucket tabs disagreed
+      // about what the filter had selected.
+      const { service, groupByWheres, countWheres } = makeService(["OPEN"]);
+
+      await service.findMine("user-1", {
+        page: 1,
+        limit: 20,
+        city: "Lyon",
+        urgent: true,
+      });
+
+      // Byte-identical to what `meta.total` counted, which is the property that
+      // matters: the tabs and the paginator now describe one population.
+      expect(groupByWheres[0]).toEqual(countWheres[0]);
+      expect(groupByWheres[0]).toMatchObject({
+        createdById: profile.id,
+        practice: { city: { contains: "Lyon", mode: "insensitive" } },
+        urgent: true,
+      });
+    });
+
     it("applies the status filter to the page but not to the totals", async () => {
       const { service, pageWheres, countWheres, groupByWheres } = makeService([
         "OPEN",

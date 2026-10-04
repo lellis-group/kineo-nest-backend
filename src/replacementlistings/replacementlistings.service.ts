@@ -248,15 +248,21 @@ export class ReplacementlistingsService {
   }
 
   /**
-   * Per-status totals over the owner's whole collection, computed WITHOUT the
-   * status filter. The bucket tabs need the counts of every bucket whatever
-   * the active one is — otherwise selecting "En cours" would zero the counters
-   * of "Terminées" and make them unclickable.
+   * Per-status counts for the bucket tabs.
+   *
+   * Takes the same non-status filters as the list, so the tabs describe what is
+   * on screen. They used to count the owner's whole inventory regardless, which
+   * put `meta.total = 6` next to `meta.counts.total = 40` on one response: the
+   * paginator, the tabs and the loaded rows disagreed. Only the `status` filter
+   * itself is excluded, since bucketing by a status you have already filtered on
+   * would make every other tab read zero.
    */
-  private async countListingsByStatus(createdById: string) {
+  private async countListingsByStatus(
+    baseWhere: Prisma.ReplacementListingWhereInput,
+  ) {
     const grouped = await this.prisma.replacementListing.groupBy({
       by: ["status"],
-      where: { createdById },
+      where: baseWhere,
       _count: true,
     });
 
@@ -307,7 +313,7 @@ export class ReplacementlistingsService {
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
-      this.countListingsByStatus(profileId),
+      this.countListingsByStatus(baseWhere),
     ]);
 
     return {

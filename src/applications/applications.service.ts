@@ -201,16 +201,12 @@ export class ApplicationsService {
             },
           });
 
-          await tx.replacementListing.update({
-            where: { id: listing.id },
-            data: {
-              status:
-                listing.maxApplications &&
-                activeListingCount + 1 >= listing.maxApplications
-                  ? "FULL"
-                  : "IN_DISCUSSION",
-            },
-          });
+          // The shared derivation rather than a second copy of it. The status is
+          // derived state: any write that moves an application in or out of the
+          // active set has to go through the same code, or the listing keeps
+          // advertising capacity it no longer has. This one happened to agree,
+          // but agreed by coincidence and with nothing pinning it.
+          await recalcListingStatus(tx, listing.id);
 
           return created;
         },

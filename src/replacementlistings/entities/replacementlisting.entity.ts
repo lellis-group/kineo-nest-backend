@@ -23,10 +23,11 @@ export class ReplacementListing extends createZodDto(
 ) {}
 
 /**
- * Per-status totals over the WHOLE collection, independent of any applied
- * `status` filter and of the current page. The screen's bucket tabs render
- * these and never derive a counter from the loaded page, so switching filter
- * cannot make the numbers jump.
+ * Per-status totals, independent of any applied `status` filter and of the
+ * current page but honouring every other filter the list applies. The screen's
+ * bucket tabs render these and never derive a counter from the loaded page, so
+ * switching bucket cannot make the numbers jump — and they add up to the same
+ * population `meta.total` counts.
  */
 export const ListingStatusCountsSchema = z.object({
   total: z.number().describe("Count across all statuses"),

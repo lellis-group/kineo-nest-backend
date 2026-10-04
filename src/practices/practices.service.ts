@@ -74,6 +74,34 @@ function escapeLike(term: string): string {
   return term.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
+/**
+ * A longitude window as one or two `BETWEEN` predicates.
+ *
+ * One interval when it fits inside [-180, 180], two when it straddles the
+ * antimeridian. The exact haversine predicate still applies on top, so a
+ * widened window cannot admit anything the radius excludes.
+ */
+function splitLongitudeWindow(lng: number, delta: number) {
+  const west = lng - delta;
+  const east = lng + delta;
+
+  if (west >= -180 && east <= 180) {
+    return Prisma.sql`p."longitude" BETWEEN ${west} AND ${east}`;
+  }
+
+  if (west < -180) {
+    return Prisma.sql`
+      (p."longitude" BETWEEN ${west + 360} AND 180
+        OR p."longitude" BETWEEN -180 AND ${east})
+    `;
+  }
+
+  return Prisma.sql`
+    (p."longitude" BETWEEN ${west} AND 180
+      OR p."longitude" BETWEEN -180 AND ${east - 360})
+  `;
+}
+
 @Injectable()
 export class PracticesService {
   constructor(
@@ -177,6 +205,12 @@ export class PracticesService {
     const longitudeDelta =
       Math.abs(cosLat) < 1e-6 ? 180 : latitudeDelta / Math.abs(cosLat);
 
+    // The longitude window has to wrap. `BETWEEN lng - d AND lng + d` is a plain
+    // interval, so a centre at -179.9 asks for [-184.4, -175.4] and a practice
+    // at +179.5 — 44 km away, well inside the radius — is in neither the page
+    // nor the COUNT. Split into at most two intervals instead.
+    const longitudeWindow = splitLongitudeWindow(lng, longitudeDelta);
+
     // `Prisma.sql` values are consumed as they are interpolated, so the same
     // fragment cannot be embedded in two statements. A builder, not a value.
     const whereClause = () =>
@@ -185,7 +219,7 @@ export class PracticesService {
         AND p."latitude" IS NOT NULL
         AND p."longitude" IS NOT NULL
         AND p."latitude" BETWEEN ${lat - latitudeDelta} AND ${lat + latitudeDelta}
-        AND p."longitude" BETWEEN ${lng - longitudeDelta} AND ${lng + longitudeDelta}
+        AND ${longitudeWindow}
         AND ${haversineKm(lat, lng)} <= ${radiusKm}
         ${
           name

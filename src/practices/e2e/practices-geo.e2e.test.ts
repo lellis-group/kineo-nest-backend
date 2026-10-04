@@ -1,4 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "bun:test";
 import {
   bootApp,
   resetData,
@@ -190,6 +197,38 @@ describe("GET /practices (geographic search)", () => {
     expect(underscore.meta.total).toBe(0);
   });
 
+  it("finds a practice across the antimeridian", async () => {
+    // The bounding box was a plain `BETWEEN lng - d AND lng + d`, which cannot
+    // wrap. Centred just west of the line, it excluded practices just east of
+    // it — from the page and from the COUNT — while the exact haversine
+    // predicate said they were inside the radius.
+    await seed(
+      ["EAST", "Practice East", "Pacific", 0],
+      ["FAR", "Practice Far", "Pacific", 0],
+    );
+
+    await fx.prisma.practice.update({
+      where: { id: "EAST" },
+      data: { latitude: 0, longitude: 179.5 },
+    });
+    await fx.prisma.practice.update({
+      where: { id: "FAR" },
+      data: { latitude: 0, longitude: -179.5 },
+    });
+
+    const result = await service.findAll({
+      lat: 0,
+      lng: -179.9,
+      radiusKm: 500,
+      page: 1,
+      limit: 20,
+    } as FindPracticesDto);
+
+    // ~44km away on the far side of the seam.
+    expect(result.data.map((p) => p.id).sort()).toEqual(["EAST", "FAR"]);
+    expect(result.meta.total).toBe(2);
+  });
+
   it("does not let a term break out of the pattern", async () => {
     await seed(
       ["Q", "O'Neill clinic", "Paris", 1],
@@ -199,5 +238,43 @@ describe("GET /practices (geographic search)", () => {
     const result = await service.findAll(near({ name: "O'Neill" }));
 
     expect(result.data.map((p) => p.id)).toEqual(["Q"]);
+  });
+});
+
+describe("GET /practices (non-geographic search)", () => {
+  // The two search paths do not agree about `_`, and the difference is in the
+  // driver rather than in this code. The geographic path hand-writes `ILIKE` and
+  // neutralises the wildcards itself; the plain path hands the term to Prisma's
+  // `contains`, which escapes `%` but lets `_` through as a single-character
+  // wildcard. So `?name=a_pha` finds "Alpha clinic" here and finds nothing there.
+  //
+  // Pinned rather than fixed: Prisma exposes no `ESCAPE` for `contains`, and
+  // moving these endpoints onto raw SQL to escape one character would add
+  // injection surface and hand-written pagination to buy nothing but tidier
+  // search results. A search that treats `_` as "any one character" is a
+  // cosmetic quirk, not a disclosure.
+  beforeEach(async () => {
+    await seed(
+      ["PCT", "100% discount clinic", "Paris", 1],
+      ["ALPHA", "Alpha clinic", "Paris", 2],
+    );
+  });
+
+  it("reads a percent sign as a literal character", async () => {
+    const result = await service.findAll({ name: "100%" } as FindPracticesDto);
+
+    expect(result.data.map((p) => p.id)).toEqual(["PCT"]);
+  });
+
+  it("reads an underscore as a single-character wildcard", async () => {
+    const result = await service.findAll({ name: "a_pha" } as FindPracticesDto);
+
+    expect(result.data.map((p) => p.id)).toEqual(["ALPHA"]);
+  });
+
+  it("agrees with the geographic path on a percent sign", async () => {
+    const result = await service.findAll(near({ name: "100%" }));
+
+    expect(result.data.map((p) => p.id)).toEqual(["PCT"]);
   });
 });
