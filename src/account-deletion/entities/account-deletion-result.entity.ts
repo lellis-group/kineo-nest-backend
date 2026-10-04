@@ -3,10 +3,20 @@ import { z } from "zod";
 
 export const AccountDeletionResultSchema = z
   .object({
-    success: z.literal(true).describe("Account and data hard-deleted"),
+    success: z.literal(true).describe("The account has been anonymized"),
+    anonymizedAt: z.iso.datetime().describe("When the account was anonymized"),
+    anonymizedListings: z
+      .number()
+      .describe("Own listings taken out of circulation"),
+    settledApplications: z
+      .number()
+      .describe("Own applications settled so their listings recalculate"),
+    protectedPlacements: z
+      .number()
+      .describe("Listings holding an accepted placement, left untouched"),
     message: z
-      .literal("Account deleted")
-      .describe("Confirmation message of the deletion"),
+      .string()
+      .describe("Confirmation message, in the language of the interface"),
   })
   .strict();
 

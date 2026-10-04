@@ -8,13 +8,11 @@ import { ConfirmAccountDeletionDto } from "./dto/confirm-account-deletion.dto";
 import { AccountDeletionResult } from "./entities/account-deletion-result.entity";
 
 /**
- * Confirmation de suppression de compte SANS session.
+ * Account erasure confirmation, without a session.
  *
- * Better-auth `POST /api/auth/delete-user { token }` exige un cookie de
- * session valide au moment du clic sur le lien email : navigateur différent,
- * session expirée ou cookies bloqués → 404 « lien invalide » alors que le
- * token est valide. Ici, le lien email suffit : le jeton single-use
- * `delete-account-*` (24 h) est la preuve d'identité (RGPD art. 17).
+ * The emailed link is the proof of identity, so the confirmation works from any
+ * device; see AccountDeletionService for why better-auth's own delete-user route
+ * is not used here.
  */
 @ApiTags("Account")
 @Controller("account")
@@ -28,11 +26,11 @@ export class AccountDeletionController {
   @HttpCode(200)
   @ThrottleWithConfig("short")
   @ApiOperation({
-    summary: "Confirm account deletion with the email link token (no session)",
+    summary: "Confirm account anonymization with the email link token",
   })
   @ApiResponse({
     status: 200,
-    description: "Account and all its data hard-deleted",
+    description: "Account anonymized and its sessions ended",
   })
   @ApiResponse({
     status: 404,
@@ -40,12 +38,23 @@ export class AccountDeletionController {
   })
   @ApiResponse({
     status: 410,
-    description: "Expired link or already deleted account",
+    description: "Expired link, or the account was already erased",
+  })
+  @ApiResponse({
+    status: 503,
+    description: "DELETION_PEPPER is not configured",
   })
   @ZodSerializerDto(AccountDeletionResult)
   async confirmDeletion(@Body() dto: ConfirmAccountDeletionDto) {
-    await this.accountDeletionService.confirmDeletion(dto.token);
+    const result = await this.accountDeletionService.confirmDeletion(dto.token);
 
-    return { success: true as const, message: "Account deleted" as const };
+    return {
+      success: true as const,
+      anonymizedAt: result.anonymizedAt,
+      anonymizedListings: result.anonymizedListings,
+      settledApplications: result.settledApplications,
+      protectedPlacements: result.protectedPlacements,
+      message: "Votre compte a été anonymisé.",
+    };
   }
 }
