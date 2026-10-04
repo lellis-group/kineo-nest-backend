@@ -19,6 +19,7 @@ import { PrismaService } from "../prisma.service";
 import { CreatePracticeDto } from "./dto/create-practice.dto";
 import type { FindPracticesDto } from "./dto/find-practices.dto";
 import { UpdatePracticeDto } from "./dto/update-practice.dto";
+import { longitudeRanges } from "./longitude-range";
 
 const EARTH_RADIUS_KM = 6_371;
 const MAX_GEO_CANDIDATES = 500;
@@ -68,11 +69,11 @@ export class PracticesService {
           },
           longitude: {
             not: null,
-            gte: lng - longitudeDelta,
-            lte: lng + longitudeDelta,
+            OR: longitudeRanges(lng, longitudeDelta),
           },
         },
         take: MAX_GEO_CANDIDATES,
+        orderBy: [{ id: "desc" }],
       });
 
       const located = candidates.filter(
@@ -95,7 +96,11 @@ export class PracticesService {
           ),
         }))
         .filter(({ distance }) => distance <= radiusKm)
-        .sort((left, right) => left.distance - right.distance);
+        .sort(
+          (left, right) =>
+            left.distance - right.distance ||
+            left.practice.id.localeCompare(right.practice.id),
+        );
 
       const total = practices.length;
 
