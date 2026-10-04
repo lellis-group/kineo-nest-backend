@@ -90,6 +90,7 @@ export class PracticesController {
   }
 
   @Delete(":id")
+  @ZodSerializerDto(Practice)
   @ApiOperation({ summary: "Delete a practice" })
   @ApiResponse({ status: 403, description: "Not the owner of this practice" })
   remove(@Session() session: UserSession, @Param("id") id: string) {

@@ -95,6 +95,7 @@ export class ProfileController {
   }
 
   @Delete(":id")
+  @ZodSerializerDto(Profile)
   @ApiOperation({ summary: "Delete a profile" })
   @ApiResponse({ status: 403, description: "Not the owner of this profile" })
   remove(@Session() session: UserSession, @Param("id") id: string) {

@@ -117,6 +117,7 @@ export class ReplacementlistingsController {
   }
 
   @Delete(":id")
+  @ZodSerializerDto(ReplacementListing)
   @ApiOperation({ summary: "Delete a listing" })
   @ApiResponse({ status: 403, description: "Not the owner of this listing" })
   remove(@Session() session: UserSession, @Param("id") id: string) {
