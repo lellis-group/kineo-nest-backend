@@ -11,20 +11,8 @@
     "forceConsistentCasingInFileNames": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "rootDir": "src",
-    "outDir": "dist",
-    "types": [
-      "node",
-      "jest",
-      "bun"
-    ]
+    "types": ["node", "bun"]
   },
-  "include": [
-    "src/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/**/*.spec.ts"
-  ]
+  "include": ["src/**/*.ts", "prisma/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/generated"]
 }
