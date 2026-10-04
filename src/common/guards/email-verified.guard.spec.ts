@@ -12,7 +12,7 @@ function makeGuard({
 }: {
   method?: string;
   userId?: string | undefined;
-  user?: { emailVerified: boolean } | null;
+  user?: { emailVerified: boolean; deletedAt?: Date | null } | null;
   requireEmailVerification?: boolean;
 } = {}) {
   const prisma = {
@@ -64,6 +64,17 @@ describe("EmailVerifiedGuard", () => {
 
   it("refuses a write when the account is gone, whatever the session says", async () => {
     const { guard, context } = makeGuard({ user: null });
+
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it("refuses an anonymized account even with the flag off", async () => {
+    const { guard, context } = makeGuard({
+      user: { emailVerified: true, deletedAt: new Date() },
+      requireEmailVerification: false,
+    });
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
       ForbiddenException,

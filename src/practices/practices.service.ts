@@ -67,10 +67,15 @@ export class PracticesService {
             gte: lat - latitudeDelta,
             lte: lat + latitudeDelta,
           },
-          longitude: {
-            not: null,
-            OR: longitudeRanges(lng, longitudeDelta),
-          },
+          longitude: { not: null },
+          // The ranges are alternatives, so they need OR rather than AND — and
+          // OR at the top level, because Prisma does not accept it inside a
+          // scalar field filter. Neither mistake is visible to the compiler: the
+          // first returns every practice within reach of no interval at all, the
+          // second is rejected outright by the query.
+          OR: longitudeRanges(lng, longitudeDelta).map((range) => ({
+            longitude: range,
+          })),
         },
         take: MAX_GEO_CANDIDATES,
         orderBy: [{ id: "desc" }],
