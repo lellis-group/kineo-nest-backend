@@ -309,17 +309,32 @@ Still open: email notifications on status changes are written (templates + maile
 
 Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`.
 
+Bun is the only runtime: it runs the TypeScript sources directly in development,
+`tsc` is driven through `bun x`, and the tests, the Prisma CLI and the image all
+go through it too. Nothing in the chain spawns node.
+
 | Command | What it does |
 | --- | --- |
-| `bun run dev` | `nest start --watch` |
-| `bun run build` | `nest build` (excludes the specs and the e2e suites) |
+| `bun run dev` | Runs `src/main.ts` with `--watch` |
+| `bun run build` | `bun x tsc -p tsconfig.build.json`, so the specs and the e2e suites stay out of `dist/` |
 | `bun run typecheck` | `tsc` over `src/` **and** `prisma/`, specs and e2e included |
 | `bun run lint` | Biome, formatting + correctness rules |
 | `bun run test` | Unit suites, excluding `**/e2e/**` |
-| `bun run test:e2e` | Both e2e suites, each on its own throwaway database |
+| `bun run test:e2e` | The four e2e suites, each on its own throwaway database |
 | `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
 | `bun run db:seed` | **Wipe and repopulate.** Creates the system scaffold (§9) |
 | `bun run db:check` | Replay the migration history and diff it against the schema |
+
+`tsconfig.json` is the base every tool reads and covers `src/` and `prisma/` with
+the specs included; `tsconfig.build.json` is what the build compiles, adding
+`rootDir`, `outDir` and the test exclusions. That split is why the build is not a
+bare `bun x tsc`: with the base config, the specs and the seed would be emitted
+into `dist/`.
+
+`node dist/main.js` cannot run this build, and adding `.js` to every relative
+import would not fix it: `moduleResolution: Bundler` is a bundler-style ESM
+configuration, so `tsc` emits bare specifiers, and the generated Prisma client
+emits its own bare specifiers too. Bun resolves both.
 
 `bun run db:seed` **is a deploy step**, not a convenience: the account erasure
 parks other candidates' applications on rows the seed creates, and a deployment
