@@ -1,5 +1,6 @@
 import type { Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
+import { verificationRowsForIdentity } from "./deletion-token";
 import { detachThirdPartyApplications } from "./ghost-listing";
 
 type Client = PrismaService | Prisma.TransactionClient;
@@ -164,12 +165,7 @@ export async function anonymizeAccount(
   // tied to the erased identity — email verification and password reset, both
   // indexed by the raw address — would outlive it and keep it reachable.
   await prisma.verification.deleteMany({
-    where: {
-      OR: [
-        { identifier: email },
-        { identifier: { startsWith: "delete-account-", value: userId } },
-      ],
-    },
+    where: verificationRowsForIdentity(email, userId),
   });
 
   return {

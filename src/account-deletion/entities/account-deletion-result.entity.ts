@@ -8,6 +8,11 @@ export const AccountDeletionResultSchema = z
     anonymizedListings: z
       .number()
       .describe("Own listings taken out of circulation"),
+    detachedApplications: z
+      .number()
+      .describe(
+        "Applications from other candidates, kept on a ghost listing because they are not ours to erase",
+      ),
     settledApplications: z
       .number()
       .describe("Own applications settled so their listings recalculate"),

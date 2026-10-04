@@ -1,4 +1,4 @@
-import { betterAuth } from "better-auth";
+import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
@@ -221,14 +221,24 @@ export function createAuth(
         deleteTokenExpiresIn: 60 * 60 * 24,
 
         // Better-auth is limited to the REQUEST phase: mint the single-use token
-        // and email the confirmation link (frontend `/goodbye`). The hard delete
+        // and email the confirmation link (frontend `/goodbye`). The erasure
         // itself is done by `POST /account/confirm-deletion`
         // (AccountDeletionService): it consumes the token without requiring a
-        // session, performs the audit tracking (DataDeletionRequest -> EXECUTED)
-        // and purges `verification` leftovers, all in one transaction. The
-        // deletion callbacks (beforeDelete/afterDelete) are intentionally NOT
-        // wired here — better-auth never deletes the user in this flow, so they
-        // would be dead code.
+        // session, anonymizes instead of deleting, and records the trail.
+        //
+        // Two routes reach the delete phase from here without ever consulting
+        // sendDeleteAccountVerification: `POST /delete-user` with a `token`
+        // body field, and `GET /delete-user/callback?token=`. Both consume the
+        // verification row this config mints, so the emailed link reaches a raw
+        // cascade straight through the anonymization. beforeDelete refuses them
+        // both, and AccountErasureBypassSuite is what keeps it that way.
+        beforeDelete: async (user) => {
+          throw new APIError("FORBIDDEN", {
+            message:
+              "Account erasure runs through the emailed confirmation link. Use the link sent to the account, or POST /account/confirm-deletion with its token.",
+          });
+        },
+
         sendDeleteAccountVerification: async ({ user, url }) => {
           // Accountability trail (art. 5(2) GDPR): record the request before
           // any execution. Never blocks the deletion flow on a bookkeeping

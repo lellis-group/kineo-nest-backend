@@ -213,9 +213,17 @@ describe("AccountDeletionService", () => {
     expect(calls).toContain("session.deleteMany");
     expect(calls).toContain("account.deleteMany");
     expect(calls).toContain("verification.deleteMany");
-    expect(writes.verificationWhere).toMatchObject({
+    expect(writes.verificationWhere).toEqual({
       where: {
-        OR: expect.arrayContaining([{ identifier: "user@example.com" }]),
+        OR: [
+          { identifier: "user@example.com" },
+          {
+            AND: [
+              { identifier: { startsWith: "delete-account-" } },
+              { value: "user-1" },
+            ],
+          },
+        ],
       },
     });
   });

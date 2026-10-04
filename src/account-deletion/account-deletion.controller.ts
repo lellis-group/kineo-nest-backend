@@ -52,6 +52,7 @@ export class AccountDeletionController {
       success: true as const,
       anonymizedAt: result.anonymizedAt,
       anonymizedListings: result.anonymizedListings,
+      detachedApplications: result.detachedApplications,
       settledApplications: result.settledApplications,
       protectedPlacements: result.protectedPlacements,
       message: "Votre compte a été anonymisé.",
