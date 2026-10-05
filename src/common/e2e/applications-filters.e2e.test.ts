@@ -175,7 +175,29 @@ async function seed() {
   return { cookies, rows };
 }
 
-async function mine(cookies: string, query: Record<string, string> = {}) {
+type BucketCounts = {
+  PASSED_OVER: number;
+  POSTING_ENDED: number;
+  REFUSED: number;
+};
+
+type MineBody = {
+  data: Array<{
+    id: string;
+    status: string;
+    rejectionBucket: "PASSED_OVER" | "POSTING_ENDED" | "REFUSED" | null;
+  }>;
+  meta: {
+    total: number;
+    counts: Record<string, number>;
+    bucketCounts: BucketCounts;
+  };
+};
+
+async function mine(
+  cookies: string,
+  query: Record<string, string> = {},
+): Promise<MineBody> {
   const response = await request(fx.baseUrl)
     .get("/applications/mine")
     .query(query)
@@ -198,82 +220,60 @@ beforeEach(async () => {
 });
 
 describe("GET /applications/mine", () => {
-  it("puts each situation in its own bucket, and nothing in two", async () => {
+  it("counts each situation over the whole collection", async () => {
     const { cookies, rows } = await seed();
+    const body = await mine(cookies);
 
-    const buckets: Record<string, string[]> = {
-      PASSED_OVER: ["passed-over"],
-      POSTING_ENDED: ["withdrawn", "cancelled-now", "cancelled-legacy"],
-      REFUSED: ["refused-with-reason", "refused-without-reason"],
-    };
-
-    for (const [bucket, expected] of Object.entries(buckets)) {
-      const body = await mine(cookies, { bucket });
-
-      // Sorted on both sides: the listing orders by `createdAt` then id, which in
-      // this fixture would just be an accident of how the ids were spelled. The
-      // classification is the claim under test, not the row order.
-      expect([...ids(body)].sort()).toEqual([...expected].sort());
-      expect(body.meta.bucketCounts[bucket]).toBe(expected.length);
-    }
-
-    // Two rows belong to no bucket: one settled by an erasure, one still pending.
-    // Counting them anywhere would tell the applicant their application was
-    // refused when nothing of the sort happened.
-    const all = await mine(cookies);
-    const claimed = Object.values(buckets).flat();
-    expect(all.data).toHaveLength(rows.length);
-    for (const row of rows.filter((r) => !claimed.includes(r.id))) {
-      expect(claimed).not.toContain(row.id);
-    }
-  });
-
-  it("names the same bucket on a row as the filter uses to select it", async () => {
-    // The classification is written once and read twice — once as SQL for the
-    // counts and the filter, once as a field for the rows a client groups. This is
-    // the test that the two readings cannot drift: a row the `REFUSED` filter
-    // returns, and labels `PASSED_OVER`, is a page whose chip and cards disagree.
-    const { cookies, rows } = await seed();
-
-    const byFilter: Record<string, string[]> = {};
-    for (const bucket of ["PASSED_OVER", "POSTING_ENDED", "REFUSED"]) {
-      const body = await mine(cookies, { bucket });
-      byFilter[bucket] = ids(body);
-      for (const row of body.data) {
-        expect(row.rejectionBucket).toBe(bucket);
-      }
-    }
-
-    // And from the other side: every row carries the bucket its own fields say,
-    // with nothing claimed by a filter it does not belong to.
-    const all = await mine(cookies);
-    const named = Object.values(byFilter).flat();
-    for (const row of all.data) {
-      if (row.rejectionBucket === null) {
-        expect(named).not.toContain(row.id);
-      } else {
-        expect(byFilter[row.rejectionBucket]).toContain(row.id);
-      }
-    }
-
-    expect(rows).toHaveLength(8);
-  });
-
-  it("counts the buckets over the whole collection, not the filtered page", async () => {
-    const { cookies } = await seed();
-
-    // A chip that counted what it had just filtered would always read as the page
-    // size, so the counters answer over everything and the page answers over the
-    // filter.
-    const filtered = await mine(cookies, { bucket: "PASSED_OVER", limit: "1" });
-    expect(filtered.data).toHaveLength(1);
-    expect(filtered.meta.total).toBe(1);
-    expect(filtered.meta.bucketCounts).toMatchObject({
+    expect(body.data).toHaveLength(rows.length);
+    expect(body.meta.bucketCounts).toEqual({
       PASSED_OVER: 1,
       POSTING_ENDED: 3,
       REFUSED: 2,
     });
-    expect(filtered.meta.counts.REJECTED).toBe(7);
+  });
+
+  it("agrees with itself: the totals are the rows' own buckets", async () => {
+    // The classification is written once and read twice — once as SQL for these
+    // totals, once as a field for the rows a client groups and labels. This is the
+    // test that the two readings cannot drift: a total that counted the erasure's
+    // settled rejection as a refusal, while every row called it nothing, is a chip
+    // that contradicts its own cards and that nobody can report clearly.
+    const { cookies } = await seed();
+    const body = await mine(cookies);
+
+    const fromRows: BucketCounts = {
+      PASSED_OVER: 0,
+      POSTING_ENDED: 0,
+      REFUSED: 0,
+    };
+    for (const row of body.data) {
+      // `?? null`: an older backend omits the field, and reading undefined as a
+      // bucket would be a claim about a row nobody classified.
+      if (row.rejectionBucket !== null && row.rejectionBucket !== undefined) {
+        fromRows[row.rejectionBucket] += 1;
+      }
+    }
+
+    expect(body.meta.bucketCounts).toEqual(fromRows);
+  });
+
+  it("leaves a settled-by-erasure rejection in no bucket and out of the totals", async () => {
+    const { cookies } = await seed();
+    const body = await mine(cookies);
+
+    const settled = body.data.find((row) => row.id === "settled-by-erasure");
+    expect(settled?.status).toBe("REJECTED");
+    expect(settled?.rejectionBucket).toBeNull();
+
+    // One pending plus one settled: the rejected total is larger than the sum of
+    // the three buckets, which is the honest shape and the reason the chips cannot
+    // be built by adding up the statuses.
+    expect(body.meta.counts.REJECTED).toBe(7);
+    const summed =
+      body.meta.bucketCounts.PASSED_OVER +
+      body.meta.bucketCounts.POSTING_ENDED +
+      body.meta.bucketCounts.REFUSED;
+    expect(summed).toBe(6);
   });
 
   it("still counts statuses the way it always did", async () => {
@@ -290,16 +290,13 @@ describe("GET /applications/mine", () => {
     });
   });
 
-  it("refuses a bucket it does not know", async () => {
+  it("keeps the status filter working alongside the buckets", async () => {
     const { cookies } = await seed();
-    const response = await request(fx.baseUrl)
-      .get("/applications/mine")
-      .query({ bucket: "SOMETHING_ELSE" })
-      .set("Cookie", cookies);
 
-    expect(response.status).toBe(400);
+    const pending = await mine(cookies, { status: "PENDING" });
+    expect(pending.data.map((row: { id: string }) => row.id)).toEqual([
+      "pending",
+    ]);
+    expect(pending.meta.bucketCounts.PASSED_OVER).toBe(1);
   });
 });
-
-const ids = (body: { data: { id: string }[] }) =>
-  body.data.map((row) => row.id);

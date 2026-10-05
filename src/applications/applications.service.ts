@@ -260,14 +260,10 @@ export class ApplicationsService {
 
     const { page, limit, skip } = paginate(filters);
 
-    // The bucket sits beside `status` rather than replacing it: the chips sum a
-    // situation, and the situation already implies the status, so applying both
-    // would be redundant rather than stricter.
     const where = {
       applicantId: profile.id,
       status: filters.status,
       listingId: filters.listingId,
-      ...(filters.bucket ? rejectionBucketWhere(filters.bucket) : {}),
     };
 
     // The counters answer over the whole collection, not the filtered slice — a chip
