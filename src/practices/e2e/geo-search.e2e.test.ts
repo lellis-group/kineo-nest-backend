@@ -28,7 +28,12 @@ import { SYSTEM_SCAFFOLD } from "../../common/system-scaffold";
 
 let fx: E2EFixture;
 
-async function seedPractice(id: string, latitude: number, longitude: number) {
+async function seedPractice(
+  id: string,
+  latitude: number,
+  longitude: number,
+  { city = "Test", name }: { city?: string; name?: string } = {},
+) {
   const { prisma } = fx;
   const now = new Date();
 
@@ -55,9 +60,9 @@ async function seedPractice(id: string, latitude: number, longitude: number) {
     data: {
       id,
       ownerId: `profile-${id}`,
-      name: `Practice ${id}`,
+      name: name ?? `Practice ${id}`,
       address: "1 rue",
-      city: "Test",
+      city,
       latitude,
       longitude,
       isPublic: true,
@@ -70,7 +75,12 @@ async function search(
   lat: number,
   lng: number,
   radiusKm = 50,
-  { limit = "50", page = "1" }: { limit?: string; page?: string } = {},
+  {
+    limit = "50",
+    page = "1",
+    name,
+    city,
+  }: { limit?: string; page?: string; name?: string; city?: string } = {},
 ) {
   const response = await request(fx.baseUrl)
     .get("/practices")
@@ -80,6 +90,8 @@ async function search(
       radiusKm: String(radiusKm),
       limit,
       page,
+      ...(name ? { name } : {}),
+      ...(city ? { city } : {}),
     });
 
   expect(response.status).toBe(200);
@@ -112,6 +124,37 @@ describe("GET /practices around the antimeridian", () => {
     expect(ids(body)).toContain("east");
     expect(ids(body)).toContain("west");
     expect(ids(body)).not.toContain("far");
+  });
+
+  it("applies the city filter, which the geographic path used to ignore", async () => {
+    // `?city=` was accepted by the DTO, validated, and then never read by the
+    // geographic branch — so it returned every public practice in the box.
+    await seedPractice("lyon", 0, 0, { city: "Lyon" });
+    await seedPractice("marseille", 0, 0.02, { city: "Marseille" });
+
+    const body = await search(0, 0, 50, { city: "Lyon" });
+
+    expect(ids(body)).toEqual(["lyon"]);
+    expect(body.meta.total).toBe(1);
+  });
+
+  it("applies the name filter too", async () => {
+    await seedPractice("one", 0, 0, { name: "Cabinet Kennedy" });
+    await seedPractice("two", 0, 0.01, { name: "Cabinet Pasteur" });
+
+    const body = await search(0, 0, 50, { name: "kennedy" });
+
+    expect(ids(body)).toEqual(["one"]);
+    expect(body.meta.total).toBe(1);
+  });
+
+  it("combines the radius with the filters", async () => {
+    await seedPractice("near", 0, 0, { city: "Lyon" });
+    await seedPractice("far", 2, 0, { city: "Lyon" });
+
+    const body = await search(0, 0, 50, { city: "Lyon" });
+
+    expect(ids(body)).toEqual(["near"]);
   });
 
   it("counts the same population it returns", async () => {

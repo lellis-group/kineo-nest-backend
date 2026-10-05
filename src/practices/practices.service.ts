@@ -66,6 +66,16 @@ export class PracticesService {
             lte: lat + latitudeDelta,
           },
           longitude: { not: null },
+          // The same two text filters the non-geographic path applies. They used
+          // to be missing here, silently: `?city=Lyon` with coordinates returned
+          // every public practice inside the box, because nothing read the
+          // parameter.
+          ...(name && {
+            name: { contains: name, mode: "insensitive" as const },
+          }),
+          ...(city && {
+            city: { contains: city, mode: "insensitive" as const },
+          }),
           // The ranges are alternatives, so they need OR rather than AND — and
           // OR at the top level, because Prisma does not accept it inside a
           // scalar field filter. Neither mistake is visible to the compiler: the
