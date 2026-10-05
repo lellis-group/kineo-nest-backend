@@ -300,6 +300,66 @@ describe("POST /account/confirm-deletion", () => {
     expect(second.status).toBeGreaterThanOrEqual(400);
   });
 
+  it("goes through when the same candidate applied to two of the owner's listings", async () => {
+    // The case one shared ghost listing could not survive. `application` carries
+    // `@@unique([listingId, applicantId])`, so moving both of this candidate's
+    // rows onto one ghost makes them the same pair: the write is rejected with
+    // P2002, the whole erasure transaction rolls back, and this link never works
+    // again. Applying to two postings of the same practice is ordinary, not rare.
+    const { owner, ownerProfile, practice } = await seedScenario();
+    const candidateProfile = await fx.prisma.profile.findUnique({
+      where: { id: "profile-candidate" },
+    });
+    if (!candidateProfile) {
+      throw new Error("seedScenario did not create the candidate's profile");
+    }
+
+    const second = await fx.prisma.replacementListing.create({
+      data: {
+        id: "listing-2",
+        practiceId: practice.id,
+        createdById: ownerProfile.id,
+        title: "Second cover",
+        startDate: new Date("2026-12-01"),
+        endDate: new Date("2026-12-15"),
+        specialty: "GENERALIST",
+        status: "OPEN",
+        urgent: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await fx.prisma.application.create({
+      data: {
+        id: "application-2",
+        listingId: second.id,
+        applicantId: candidateProfile.id,
+        status: "SHORTLISTED",
+        message: "Still available.",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    await seedErasureRequest("erasure-two", owner.id, owner.email);
+    const response = await request(fx.baseUrl)
+      .post("/account/confirm-deletion")
+      .send({ token: "erasure-two" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ detachedApplications: 2 });
+
+    // One ghost per original listing, so the pairs stay distinct.
+    const parked = await fx.prisma.application.findMany({
+      where: { id: { in: ["application-1", "application-2"] } },
+      select: { id: true, listingId: true },
+    });
+    expect(parked.map((row) => row.listingId).sort()).toEqual([
+      "ghost-for-listing-1",
+      "ghost-for-listing-2",
+    ]);
+  });
+
   it("rejects an unknown token with 404 and changes nothing", async () => {
     await seedScenario();
 

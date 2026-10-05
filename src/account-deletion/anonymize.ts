@@ -103,7 +103,7 @@ export async function anonymizeAccount(
         ownerProfileId: profile.id,
         listingIds: listingIds.map((listing) => listing.id),
       })
-    : { ghostListingId: "", detachedApplications: 0 };
+    : { ghostListingIds: [], detachedApplications: 0 };
 
   // A listing holding an accepted placement stays as it is: the placement is a
   // real one, agreed with a candidate, and the candidate is still waiting for an

@@ -21,13 +21,34 @@ export const PRESERVED_APPLICATION_STATUSES = [
 ] as const;
 
 export interface DetachmentOutcome {
-  ghostListingId: string;
+  ghostListingIds: string[];
   detachedApplications: number;
 }
 
 /**
+ * One ghost listing per original listing.
+ *
+ * Not per account, and that is the whole point. `application` carries
+ * `@@unique([listingId, applicantId])`, so moving two applications from the same
+ * candidate onto a single ghost makes them two rows with the same pair. The write
+ * is rejected with `P2002`, the whole erasure transaction rolls back, and the
+ * account can never be erased by that link again — permanently, and with nothing
+ * in the response to say why.
+ *
+ * A candidate who applied to two of the erased account's postings is the ordinary
+ * case, not an edge one.
+ *
+ * The id is derived from the original listing rather than generated, so a retried
+ * erasure finds the ghost it already made instead of adding another. The id is
+ * TEXT and unconstrained, so there is nothing to collide with.
+ */
+function ghostListingIdFor(originalListingId: string): string {
+  return `ghost-for-${originalListingId}`;
+}
+
+/**
  * Moves the applications other candidates wrote on an erased account's listings
- * onto a ghost listing.
+ * onto ghost listings.
  *
  * The erasure rewrites its own listings rather than deleting them, but the
  * anonymized listing is closed and scrubbed: the candidate who applied would lose
@@ -35,8 +56,11 @@ export interface DetachmentOutcome {
  * that received it would see a row pointing at a placeholder. Both keep a real
  * row, on a listing that exists precisely to hold them.
  *
- * Idempotent: a listing created for this account is reused, so a retried erasure
- * does not accumulate ghosts.
+ * The ghosts belong to the system profile, so the purge sweep never collects them:
+ * they live as long as the applications they carry, which is what should happen.
+ *
+ * Idempotent: a ghost's id is a function of the listing it was made for, so
+ * running this twice for the same account detaches nothing new.
  */
 export async function detachThirdPartyApplications(
   prisma: Client,
@@ -60,31 +84,32 @@ export async function detachThirdPartyApplications(
     throw new ServiceUnavailableScaffoldError();
   }
 
-  const applications = await prisma.application.findMany({
-    where: {
-      listingId: { in: listingIds },
-      applicantId: { not: ownerProfileId },
-      status: { in: [...PRESERVED_APPLICATION_STATUSES] },
-    },
-    select: { id: true, listingId: true },
-  });
+  const ghostListingIds: string[] = [];
+  let detachedApplications = 0;
 
-  if (applications.length === 0) {
-    return { ghostListingId: "", detachedApplications: 0 };
-  }
+  for (const listingId of listingIds) {
+    // Per listing rather than across all of them, because the destination differs
+    // per listing. The batch that used to move everything at once is what the
+    // unique index rejects.
+    const applications = await prisma.application.findMany({
+      where: {
+        listingId,
+        applicantId: { not: ownerProfileId },
+        status: { in: [...PRESERVED_APPLICATION_STATUSES] },
+      },
+      select: { id: true },
+    });
 
-  const existing = await prisma.replacementListing.findFirst({
-    where: {
-      createdById: SYSTEM_SCAFFOLD.profileId,
-      title: GHOST_LISTING_TITLE,
-    },
-    select: { id: true },
-  });
+    if (applications.length === 0) {
+      continue;
+    }
 
-  const ghost =
-    existing ??
-    (await prisma.replacementListing.create({
-      data: {
+    const ghostId = ghostListingIdFor(listingId);
+
+    await prisma.replacementListing.upsert({
+      where: { id: ghostId },
+      create: {
+        id: ghostId,
         practiceId: SYSTEM_SCAFFOLD.practiceId,
         createdById: SYSTEM_SCAFFOLD.profileId,
         title: GHOST_LISTING_TITLE,
@@ -96,18 +121,21 @@ export async function detachThirdPartyApplications(
         status: "CLOSED_NO_CANDIDATE",
         urgent: false,
       },
-      select: { id: true },
-    }));
+      // The ghost is a placeholder and its content is fixed, so a repeat run has
+      // nothing to change: `{}` keeps the row as it was rather than rewriting it.
+      update: {},
+    });
 
-  await prisma.application.updateMany({
-    where: { id: { in: applications.map((application) => application.id) } },
-    data: { listingId: ghost.id },
-  });
+    await prisma.application.updateMany({
+      where: { id: { in: applications.map((application) => application.id) } },
+      data: { listingId: ghostId },
+    });
 
-  return {
-    ghostListingId: ghost.id,
-    detachedApplications: applications.length,
-  };
+    ghostListingIds.push(ghostId);
+    detachedApplications += applications.length;
+  }
+
+  return { ghostListingIds, detachedApplications };
 }
 
 /** Raised when the deployment never ran the seed that creates the scaffold. */
