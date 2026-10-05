@@ -1,5 +1,6 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import { PaginationMetaSchema } from "../../common/pagination";
 import { ProfileType, Specialty } from "../../generated/prisma/enums";
 
 export const ProfileSchema = z.object({
@@ -28,12 +29,7 @@ export class PublicProfile extends createZodDto(PublicProfileSchema) {}
 
 export const PaginatedPublicProfilesSchema = z.object({
   data: z.array(PublicProfileSchema),
-  meta: z.object({
-    total: z.number(),
-    page: z.number(),
-    limit: z.number(),
-    totalPages: z.number(),
-  }),
+  meta: PaginationMetaSchema.extend({}),
 });
 
 export class PaginatedPublicProfiles extends createZodDto(

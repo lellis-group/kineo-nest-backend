@@ -1,4 +1,5 @@
 import { GoneException, Injectable, NotFoundException } from "@nestjs/common";
+import { runSerializableTransaction } from "../common/serializable-transaction";
 import { deletionHash, deletionPepper } from "../lib/hash";
 import { logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
@@ -34,7 +35,13 @@ export class AccountDeletionService {
     // accountability record in a state nobody can search.
     const pepper = deletionPepper();
 
-    const outcome = await this.prisma.$transaction(
+    // Through the shared helper, like the other five serializable transactions:
+    // it retries a `P2034` and, when contention wins, answers 503 rather than
+    // leaking a Prisma error to an anonymous caller holding a confirmation link.
+    // Called with a plain `$transaction` this had neither, so the one write that
+    // erases an account was the one least protected against a concurrent one.
+    const outcome = await runSerializableTransaction(
+      this.prisma,
       async (tx) => {
         const verification = await tx.verification.findFirst({
           where: { identifier: deleteAccountIdentifier(trimmed) },
@@ -81,7 +88,6 @@ export class AccountDeletionService {
 
         return { ...erasure, anonymizedAt: new Date().toISOString() };
       },
-      { isolationLevel: "Serializable", timeout: 10_000 },
     );
 
     logEvent("account.deletion.anonymized", {

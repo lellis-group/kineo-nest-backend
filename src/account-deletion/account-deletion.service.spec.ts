@@ -108,12 +108,26 @@ function makeService(scenario: Scenario) {
     },
   };
 
+  let transactionOptions: unknown;
   const prisma = {
-    $transaction: async (run: (transaction: typeof tx) => Promise<unknown>) =>
-      run(tx),
+    $transaction: async (
+      run: (transaction: typeof tx) => Promise<unknown>,
+      options?: unknown,
+    ) => {
+      transactionOptions = options;
+      return run(tx);
+    },
   } as unknown as PrismaService;
 
-  return { service: new AccountDeletionService(prisma), calls, writes };
+  return {
+    service: new AccountDeletionService(prisma),
+    calls,
+    writes,
+    // Exposed so a test can assert how the erasure transaction is configured —
+    // this fake used to swallow the options, which is why nothing noticed the
+    // erasure running without the shared helper's retry and `maxWait`.
+    transactionOptions: () => transactionOptions,
+  };
 }
 
 const LIVE_TOKEN = {
@@ -159,7 +173,7 @@ describe("AccountDeletionService", () => {
   });
 
   it("scrubs the profile and takes the listings out of circulation", async () => {
-    const { service, writes } = makeService({
+    const { service, writes, transactionOptions } = makeService({
       verification: LIVE_TOKEN,
       user: { id: "user-1", email: "user@example.com" },
       profile: { id: "profile-1", userId: "user-1" },
@@ -167,6 +181,12 @@ describe("AccountDeletionService", () => {
     });
 
     const result = await service.confirmDeletion("abc");
+
+    // The erasure is the one write that must not half-happen, and it is the one
+    // that now goes through the shared serializable helper like every other.
+    expect(transactionOptions()).toMatchObject({
+      isolationLevel: "Serializable",
+    });
 
     expect(writes.profile).toMatchObject({
       data: {

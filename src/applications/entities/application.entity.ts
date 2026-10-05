@@ -1,5 +1,6 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import { PaginationMetaSchema } from "../../common/pagination";
 import {
   ApplicationStatus,
   ListingStatus,
@@ -78,11 +79,7 @@ export const ApplicationStatusCountsSchema = z.object({
 
 export const PaginatedApplicationsSchema = z.object({
   data: z.array(ApplicationSchema),
-  meta: z.object({
-    total: z.number(),
-    page: z.number(),
-    limit: z.number(),
-    totalPages: z.number(),
+  meta: PaginationMetaSchema.extend({
     counts: ApplicationStatusCountsSchema,
   }),
 });

@@ -1,3 +1,4 @@
+import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
 import {
   GHOST_LISTING_TITLE,
   SYSTEM_SCAFFOLD,
@@ -15,8 +16,7 @@ type Client = PrismaService | Prisma.TransactionClient;
  * carries nothing the candidate is waiting for, so it is destroyed with the rest.
  */
 export const PRESERVED_APPLICATION_STATUSES = [
-  "PENDING",
-  "SHORTLISTED",
+  ...ACTIVE_APPLICATION_STATUSES,
   "ACCEPTED",
 ] as const;
 

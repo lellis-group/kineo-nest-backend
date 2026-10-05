@@ -10,6 +10,7 @@ import {
   assertNoThirdPartyApplications,
   PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
+import { paginate, paginationMeta } from "../common/pagination";
 import {
   getOwnedProfileId,
   getOwnedProfileIdSafe,
@@ -50,10 +51,7 @@ export class PracticesService {
 
   async findAll(filters: FindPracticesDto) {
     const { name, city, lat, lng, radiusKm } = filters;
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     if (lat !== undefined && lng !== undefined && radiusKm !== undefined) {
       const latitudeDelta = (radiusKm / EARTH_RADIUS_KM) * (180 / Math.PI);
       const longitudeDelta =
@@ -113,7 +111,7 @@ export class PracticesService {
         data: practices
           .slice(skip, skip + limit)
           .map(({ practice }) => practice),
-        meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        meta: paginationMeta(total, page, limit),
       };
     }
 
@@ -135,7 +133,7 @@ export class PracticesService {
 
     return {
       data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: paginationMeta(total, page, limit),
     };
   }
 

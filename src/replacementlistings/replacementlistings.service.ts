@@ -15,7 +15,11 @@ import {
   isTerminalListingStatus,
   RECRUITING_LISTING_STATUSES,
 } from "../common/listing-status";
-import { getOwnedProfileId } from "../common/profile-lookup";
+import { paginate, paginationMeta } from "../common/pagination";
+import {
+  getOwnedProfileId,
+  getOwnedProfileIdSafe,
+} from "../common/profile-lookup";
 import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
@@ -155,10 +159,7 @@ export class ReplacementlistingsService {
   }
 
   async findAll(filters: FindReplacementListingsDto) {
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     // The public feed is OPEN whatever the caller asked for: a status filter on
     // a listing somebody else owns would turn the feed into a way to read the
     // statuses of postings still in circulation.
@@ -186,17 +187,14 @@ export class ReplacementlistingsService {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCount(listing)),
       ),
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: paginationMeta(total, page, limit),
     };
   }
 
   async findMine(userId: string, filters: FindReplacementListingsDto) {
     const profileId = await getOwnedProfileId(this.prisma, userId);
 
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = {
       createdById: profileId,
       ...this.buildListingsWhere(filters),
@@ -231,10 +229,7 @@ export class ReplacementlistingsService {
         toReplacementListingDto(this.withCount(listing)),
       ),
       meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        ...paginationMeta(total, page, limit),
         counts,
       },
     };
@@ -277,10 +272,10 @@ export class ReplacementlistingsService {
         throw new NotFoundException(`Replacement listing ${id} not found`);
       }
 
-      const profileId = await getOwnedProfileId(
+      const profileId = await getOwnedProfileIdSafe(
         this.prisma,
         requesterUserId,
-      ).catch(() => undefined);
+      );
 
       if (listing.createdById !== profileId) {
         throw new NotFoundException(`Replacement listing ${id} not found`);

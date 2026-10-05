@@ -12,6 +12,7 @@ import {
   deriveListingStatus,
   isTerminalListingStatus,
 } from "../common/listing-status";
+import { paginate, paginationMeta } from "../common/pagination";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
@@ -231,10 +232,7 @@ export class ApplicationsService {
       throw new ForbiddenException("You do not own this listing");
     }
 
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = { listingId, status: filters.status };
 
     const [data, total, counts] = await Promise.all([
@@ -257,10 +255,7 @@ export class ApplicationsService {
     return {
       data: data.map(toApplicationDto),
       meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        ...paginationMeta(total, page, limit),
         counts,
       },
     };
@@ -269,10 +264,7 @@ export class ApplicationsService {
   async findMine(userId: string, filters: FindApplicationsDto) {
     const profile = await getOwnedProfile(this.prisma, userId);
 
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = {
       applicantId: profile.id,
       status: filters.status,
@@ -300,10 +292,7 @@ export class ApplicationsService {
     return {
       data: data.map(toApplicationDto),
       meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        ...paginationMeta(total, page, limit),
         counts,
       },
     };

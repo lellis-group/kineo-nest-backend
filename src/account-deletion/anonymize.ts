@@ -1,6 +1,20 @@
+import { ownedListingsFilter } from "../common/application-guard";
+import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
 import type { Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
 import { verificationRowsForIdentity } from "./deletion-token";
+
+/**
+ * A `cuid`-shaped id nothing can hold, so a where clause can ask for "no
+ * listing" or "no profile" without branching the query.
+ *
+ * `id` is TEXT and unconstrained, which is what makes this safe: it is not a
+ * reserved value the database would reject, and nothing enumerates ids that could
+ * collide with it.
+ */
+const NO_SUCH_LISTING_ID = "__no_such_listing__";
+const NO_SUCH_PROFILE_ID = "__no_such_profile__";
+
 import { detachThirdPartyApplications } from "./ghost-listing";
 
 type Client = PrismaService | Prisma.TransactionClient;
@@ -60,14 +74,12 @@ export async function anonymizeAccount(
     select: { id: true },
   });
 
+  // The same filter the third-party guard uses, plus the branch for a profile
+  // that is already gone: there is nothing to own, so nothing may match, and a
+  // sentinel id is how a where clause says "none" without a second query.
   const practiceFilter = profile
-    ? {
-        OR: [
-          { createdById: profile.id },
-          { practice: { ownerId: profile.id } },
-        ],
-      }
-    : { id: "__no_such_listing__" };
+    ? ownedListingsFilter(profile.id)
+    : { id: NO_SUCH_LISTING_ID };
 
   const listingIds = await prisma.replacementListing.findMany({
     where: practiceFilter,
@@ -121,8 +133,8 @@ export async function anonymizeAccount(
 
   const settledApplications = await prisma.application.updateMany({
     where: profile
-      ? { applicantId: profile.id, status: { in: ["PENDING", "SHORTLISTED"] } }
-      : { applicantId: "__no_such_profile__" },
+      ? { applicantId: profile.id, status: { in: ACTIVE_APPLICATION_STATUSES } }
+      : { applicantId: NO_SUCH_PROFILE_ID },
     data: {
       status: "WITHDRAWN",
       decisionSource: "SYSTEM",

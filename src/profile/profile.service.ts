@@ -9,6 +9,7 @@ import {
   assertNoThirdPartyApplications,
   ownedListingsFilter,
 } from "../common/application-guard";
+import { paginate, paginationMeta } from "../common/pagination";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
@@ -44,10 +45,7 @@ export class ProfileService {
   }
 
   async findAll(filters: FindProfilesDto) {
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = {
       isPublic: true,
       specialty: filters.specialty,
@@ -67,7 +65,7 @@ export class ProfileService {
 
     return {
       data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: paginationMeta(total, page, limit),
     };
   }
 
