@@ -4,19 +4,46 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 # 18.0-alpine
+        env:
+          POSTGRES_USER: johndoe
+          POSTGRES_PASSWORD: randompassword
+          POSTGRES_DB: mydb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
-      DATABASE_URL: postgresql://user:password@localhost:5432/kineo
+      DATABASE_URL: postgresql://johndoe:randompassword@localhost:5432/mydb?schema=public
+      SHADOW_DATABASE_URL: postgresql://johndoe:randompassword@localhost:5432/kineo_shadow?schema=public
+      BETTER_AUTH_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_ci_secret
+      BETTER_AUTH_URL: http://localhost:3000
+      NODE_ENV: test
+
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - run: bunx --bun prisma validate
-      - run: bunx prisma generate
+      - run: bunx prisma validate
+      - run: bun run db:generate
       - run: bun run build
+      - run: bun run typecheck
       - run: bun run lint
-      - run: bun test src
+      - run: bun run test
+      - run: bun run db:seed
+      - run: bun run db:check

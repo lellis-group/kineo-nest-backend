@@ -3,9 +3,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client";
 
-export function resolveDatabaseUrl(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const databaseUrl = (env.DATABASE_URL ?? "").trim();
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required");

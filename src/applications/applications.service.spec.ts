@@ -80,7 +80,7 @@ describe("ApplicationsService", () => {
       createdAt: new Date("2026-08-20T08:00:00.000Z"),
       updatedAt: new Date("2026-08-20T08:00:00.000Z"),
     };
-    let listingStatusUpdated: string | null = null;
+    const listingStatusUpdates: string[] = [];
     const transactionClient = {
       profile: { findUnique: async () => ({ id: "owner-1" }) },
       application: {
@@ -101,7 +101,7 @@ describe("ApplicationsService", () => {
           maxApplications: null,
         }),
         update: async ({ data }: { data: { status: string } }) => {
-          listingStatusUpdated = data.status;
+          listingStatusUpdates.push(data.status);
           return { ...application, ...data };
         },
       },
@@ -120,7 +120,7 @@ describe("ApplicationsService", () => {
 
     expect(result.status).toBe("REJECTED");
     expect(result.rejectionReason).toBe("Not a good fit");
-    expect(listingStatusUpdated).toBe("OPEN");
+    expect(listingStatusUpdates).toEqual(["OPEN"]);
   });
 
   it("throws NotFoundException when application does not exist", async () => {
@@ -196,7 +196,7 @@ describe("ApplicationsService", () => {
       createdAt: new Date("2026-08-20T08:00:00.000Z"),
       updatedAt: new Date("2026-08-20T08:00:00.000Z"),
     };
-    let listingStatusUpdated: string | null = null;
+    const listingStatusUpdates: string[] = [];
     const transactionClient = {
       profile: { findUnique: async () => ({ id: "applicant-4" }) },
       application: {
@@ -216,7 +216,7 @@ describe("ApplicationsService", () => {
           maxApplications: null,
         }),
         update: async ({ data }: { data: { status: string } }) => {
-          listingStatusUpdated = data.status;
+          listingStatusUpdates.push(data.status);
           return { ...application, ...data };
         },
       },
@@ -235,6 +235,6 @@ describe("ApplicationsService", () => {
 
     expect(result.status).toBe("WITHDRAWN");
     expect(result.withdrawnReason).toBe("Found another opportunity");
-    expect(listingStatusUpdated).toBe("OPEN");
+    expect(listingStatusUpdates).toEqual(["OPEN"]);
   });
 });

@@ -1,20 +1,22 @@
 {
   "name": "kineo-nest-backend",
   "private": true,
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.2",
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/main.ts",
-    "build": "bun x tsc",
+    "dev": "nest start --watch",
+    "build": "nest build",
     "start": "bun dist/main.js",
+    "typecheck": "bun x tsc -p tsconfig.json --noEmit",
     "test": "bun test src",
     "test:watch": "bun test src --watch",
-    "lint": "bunx biome check src prisma",
-    "lint:fix": "bunx biome check --write src prisma",
-    "db:generate": "bunx --bun prisma generate",
-    "db:push": "bunx --bun prisma db push",
-    "db:migrate": "bunx --bun prisma migrate dev",
-    "db:seed": "bunx --bun prisma db seed"
+    "lint": "biome check src prisma",
+    "lint:fix": "biome check --write src prisma",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "prisma db seed",
+    "db:check": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.3",
@@ -48,13 +50,9 @@
     "@prisma/compute-sdk": "latest",
     "@types/bun": "^1.3.14",
     "@types/compression": "^1.8.1",
-    "@types/jest": "^30.0.0",
     "@types/node": "^26.2.0",
     "@types/nodemailer": "^8.0.1",
-    "jest": "^30.4.2",
-    "next": "^16.3.4",
     "prisma": "^7.9.1",
-    "tsx": "^4.23.11",
     "typescript": "^6.0.3"
   }
 }

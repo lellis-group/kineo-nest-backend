@@ -1,3 +1,11 @@
+export type ReplacementListingDto = Record<string, unknown> & {
+  title: string;
+  startDate: string;
+  endDate: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function toReplacementListingDto(listing: {
   title: string;
   startDate: Date;
@@ -5,7 +13,7 @@ export function toReplacementListingDto(listing: {
   createdAt: Date;
   updatedAt: Date;
   [key: string]: unknown;
-}) {
+}): ReplacementListingDto {
   return {
     ...listing,
     startDate: listing.startDate.toISOString(),

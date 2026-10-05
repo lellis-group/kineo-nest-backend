@@ -34,11 +34,11 @@ describe("DataLifecycleService", () => {
     expect(calls[1]).toMatchObject({ model: "verification" });
     expect(calls[2]).toMatchObject({ model: "dataDeletionRequest" });
 
-    const sessionWhere = (calls[0].where ?? {}) as {
+    const sessionCutoff = (calls[0].where ?? {}) as {
       expiresAt?: { lt?: Date };
     };
-    expect(sessionWhere.expiresAt?.lt).toBeInstanceOf(Date);
-    expect(sessionWhere.expiresAt!.lt!.getTime()).toBeLessThanOrEqual(
+    expect(sessionCutoff.expiresAt?.lt).toBeInstanceOf(Date);
+    expect(sessionCutoff.expiresAt?.lt?.getTime()).toBeLessThanOrEqual(
       Date.now(),
     );
 
@@ -48,8 +48,8 @@ describe("DataLifecycleService", () => {
     };
     const cutoff = deletionWhere.createdAt?.lt;
     expect(cutoff).toBeInstanceOf(Date);
-    expect(cutoff!.getTime()).toBeLessThan(Date.now() - 364 * 86_400_000);
-    expect(cutoff!.getTime()).toBeGreaterThan(Date.now() - 366 * 86_400_000);
+    expect(cutoff?.getTime()).toBeLessThan(Date.now() - 364 * 86_400_000);
+    expect(cutoff?.getTime()).toBeGreaterThan(Date.now() - 366 * 86_400_000);
   });
 
   it("never throws when the sweep fails", async () => {

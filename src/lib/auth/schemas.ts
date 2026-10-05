@@ -21,7 +21,7 @@ export const nameSchema = z
 /** Profile image URL. HTTPS only: blocks `http:`, `data:`, `javascript:` and relative URLs. */
 export const httpsImageUrlSchema = z.url({ protocol: /^https$/ });
 
-/** Plaintext password. Keep in sync with `emailAndPassword.min/maxPasswordLength` in `src/lib/auth.ts`. */
+/** Plaintext password. Keep in sync with `emailAndPassword.min/maxPasswordLength` in `src/lib/auth/index.ts`. */
 export const passwordSchema = z.string().min(8).max(128);
 
 /**

@@ -49,6 +49,7 @@ describe("ReplacementlistingsService", () => {
 
     await service.create("user-1", {
       practiceId: "practice-1",
+      title: "General practitioner",
       startDate: "2026-09-10T08:00:00.000Z",
       endDate: "2026-09-12T08:00:00.000Z",
       specialty: "GENERALIST",
