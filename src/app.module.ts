@@ -16,7 +16,7 @@ import { AccountDeletionModule } from "./account-deletion/account-deletion.modul
 import { AppController } from "./app.controller";
 import { ApplicationsModule } from "./applications/applications.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception/http-exception.filter";
-import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-proxy.guard";
+import { TokenAwareThrottlerGuard } from "./common/guards/token-aware-throttler.guard";
 import {
   DELETION_THROTTLE_KEY,
   THROTTLE_NAMES,
@@ -94,7 +94,7 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
-    { provide: APP_GUARD, useClass: ThrottlerBehindProxyGuard },
+    { provide: APP_GUARD, useClass: TokenAwareThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
   ],
 })
