@@ -266,17 +266,21 @@ stateDiagram-v2
 
 ## 6. Security & Reliability
 
-Covered by an internal audit (`SECURITY-AUDIT.md`), mostly resolved:
+Resolved in the branches that built this section; the state of each is
+reflected below rather than claimed:
 
 - **Access control**: ownership checks on every mutating route across all four modules; `404` (not `403`) returned for private resources to avoid enumeration.
 - **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades).
-- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, with stricter limits on `create` routes; proxy-aware IP tracking.
+- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, declared once in `config/configuration.ts` and applied per route by `common/throttle.ts`; proxy-aware IP tracking. A fourth `deletion` tier is registered but refused by the guard unless the route opted in, so its budget cannot leak onto the rest of the API. better-auth's own 3-per-10s rule on the credential endpoints is overridden by `CREDENTIAL_RATE_LIMIT_*`.
+- **Account erasure**: `deleteUser.beforeDelete` refuses better-auth's hard delete, so the only path is the anonymization described in §9. The `verification` purge, the ghost listings and the keyed trail are covered by the e2e suite, not only by fakes.
 - **Input validation**: length/range constraints on every Zod DTO (text fields capped, coordinates bounded, RPPS format-checked); per-profile resource caps configurable via env vars (`MAX_PRACTICES_PER_PROFILE`, `MAX_ACTIVE_LISTINGS_PER_PROFILE`, `MAX_ACTIVE_APPLICATIONS_PER_PROFILE`).
 - **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`.
-- **Email**: no more plaintext token logging; real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction.
+- **Email**: no more plaintext token logging; real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction. Every HTML template escapes its interpolations and refuses a call to action whose target is not http(s).
 - **Indexes**: composite and partial indexes aligned with actual query patterns (`status`-filtered lookups on listings/applications, bounding-box geo search on practices).
 
-Not yet done: automated tests (unit/e2e) beyond a single transactional test on `accept()`; production stack-trace leak has not been manually verified; email notifications on status changes are written (templates + mailer) but not yet wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`.
+Automated tests are wired into CI and are not optional any more: 201 unit tests over `bun test`, and two e2e suites (`bun run test:e2e`) that boot the real `AppModule` through `createApp()`, replay the migration history into a throwaway database and drive it over HTTP. Every pull request runs `prisma validate`, `generate`, `build`, `typecheck` (which covers the specs and the seed, unlike the build), `lint`, the unit suites, the e2e suites, the seed, and a migration drift gate that replays the history and diffs it against `schema.prisma`.
+
+Still open: email notifications on status changes are written (templates + mailer) but not wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`.
 
 ---
 
@@ -288,8 +292,9 @@ Not yet done: automated tests (unit/e2e) beyond a single transactional test on `
 - [x] ReplacementListing Module (full lifecycle, capacity threshold, geo/date/specialty search)
 - [x] Application Module (apply, shortlist, accept/reject cascade, withdraw, view tracking)
 - [x] Security hardening (throttling, Helmet, CORS, indexes, input validation, concurrency safety)
+- [x] Account erasure (art. 17): anonymization instead of deletion, keyed audit trail, third-party applications parked on ghost listings, purge after the grace period
+- [x] Automated test suite (unit + e2e), enforced in CI
 - [ ] Email notifications wired into the application lifecycle (`NotificationsModule`)
-- [ ] Automated test suite (unit + e2e)
 - [ ] Messaging Module (conversation linked to an application) — deferred, not MVP-critical
 - [ ] Frontend (early TanStack Router scaffolding only)
 - [ ] V2: RPPS verification via official API, PDF contract generation, bilateral rating, geolocated "emergency" alerts
@@ -298,7 +303,119 @@ Not yet done: automated tests (unit/e2e) beyond a single transactional test on `
 
 ---
 
-## 8. Notes for AI Takeover
+---
+
+## 8. Running it
+
+Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`.
+
+| Command | What it does |
+| --- | --- |
+| `bun run dev` | `nest start --watch` |
+| `bun run build` | `nest build` (excludes the specs and the e2e suites) |
+| `bun run typecheck` | `tsc` over `src/` **and** `prisma/`, specs and e2e included |
+| `bun run lint` | Biome, formatting + correctness rules |
+| `bun run test` | Unit suites, excluding `**/e2e/**` |
+| `bun run test:e2e` | Both e2e suites, each on its own throwaway database |
+| `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
+| `bun run db:seed` | **Wipe and repopulate.** Creates the system scaffold (§9) |
+| `bun run db:check` | Replay the migration history and diff it against the schema |
+
+`bun run db:seed` **is a deploy step**, not a convenience: the account erasure
+parks other candidates' applications on rows the seed creates, and a deployment
+that skipped it would refuse every erasure with a message saying so.
+
+## 9. The account erasure
+
+The endpoint is `POST /account/confirm-deletion` with the token from the emailed
+link. No session is required: better-auth's own `delete-user` demands a valid
+cookie at click time, which answers "invalid link" from a different browser or a
+blocked cookie. The emailed token is the proof of identity.
+
+What it does, in order:
+
+1. Consumes the single-use `delete-account-*` token, refusing an expired one.
+2. Moves the applications other candidates wrote on this account's listings onto
+   a ghost listing owned by the system scaffold. They are not the account
+   holder's data to erase, so both their authors and the practices that received
+   them keep a real row.
+3. Anonymizes: the address becomes `erased-<fingerprint>@deleted.invalid`, the
+   name and image go, the profile loses its RPPS number, city and coordinates, the
+   listings lose their title, description and dates and leave circulation, the
+   account's own applications are settled so their listings recalculate.
+4. Drops the sessions and credentials, so the erasure takes effect immediately.
+5. Sets `deletedAt`. The hourly sweep drops the row after
+   `ACCOUNT_PURGE_GRACE_DAYS`.
+
+A listing holding an **accepted placement** is deliberately left alone: the
+placement was agreed with a candidate who is still waiting for an answer. It
+leaves circulation rather than being scrubbed, and the response says how many
+there are.
+
+The trail (`DataDeletionRequest`) stores two keyed fingerprints, not the
+identifier:
+
+```
+userIdHash = HMAC-SHA256(DELETION_PEPPER, userId)
+emailHash  = HMAC-SHA256(DELETION_PEPPER, email)
+```
+
+An unkeyed hash would not do: the inputs are emails and cuid ids, enumerable from
+any other table of the same dump.
+
+**Back up `DELETION_PEPPER` with the database.** Losing it does not erase the
+trail, it makes the trail unreachable: nothing can compute the fingerprint to
+search for. The trail holds no identifier either way.
+
+To answer "was this person processed?", compute the fingerprint and query:
+
+```sql
+SELECT "status", "createdAt", "executedAt"
+FROM "data_deletion_request"
+WHERE "emailHash" = '<HMAC-SHA256 of the address under the pepper>';
+```
+
+`emailHash` is written and never read by the application; it exists so an
+operator can do this without a dump.
+
+### 9.1 If the trail migration stops halfway
+
+The two migrations around the trail are split on purpose. The first adds nullable
+fingerprint columns; the second makes them `NOT NULL` and drops the plaintext
+`userId`/`email`. A database still holding trail rows fails the second rather than
+losing them — an accountability record is not ours to rewrite.
+
+If `bun run db:migrate` reports a failure in `enforce_erasure_fingerprints`:
+
+```bash
+DELETION_PEPPER=<the real pepper> bun run db:seed   # recomputes the fingerprints
+bun run db:migrate                                  # now succeeds
+```
+
+`db:seed` also wipes the rest of the data, so on anything but a development
+database, run the backfill by hand instead:
+
+```sql
+-- one row at a time, with the fingerprints computed by your own script
+UPDATE "data_deletion_request"
+SET "userIdHash" = '<hmac>', "emailHash" = '<hmac>', "updatedAt" = NOW()
+WHERE "userIdHash" IS NULL;
+```
+
+## 10. Notes for the next reader
+
+- Nothing checks a migration that was hand-edited or renamed: `bun run db:check`
+  is the gate, and it is in CI. Do not give a migration folder a hand-picked
+  timestamp — a name dated in the future sorts before everything generated after
+  it, and the replay fails.
+- The e2e suites need `bun run test:e2e`. Running `bun test src` collects them
+  too, and they refuse to share a process with anything else: the whole
+  application reads `DATABASE_URL` at import time, so a suite that loaded after a
+  unit spec would silently assert against the developer's own database.
+- Every list endpoint orders by `createdAt` then `id`. `createdAt` is not unique,
+  and offset pagination over a non-total order repeats and skips rows.
+
+## 11. Notes for AI Takeover
 
 - The `User`, `Session`, `Account`, `Verification`, `Jwks` models are managed by better-auth: do not modify them manually, regenerate via the better-auth CLI if additional fields are needed on `User`.
 - All business data (specialty, status, location) lives in `Profile`, not in `User`.
