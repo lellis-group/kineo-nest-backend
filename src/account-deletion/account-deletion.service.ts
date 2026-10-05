@@ -108,7 +108,7 @@ export class AccountDeletionService {
         // is no proof.
         const audited = await tx.dataDeletionRequest.updateMany({
           where: { userIdHash, status: "PENDING" },
-          data: { status: "EXECUTED", executedAt: new Date() },
+          data: { status: "ANONYMIZED", executedAt: new Date() },
         });
 
         if (audited.count === 0) {

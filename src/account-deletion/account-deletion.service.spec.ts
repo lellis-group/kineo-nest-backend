@@ -340,7 +340,7 @@ describe("AccountDeletionService", () => {
     await service.confirmDeletion("abc");
 
     expect(writes.trail).toMatchObject({
-      data: { status: "EXECUTED", executedAt: expect.any(Date) },
+      data: { status: "ANONYMIZED", executedAt: expect.any(Date) },
     });
     const where = (writes.trail as { where: { userIdHash: string } }).where;
     expect(where.userIdHash).toMatch(/^[0-9a-f]{64}$/);

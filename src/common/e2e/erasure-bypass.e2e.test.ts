@@ -193,6 +193,36 @@ describe("POST /api/auth/delete-user", () => {
     await expectNothingDestroyed();
   });
 
+  it("supersedes the previous request instead of failing on it", async () => {
+    // A partial unique index allows one `PENDING` row per fingerprint, so a
+    // second request used to fail its insert, leave the *first* row pending, and
+    // email a link that would execute that earlier request — whose `createdAt`
+    // could be weeks old. A request nobody made any more stayed confirmable,
+    // because the trail had no way to say it had been replaced.
+    const { owner } = await seedScenario();
+    const cookies = await signIn(owner.email);
+
+    await request(fx.baseUrl)
+      .post("/api/auth/delete-user")
+      .set("Cookie", cookies)
+      .send({ password: PASSWORD });
+
+    const second = await request(fx.baseUrl)
+      .post("/api/auth/delete-user")
+      .set("Cookie", cookies)
+      .send({ password: PASSWORD });
+
+    expect(second.status).toBe(200);
+
+    const rows = await fx.prisma.dataDeletionRequest.findMany({
+      orderBy: { createdAt: "asc" },
+      select: { status: true },
+    });
+    expect(rows).toHaveLength(2);
+    // Exactly one is actionable, and it is the newest.
+    expect(rows.map((row) => row.status)).toEqual(["SUPERSEDED", "PENDING"]);
+  });
+
   it("refuses a request that carries the confirmation token", async () => {
     const { owner } = await seedScenario();
     const cookies = await signIn(owner.email);
@@ -279,7 +309,7 @@ describe("POST /account/confirm-deletion", () => {
     const trail = await fx.prisma.dataDeletionRequest.findFirst({
       orderBy: { createdAt: "desc" },
     });
-    expect(trail?.status).toBe("EXECUTED");
+    expect(trail?.status).toBe("ANONYMIZED");
     expect(trail?.userIdHash).toBe(
       deletionHash(owner.id, process.env.DELETION_PEPPER ?? ""),
     );

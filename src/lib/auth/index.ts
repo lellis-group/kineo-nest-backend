@@ -298,20 +298,47 @@ export function createAuth(
             user.id,
           );
 
-          // Accountability trail (art. 5(2) GDPR): record the request before
-          // any execution. Never blocks the deletion flow on a bookkeeping
-          // failure — the hourly sweep keeps the process resilient.
+          // Accountability trail (art. 5(2) GDPR): the request is recorded
+          // before any execution, and a failure here stops the email rather than
+          // being logged and stepped over.
+          //
+          // It used to be swallowed on purpose, "never blocks the deletion flow on
+          // a bookkeeping failure". That is backwards: a confirmation link sent
+          // without a trail row produces an erasure nobody can account for, which
+          // is the outcome the trail exists to prevent — and the reader has no way
+          // to tell that from a link that simply failed.
+          //
+          // The previous request is superseded rather than overwritten. A partial
+          // unique index allows one `PENDING` row per fingerprint, so the second
+          // request used to fail its insert here, leave the *first* row pending,
+          // and then send a link that would execute that earlier request — whose
+          // `createdAt` could be weeks old. A request nobody made any more stayed
+          // confirmable because the trail could not say it had been replaced.
+          const pepper = deletionPepper();
+          const userIdHash = deletionHash(user.id, pepper);
+
           try {
-            const pepper = deletionPepper();
-            await prisma.dataDeletionRequest.create({
-              data: {
-                userIdHash: deletionHash(user.id, pepper),
-                emailHash: deletionHash(user.email, pepper),
-              },
+            await prisma.$transaction(async (tx) => {
+              await tx.dataDeletionRequest.updateMany({
+                where: { userIdHash, status: "PENDING" },
+                data: { status: "SUPERSEDED" },
+              });
+              await tx.dataDeletionRequest.create({
+                data: {
+                  userIdHash,
+                  emailHash: deletionHash(user.email, pepper),
+                },
+              });
             });
           } catch (error) {
             logError("account.deletion.request.audit_failed", error, {
               userId: user.id,
+            });
+            // No trail row, no link: better-auth surfaces this as a failed
+            // request, which the reader can retry.
+            throw new APIError("INTERNAL_SERVER_ERROR", {
+              message:
+                "The erasure request could not be recorded, so no confirmation link was sent. Please try again.",
             });
           }
 
