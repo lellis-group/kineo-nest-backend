@@ -1,3 +1,4 @@
+import type { Prisma } from "../generated/prisma/client";
 import type {
   ApplicationStatus,
   ListingStatus,
@@ -100,3 +101,47 @@ export const APPLICABLE_LISTING_STATUSES: ListingStatus[] = [
   "OPEN",
   "IN_DISCUSSION",
 ];
+
+/**
+ * Recomputes a listing's status from its applications, and writes it if it moved.
+ *
+ * The rule is `deriveListingStatus`, which is pure and lives above; this is the
+ * part that needs a client. It was a private method on the applications service,
+ * which meant the listings service could not reach it — and so could not react to
+ * a change of `maxApplications`, which is one of the two inputs. A `FULL` listing
+ * whose owner raised the cap stayed `FULL` and refused every candidate it had
+ * room for, with no transition able to undo it.
+ *
+ * Takes the caller's client so the count and the write share a transaction: read
+ * the status, count the applications, write the new status, and the two reads have
+ * to agree about what they saw.
+ */
+export async function recalcListingStatus(
+  tx: Prisma.TransactionClient,
+  listingId: string,
+) {
+  const listing = await tx.replacementListing.findUnique({
+    where: { id: listingId },
+  });
+
+  if (!listing) {
+    return;
+  }
+
+  const activeApplications = await tx.application.count({
+    where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
+  });
+
+  const status = deriveListingStatus({
+    current: listing.status,
+    activeApplications,
+    maxApplications: listing.maxApplications,
+  });
+
+  if (status !== listing.status) {
+    await tx.replacementListing.update({
+      where: { id: listingId },
+      data: { status },
+    });
+  }
+}

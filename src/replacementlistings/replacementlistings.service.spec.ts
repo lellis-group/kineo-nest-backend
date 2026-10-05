@@ -60,9 +60,15 @@ describe("ReplacementlistingsService", () => {
   });
 
   it("rejects a partial date update that would invalidate a listing", async () => {
-    const prisma = {
+    // `update` runs in a transaction, so the fake has to offer one.
+    const reads = {
       replacementListing: { findUnique: async () => listing },
       profile: { findUnique: async () => profile },
+    };
+    const prisma = {
+      ...reads,
+      $transaction: async (operation: (tx: typeof reads) => unknown) =>
+        operation(reads),
     } as unknown as PrismaService;
     const config = { get: () => undefined } as unknown as ConfigService;
     const service = new ReplacementlistingsService(prisma, config);
@@ -72,6 +78,98 @@ describe("ReplacementlistingsService", () => {
         endDate: "2026-09-01T08:00:00.000Z",
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("re-derives the status when maxApplications changes", async () => {
+    // A `FULL` listing whose owner raises the cap used to stay `FULL` and refuse
+    // every candidate it had room for. The capacity is an input to the
+    // derivation, so writing it without re-deriving leaves the row asserting
+    // something the code no longer believes — and no transition could undo it.
+    const full = {
+      ...openListing,
+      status: "FULL",
+      maxApplications: 2,
+    };
+    const writes: { status?: string } = {};
+    let row = { ...full };
+
+    const reads = {
+      profile: { findUnique: async () => profile },
+      application: { count: async () => 2 },
+      replacementListing: {
+        findUnique: async () => row,
+        findUniqueOrThrow: async () => ({
+          ...row,
+          _count: { applications: 2 },
+        }),
+        update: async (args: { data: Record<string, unknown> }) => {
+          writes.status = args.data.status as string | undefined;
+          // Prisma ignores `undefined` inside a data object, so the fake has to
+          // as well — otherwise it blanks the dates the service left alone and the
+          // failure looks like a date bug.
+          const defined = Object.fromEntries(
+            Object.entries(args.data).filter(
+              ([, value]) => value !== undefined,
+            ),
+          );
+          row = { ...row, ...defined };
+          return { ...row, _count: { applications: 2 } };
+        },
+      },
+    };
+    const prisma = {
+      ...reads,
+      $transaction: async (operation: (tx: typeof reads) => unknown) =>
+        operation(reads),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    const updated = await service.update("listing-1", "user-1", {
+      maxApplications: 5,
+    });
+
+    // Two active applications against a cap of five is IN_DISCUSSION, and the
+    // response has to carry the status that was written.
+    expect(writes.status).toBe("IN_DISCUSSION");
+    expect(updated.status).toBe("IN_DISCUSSION");
+  });
+
+  it("leaves the status alone when the capacity did not change", async () => {
+    let recalculated = false;
+    const reads = {
+      profile: { findUnique: async () => profile },
+      application: {
+        count: async () => {
+          recalculated = true;
+          return 0;
+        },
+      },
+      replacementListing: {
+        findUnique: async () => ({
+          ...openListing,
+          _count: { applications: 0 },
+        }),
+        findUniqueOrThrow: async () => ({
+          ...openListing,
+          _count: { applications: 0 },
+        }),
+        update: async () => ({ ...openListing, _count: { applications: 0 } }),
+      },
+    };
+    const prisma = {
+      ...reads,
+      $transaction: async (operation: (tx: typeof reads) => unknown) =>
+        operation(reads),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    await service.update("listing-1", "user-1", { title: "New title" });
+
+    // A title does not move the derivation, so it is not run: one fewer count on
+    // a path that runs on every edit.
+    expect(recalculated).toBe(false);
   });
 
   it("allows anyone to view an OPEN listing", async () => {

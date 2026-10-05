@@ -15,6 +15,7 @@ import {
   isTerminalListingStatus,
   MANUAL_LISTING_STATUSES,
   RECRUITING_LISTING_STATUSES,
+  recalcListingStatus,
 } from "../common/listing-status";
 import { paginate, paginationMeta } from "../common/pagination";
 import {
@@ -339,36 +340,66 @@ export class ReplacementlistingsService {
     return toReplacementListingDto({ ...updated, applicationsCount: 0 });
   }
 
+  /**
+   * Updates a listing's content.
+   *
+   * A change of `maxApplications` also re-derives the status. That was missing,
+   * and the listing is the worse for it: a `FULL` listing whose owner raised the
+   * cap stayed `FULL` and refused every candidate it now had room for, with no
+   * transition anywhere that could undo it. The capacity is one of the two inputs
+   * to `deriveListingStatus`, so writing it without re-deriving leaves the row
+   * claiming something the code no longer believes.
+   *
+   * One transaction, so the count the derivation reads and the write it decides on
+   * agree. When the derivation moved the status, the row is read again: the value
+   * the route answers with has to be the one that was written.
+   */
   async update(id: string, userId: string, dto: UpdateReplacementListingDto) {
-    const listing = await this.assertOwnership(id, userId);
+    const updated = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    if (isTerminalListingStatus(listing.status)) {
-      throw refusal(
-        REFUSAL_CODES.listingNotModifiable,
-        "This listing can no longer be modified",
-      );
-    }
+        if (isTerminalListingStatus(listing.status)) {
+          throw refusal(
+            REFUSAL_CODES.listingNotModifiable,
+            "This listing can no longer be modified",
+          );
+        }
 
-    const startDate = dto.startDate
-      ? new Date(dto.startDate)
-      : listing.startDate;
-    const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
-    if (startDate >= endDate) {
-      throw refusal(
-        REFUSAL_CODES.listingInvalidDates,
-        "startDate must be before endDate",
-      );
-    }
+        const startDate = dto.startDate
+          ? new Date(dto.startDate)
+          : listing.startDate;
+        const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
+        if (startDate >= endDate) {
+          throw refusal(
+            REFUSAL_CODES.listingInvalidDates,
+            "startDate must be before endDate",
+          );
+        }
 
-    const updated = await this.prisma.replacementListing.update({
-      where: { id },
-      data: {
-        ...dto,
-        startDate: dto.startDate ? startDate : undefined,
-        endDate: dto.endDate ? endDate : undefined,
+        const updated = await tx.replacementListing.update({
+          where: { id },
+          data: {
+            ...dto,
+            startDate: dto.startDate ? startDate : undefined,
+            endDate: dto.endDate ? endDate : undefined,
+          },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
+
+        if (dto.maxApplications === undefined) {
+          return updated;
+        }
+
+        await recalcListingStatus(tx, id);
+
+        return tx.replacementListing.findUniqueOrThrow({
+          where: { id },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
       },
-      include: APPLICATIONS_COUNT_INCLUDE,
-    });
+    );
 
     return toReplacementListingDto(this.withCount(updated));
   }

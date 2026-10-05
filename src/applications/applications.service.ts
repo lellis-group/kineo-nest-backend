@@ -11,6 +11,7 @@ import {
   APPLICABLE_LISTING_STATUSES,
   deriveListingStatus,
   isTerminalListingStatus,
+  recalcListingStatus,
 } from "../common/listing-status";
 import { paginate, paginationMeta } from "../common/pagination";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
@@ -38,43 +39,6 @@ export class ApplicationsService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {}
-
-  /**
-   * Realigns a listing's status with the applications it actually holds.
-   *
-   * The rule lives in deriveListingStatus, which is also what the quota check
-   * in create() reads. This method used to redraw it inline, and the two copies
-   * agreed by coincidence.
-   */
-  private async recalcListingStatus(
-    tx: Prisma.TransactionClient,
-    listingId: string,
-  ) {
-    const listing = await tx.replacementListing.findUnique({
-      where: { id: listingId },
-    });
-
-    if (!listing) {
-      return;
-    }
-
-    const activeApplications = await tx.application.count({
-      where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
-    });
-
-    const status = deriveListingStatus({
-      current: listing.status,
-      activeApplications,
-      maxApplications: listing.maxApplications,
-    });
-
-    if (status !== listing.status) {
-      await tx.replacementListing.update({
-        where: { id: listingId },
-        data: { status },
-      });
-    }
-  }
 
   /**
    * Totals per status over the whole collection, so tab counters stay stable
@@ -541,7 +505,7 @@ export class ApplicationsService {
           },
         });
 
-        await this.recalcListingStatus(tx, application.listingId);
+        await recalcListingStatus(tx, application.listingId);
 
         return updated;
       },
@@ -577,7 +541,7 @@ export class ApplicationsService {
           },
         });
 
-        await this.recalcListingStatus(tx, application.listingId);
+        await recalcListingStatus(tx, application.listingId);
 
         return updated;
       },
