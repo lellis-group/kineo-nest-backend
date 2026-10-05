@@ -5,8 +5,27 @@ import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import { logError, logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 
-/** Default retention horizon for the account-deletion audit trail (days). */
+/**
+ * Default horizon for an executed erasure record (days).
+ *
+ * The proof of art. 5(2), kept long enough to answer a regulator's question
+ * years later. Anchored on when the row was last written, not on when the request
+ * was made: see the sweep.
+ */
 export const DELETION_REQUEST_RETENTION_DAYS = 365;
+
+/**
+ * Default horizon for a request that was never carried out (days).
+ *
+ * Two days is the floor, not a preference. The confirmation link is valid for 24
+ * hours, so a one-day horizon sweeps the `PENDING` row while its own link is still
+ * live — and every subsequent confirmation then finds no request, refuses, and the
+ * account can never be erased by that link.
+ */
+export const PENDING_DELETION_REQUEST_RETENTION_DAYS = 30;
+
+/** The floor above, named so the configuration and this file agree. */
+export const MIN_PENDING_RETENTION_DAYS = 2;
 
 /** Default delay between anonymizing an account and dropping its row (days). */
 export const ACCOUNT_PURGE_GRACE_DAYS = 30;
@@ -37,10 +56,10 @@ const ACCOUNT_SWEEP_LOCK = 8_140_221;
  *   stay forever. They also carry the raw email as `identifier`.
  * - `user` with `deletedAt`: an anonymized account is kept for the grace period
  *   so its listings keep resolving to a real owner, then dropped for good.
- * - `dataDeletionRequest`: the accountability trail is keyed rather than
- *   readable, and it is dropped after a bounded horizon regardless of status: a
- *   PENDING row means the 24h token window passed without confirmation, so it no
- *   longer holds any value either.
+ * - `dataDeletionRequest`: the accountability trail is keyed rather than readable,
+ *   and dropped after a bounded horizon that depends on what the row records: an
+ *   executed erasure is the art. 5(2) proof and is kept long, while a request
+ *   nobody confirmed only holds the abandoned intention and goes far sooner.
  */
 @Injectable()
 export class DataLifecycleService {
@@ -62,6 +81,13 @@ export class DataLifecycleService {
     return (
       this.config?.get<number>("dataDeletionRequestRetentionDays") ??
       DELETION_REQUEST_RETENTION_DAYS
+    );
+  }
+
+  private get pendingDeletionRequestRetentionDays(): number {
+    return (
+      this.config?.get<number>("pendingDeletionRequestRetentionDays") ??
+      PENDING_DELETION_REQUEST_RETENTION_DAYS
     );
   }
 
@@ -129,15 +155,48 @@ export class DataLifecycleService {
       );
     });
 
-    await this.step("deletion request", async () => {
-      const deletionCutoff = new Date(
-        now.getTime() - this.deletionRequestRetentionDays * 86_400_000,
+    // Two horizons, both anchored on `updatedAt`.
+    //
+    // On `createdAt` a request made 400 days ago and confirmed an hour ago was
+    // swept within the hour: the account was erased and the proof of it gone, by a
+    // sweep whose job was data minimization. The row's last write is what decides
+    // how long it still has value — the execution for an anonymized row, the
+    // abandonment for a pending one.
+    //
+    // And the two statuses cannot share a horizon. A `PENDING` or `SUPERSEDED` row
+    // holds no proof and only the abandoned intention, so it goes far sooner; a
+    // row the account was erased on is the art. 5(2) trail and goes later. It used
+    // to be one step keyed on creation, which kept abandoned rows for 365 days and
+    // executed ones for whatever was left of theirs.
+    await this.step("deletion request never confirmed", async () => {
+      const abandonedCutoff = new Date(
+        now.getTime() - this.pendingDeletionRequestRetentionDays * 86_400_000,
       );
-      purged.deletionRequests = await this.deleteInBatches(
-        "deletion request",
+      purged.deletionRequests += await this.deleteInBatches(
+        "deletion request never confirmed",
         (limit) =>
           this.prisma.dataDeletionRequest.deleteMany({
-            where: { createdAt: { lt: deletionCutoff } },
+            where: {
+              status: { in: ["PENDING", "SUPERSEDED"] },
+              updatedAt: { lt: abandonedCutoff },
+            },
+            limit,
+          }),
+      );
+    });
+
+    await this.step("deletion request executed", async () => {
+      const executedCutoff = new Date(
+        now.getTime() - this.deletionRequestRetentionDays * 86_400_000,
+      );
+      purged.deletionRequests += await this.deleteInBatches(
+        "deletion request executed",
+        (limit) =>
+          this.prisma.dataDeletionRequest.deleteMany({
+            where: {
+              status: "ANONYMIZED",
+              updatedAt: { lt: executedCutoff },
+            },
             limit,
           }),
       );

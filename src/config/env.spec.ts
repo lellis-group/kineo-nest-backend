@@ -63,34 +63,34 @@ describe("DEFAULT_NODE_ENV", () => {
   });
 });
 
-describe("gates close by default", () => {
-  /** Runs `body` with `patch` applied to the environment, then restores it. */
-  function withEnv<T>(
-    patch: Record<string, string | undefined>,
-    body: () => T,
-  ): T {
-    const previous: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(patch)) {
-      previous[key] = process.env[key];
+/** Runs `body` with `patch` applied to the environment, then restores it. */
+function withEnv<T>(
+  patch: Record<string, string | undefined>,
+  body: () => T,
+): T {
+  const previous: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    previous[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return body();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) {
         delete process.env[key];
       } else {
         process.env[key] = value;
       }
     }
-    try {
-      return body();
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    }
   }
+}
 
+describe("gates close by default", () => {
   it("trusts the proxy by default outside development, and not in it", () => {
     // With a separate frontend origin, this app is designed behind a proxy.
     // Trusting nothing made `req.ip` the proxy for every caller, and the
@@ -174,5 +174,34 @@ describe("gates close by default", () => {
       THROTTLE_LONG_TTL: String(2_147_483_648),
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("the pending erasure horizon has a floor", () => {
+  /**
+   * The confirmation link lives 24 hours. A shorter horizon sweeps the pending row
+   * while its own link is still usable, and every confirmation after that finds no
+   * request and refuses — so the account can never be erased by that link, and the
+   * only way out is to ask again.
+   */
+  function retentionFor(value: string | undefined) {
+    return withEnv(
+      { PENDING_DELETION_REQUEST_RETENTION_DAYS: value },
+      () => configuration().pendingDeletionRequestRetentionDays,
+    );
+  }
+
+  it("defaults to thirty days", () => {
+    expect(retentionFor(undefined)).toBe(30);
+  });
+
+  it("accepts the shortest horizon that cannot outrun its own link", () => {
+    expect(retentionFor("2")).toBe(2);
+    expect(retentionFor("90")).toBe(90);
+  });
+
+  it("refuses a horizon shorter than the link it belongs to", () => {
+    expect(() => retentionFor("1")).toThrow(/PENDING_DELETION_REQUEST/);
+    expect(() => retentionFor("0")).toThrow(/PENDING_DELETION_REQUEST/);
   });
 });

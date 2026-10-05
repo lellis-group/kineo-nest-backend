@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  MIN_PENDING_RETENTION_DAYS,
+  PENDING_DELETION_REQUEST_RETENTION_DAYS,
+} from "../data-lifecycle/data-lifecycle.service";
 import { DEFAULT_NODE_ENV, isHardenedEnv } from "./env";
 
 function positiveInteger(
@@ -83,6 +87,30 @@ export function durationSeconds(
  */
 const MAX_TIMER_MS = 2_147_483_647;
 
+/**
+ * How long an unconfirmed erasure request is kept, with a floor.
+ *
+ * The floor is the point. The confirmation link is valid for 24 hours, so a
+ * one-day horizon sweeps the `PENDING` row while its own link is still live — and
+ * every later confirmation then finds no request, refuses, and that account can
+ * never be erased by that link. Two days is the shortest horizon that cannot
+ * outrun the token it belongs to.
+ */
+function pendingRequestRetentionDays(): number {
+  const days = positiveInteger(
+    process.env.PENDING_DELETION_REQUEST_RETENTION_DAYS,
+    PENDING_DELETION_REQUEST_RETENTION_DAYS,
+    "PENDING_DELETION_REQUEST_RETENTION_DAYS",
+  );
+
+  if (days < MIN_PENDING_RETENTION_DAYS) {
+    throw new Error(
+      `PENDING_DELETION_REQUEST_RETENTION_DAYS must be at least ${MIN_PENDING_RETENTION_DAYS}, got: ${days}`,
+    );
+  }
+  return days;
+}
+
 /** A timer value, bounded on both ends: 1 ms to `MAX_TIMER_MS`. */
 function timerMs(value: string | undefined, fallback: number, name: string) {
   const parsed = positiveInteger(value, fallback, name);
@@ -135,11 +163,7 @@ function configuration() {
       365,
       "DATA_DELETION_REQUEST_RETENTION_DAYS",
     ),
-    pendingDeletionRequestRetentionDays: positiveInteger(
-      process.env.PENDING_DELETION_REQUEST_RETENTION_DAYS,
-      30,
-      "PENDING_DELETION_REQUEST_RETENTION_DAYS",
-    ),
+    pendingDeletionRequestRetentionDays: pendingRequestRetentionDays(),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
     throttle: {
