@@ -77,10 +77,24 @@ export const ApplicationStatusCountsSchema = z.object({
   WITHDRAWN: z.number(),
 });
 
+/**
+ * Per-situation totals, over the whole collection like `counts`.
+ *
+ * Optional because an older backend does not send it and a rolling deploy must not
+ * take the page down over a counter: every reader treats it as possibly absent and
+ * falls back to zero, which shows an empty chip rather than a broken page.
+ */
+export const ApplicationBucketCountsSchema = z.object({
+  PASSED_OVER: z.number(),
+  POSTING_ENDED: z.number(),
+  REFUSED: z.number(),
+});
+
 export const PaginatedApplicationsSchema = z.object({
   data: z.array(ApplicationSchema),
   meta: PaginationMetaSchema.extend({
     counts: ApplicationStatusCountsSchema,
+    bucketCounts: ApplicationBucketCountsSchema.optional(),
   }),
 });
 

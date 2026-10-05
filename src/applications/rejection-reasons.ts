@@ -29,7 +29,19 @@ export const PLATFORM_REJECTION_REASON_VALUES: string[] = Object.values(
  * seeded before this branch, so it stays accepted and mapped rather than
  * replaced: a stored reason is not something the application gets to rewrite.
  */
-const LEGACY_LISTING_CANCELLED_REASON = "The listing has been cancelled";
+export const LEGACY_LISTING_CANCELLED_REASON = "The listing has been cancelled";
+
+/**
+ * Every string the platform writes itself, the older spelling included.
+ *
+ * The buckets below have to recognise a platform decision wherever it is spelled,
+ * or a listing cancelled before the copy was reviewed would be counted as a
+ * refusal by the practice — which is the one reading that is always wrong.
+ */
+export const PLATFORM_REASONS_INCLUDING_LEGACY: string[] = [
+  ...PLATFORM_REJECTION_REASON_VALUES,
+  LEGACY_LISTING_CANCELLED_REASON,
+];
 
 export function isPlatformRejectionReason(reason: string): boolean {
   return (

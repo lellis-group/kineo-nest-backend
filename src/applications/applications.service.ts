@@ -26,6 +26,12 @@ import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
+import {
+  REJECTION_BUCKET_KEYS,
+  type RejectionBucket,
+  rejectionBucketWhere,
+  zeroBucketCounts,
+} from "./rejection-buckets";
 import { PLATFORM_REJECTION_REASONS } from "./rejection-reasons";
 
 // The mapper publishes name and image and nothing else, so a paginated list
@@ -44,6 +50,30 @@ export class ApplicationsService {
    * Totals per status over the whole collection, so tab counters stay stable
    * across pages and filters.
    */
+  /**
+   * One count per situation, each its own query.
+   *
+   * Three cheap counts rather than one `groupBy` on `rejectionReason`, because
+   * that column holds free text: grouping by it returns a row per distinct sentence
+   * a practice ever typed, so its row count is bounded by the practices rather than
+   * by the applications. Three known predicates are bounded by three.
+   */
+  private async countApplicationsByBucket(
+    scope: Prisma.ApplicationWhereInput,
+  ): Promise<Record<RejectionBucket, number>> {
+    const counts = zeroBucketCounts();
+
+    await Promise.all(
+      REJECTION_BUCKET_KEYS.map(async (bucket) => {
+        counts[bucket] = await this.prisma.application.count({
+          where: { ...scope, ...rejectionBucketWhere(bucket) },
+        });
+      }),
+    );
+
+    return counts;
+  }
+
   private async countApplicationsByStatus(
     where: Prisma.ApplicationWhereInput,
   ): Promise<{ total: number } & Record<ApplicationStatus, number>> {
@@ -229,13 +259,25 @@ export class ApplicationsService {
     const profile = await getOwnedProfile(this.prisma, userId);
 
     const { page, limit, skip } = paginate(filters);
+
+    // The bucket sits beside `status` rather than replacing it: the chips sum a
+    // situation, and the situation already implies the status, so applying both
+    // would be redundant rather than stricter.
     const where = {
       applicantId: profile.id,
       status: filters.status,
       listingId: filters.listingId,
+      ...(filters.bucket ? rejectionBucketWhere(filters.bucket) : {}),
     };
 
-    const [data, total, counts] = await Promise.all([
+    // The counters answer over the whole collection, not the filtered slice — a chip
+    // that counted what it just filtered would always read as the page size.
+    const unfiltered = {
+      applicantId: profile.id,
+      listingId: filters.listingId,
+    };
+
+    const [data, total, counts, bucketCounts] = await Promise.all([
       this.prisma.application.findMany({
         where,
         skip,
@@ -247,10 +289,8 @@ export class ApplicationsService {
         include: { listing: { include: { practice: true } } },
       }),
       this.prisma.application.count({ where }),
-      this.countApplicationsByStatus({
-        applicantId: profile.id,
-        listingId: filters.listingId,
-      }),
+      this.countApplicationsByStatus(unfiltered),
+      this.countApplicationsByBucket(unfiltered),
     ]);
 
     return {
@@ -258,6 +298,7 @@ export class ApplicationsService {
       meta: {
         ...paginationMeta(total, page, limit),
         counts,
+        bucketCounts,
       },
     };
   }
