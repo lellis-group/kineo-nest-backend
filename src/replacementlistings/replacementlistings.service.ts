@@ -13,6 +13,7 @@ import {
 import {
   ACTIVE_APPLICATION_STATUSES,
   isTerminalListingStatus,
+  MANUAL_LISTING_STATUSES,
   RECRUITING_LISTING_STATUSES,
 } from "../common/listing-status";
 import { paginate, paginationMeta } from "../common/pagination";
@@ -385,16 +386,29 @@ export class ReplacementlistingsService {
   async close(id: string, userId: string) {
     const listing = await this.assertOwnership(id, userId);
 
-    if (listing.status !== "OPEN" && listing.status !== "FILLED") {
+    // Closing is for a posting still in circulation, so a DRAFT or an
+    // already-terminal listing is refused.
+    //
+    // `IN_DISCUSSION` and `FULL` are *not* refused, and that is the fix. They are
+    // what a listing with candidates on it becomes, so the previous guard — which
+    // accepted only `OPEN` and `FILLED` — made it impossible to close a posting
+    // that had shortlisted candidates. `cancel` was the only way out, and cancel
+    // tells every one of those candidates the posting was abandoned rather than
+    // closed, which is a different sentence about the same event.
+    if (
+      MANUAL_LISTING_STATUSES.includes(listing.status) ||
+      (isTerminalListingStatus(listing.status) && listing.status !== "FILLED")
+    ) {
       throw refusal(
         REFUSAL_CODES.listingNotCloseable,
-        "Only open or filled listings can be closed",
+        "Only a listing still in circulation can be closed",
       );
     }
 
-    // A FILLED listing closed out with a placement on it, an OPEN one was closed
-    // with nobody retained. Both leave circulation, and a candidate who was
-    // shortlisted has to be able to tell the two apart.
+    // A FILLED listing closed out with a placement on it; any other was closed
+    // with nobody retained, candidates or not. Both leave circulation, and a
+    // candidate who was shortlisted has to be able to tell the two apart — which
+    // the reason below also does.
     const updated = await this.prisma.replacementListing.update({
       where: { id },
       data: {
@@ -430,14 +444,16 @@ export class ReplacementlistingsService {
           throw new ForbiddenException();
         }
 
-        if (
-          listing.status === "CLOSED" ||
-          listing.status === "CLOSED_NO_CANDIDATE" ||
-          listing.status === "CANCELLED"
-        ) {
+        // Every terminal status, `FILLED` included. A filled listing carries a
+        // placement that was agreed with a candidate; cancelling it would leave
+        // that candidate holding a replacement on a posting that no longer
+        // exists, which is why it has to be closed instead.
+        if (isTerminalListingStatus(listing.status)) {
           throw refusal(
             REFUSAL_CODES.listingAlreadyClosed,
-            "This listing is already closed or cancelled",
+            listing.status === "FILLED"
+              ? "A filled listing cannot be cancelled, close it instead"
+              : "This listing is already closed or cancelled",
           );
         }
 
