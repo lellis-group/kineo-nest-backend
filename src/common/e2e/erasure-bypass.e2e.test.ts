@@ -19,6 +19,7 @@ import {
   it,
 } from "bun:test";
 import request from "supertest";
+import { ERASURE_ERROR_CODES } from "../../account-deletion/erasure-codes";
 import { SYSTEM_SCAFFOLD } from "../../common/system-scaffold";
 import { deletionHash } from "../../lib/hash";
 import {
@@ -119,6 +120,7 @@ async function seedErasureRequest(
   token: string,
   userId: string,
   email: string,
+  tokenOptions: { expiresAt?: Date } = {},
 ) {
   const pepper = process.env.DELETION_PEPPER ?? "";
   await fx.prisma.dataDeletionRequest.create({
@@ -127,17 +129,21 @@ async function seedErasureRequest(
       emailHash: deletionHash(email, pepper),
     },
   });
-  return seedDeleteToken(token, userId);
+  return seedDeleteToken(token, userId, tokenOptions);
 }
 
 /** The verification row better-auth mints for the emailed confirmation link. */
-function seedDeleteToken(token: string, userId: string) {
+function seedDeleteToken(
+  token: string,
+  userId: string,
+  { expiresAt }: { expiresAt?: Date } = {},
+) {
   return fx.prisma.verification.create({
     data: {
       id: `verification-delete-${token}`,
       identifier: `delete-account-${token}`,
       value: userId,
-      expiresAt: new Date(Date.now() + 3_600_000),
+      expiresAt: expiresAt ?? new Date(Date.now() + 3_600_000),
     },
   });
 }
@@ -280,6 +286,67 @@ describe("POST /account/confirm-deletion", () => {
 
     expect(response.status).toBe(404);
     await expectNothingDestroyed();
+  });
+
+  /**
+   * The code, on the wire.
+   *
+   * The frontend picks between two screens here — request again, or nothing left
+   * to do — on a `code`, and both of those answers arrive as 404 or 410. Reading
+   * the status alone cannot tell them apart, which is the whole reason these
+   * codes exist. Asserted over HTTP because a code that never leaves the process
+   * is the same as no code at all.
+   *
+   * What this does *not* cover: the harness pins `NODE_ENV=test`, so the filter
+   * takes its development branch here, which passes the exception body through
+   * untouched. That this suite would still pass with the code dropped from the
+   * hardened branch is exactly why `http-exception.filter.spec.ts` pins it
+   * separately — between the two, both branches are covered.
+   */
+  it("names the failure in a code, so the client is not left guessing", async () => {
+    const { owner } = await seedScenario();
+
+    // Never issued.
+    const unknown = await request(fx.baseUrl)
+      .post("/account/confirm-deletion")
+      .send({ token: "never-issued" });
+    expect(unknown.status).toBe(404);
+    expect(unknown.body).toMatchObject({
+      code: ERASURE_ERROR_CODES.NO_PENDING_REQUEST,
+    });
+
+    // One request, then links against it — a partial unique index allows a single
+    // PENDING row per fingerprint, so a second request cannot even be recorded.
+    // That is a separate defect; this test only needs one trail row to act on.
+    await seedErasureRequest("erasure-expired", owner.id, owner.email, {
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    const expired = await request(fx.baseUrl)
+      .post("/account/confirm-deletion")
+      .send({ token: "erasure-expired" });
+    expect(expired.status).toBe(410);
+    expect(expired.body).toMatchObject({
+      code: ERASURE_ERROR_CODES.TOKEN_EXPIRED,
+    });
+
+    // The same request, a link that has not expired.
+    await seedDeleteToken("erasure-ok", owner.id);
+    const ok = await request(fx.baseUrl)
+      .post("/account/confirm-deletion")
+      .send({ token: "erasure-ok" });
+    expect(ok.status).toBe(200);
+    expect(ok.body).not.toHaveProperty("code");
+
+    // And then a link for an account that is already gone: the same 410 as the
+    // expired one, the opposite instruction to the reader.
+    await seedDeleteToken("erasure-replay", owner.id);
+    const replay = await request(fx.baseUrl)
+      .post("/account/confirm-deletion")
+      .send({ token: "erasure-replay" });
+    expect(replay.status).toBe(410);
+    expect(replay.body).toMatchObject({
+      code: ERASURE_ERROR_CODES.ALREADY_ERASED,
+    });
   });
 });
 

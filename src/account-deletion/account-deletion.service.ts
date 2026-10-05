@@ -5,6 +5,7 @@ import { logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 import { anonymizeAccount, type ErasureOutcome } from "./anonymize";
 import { deleteAccountIdentifier } from "./deletion-token";
+import { ERASURE_ERROR_CODES } from "./erasure-codes";
 
 export interface ErasureResult extends ErasureOutcome {
   anonymizedAt: string;
@@ -48,16 +49,22 @@ export class AccountDeletionService {
         });
 
         if (!verification) {
-          throw new NotFoundException(
-            "This confirmation link is invalid or has already been used.",
-          );
+          throw new NotFoundException({
+            statusCode: 404,
+            code: ERASURE_ERROR_CODES.NO_PENDING_REQUEST,
+            message:
+              "This confirmation link is invalid or has already been used.",
+          });
         }
 
         if (verification.expiresAt.getTime() < Date.now()) {
           await tx.verification.delete({ where: { id: verification.id } });
-          throw new GoneException(
-            "This confirmation link has expired (it is valid for 24 hours). Request a new one from your profile.",
-          );
+          throw new GoneException({
+            statusCode: 410,
+            code: ERASURE_ERROR_CODES.TOKEN_EXPIRED,
+            message:
+              "This confirmation link has expired (it is valid for 24 hours). Request a new one from your profile.",
+          });
         }
 
         const userId = verification.value;
@@ -65,12 +72,20 @@ export class AccountDeletionService {
 
         if (!user) {
           await tx.verification.delete({ where: { id: verification.id } });
-          throw new GoneException("This account has already been erased.");
+          throw new GoneException({
+            statusCode: 410,
+            code: ERASURE_ERROR_CODES.ALREADY_ERASED,
+            message: "This account has already been erased.",
+          });
         }
 
         if (user.deletedAt) {
           await tx.verification.delete({ where: { id: verification.id } });
-          throw new GoneException("This account has already been erased.");
+          throw new GoneException({
+            statusCode: 410,
+            code: ERASURE_ERROR_CODES.ALREADY_ERASED,
+            message: "This account has already been erased.",
+          });
         }
 
         const userIdHash = deletionHash(user.id, pepper);
