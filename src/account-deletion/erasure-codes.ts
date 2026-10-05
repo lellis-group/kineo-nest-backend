@@ -24,6 +24,3 @@ export const ERASURE_ERROR_CODES = {
   /** The account is already anonymized. There is nothing left to remove. */
   ALREADY_ERASED: "ALREADY_ERASED",
 } as const;
-
-export type ErasureErrorCode =
-  (typeof ERASURE_ERROR_CODES)[keyof typeof ERASURE_ERROR_CODES];
