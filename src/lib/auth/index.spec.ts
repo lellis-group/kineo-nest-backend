@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { type ConfigGetter, readAuthEnv, readAuthEnvFromConfig } from "./index";
+import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
+import {
+  type ConfigGetter,
+  createAuth,
+  readAuthEnv,
+  readAuthEnvFromConfig,
+} from "./index";
 
 const REQUIRED_ENV = { BETTER_AUTH_SECRET: "s".repeat(64) };
 
@@ -123,7 +129,12 @@ describe("readAuthEnv", () => {
     expect(readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "test" }).nodeEnv).toBe(
       "test",
     );
-    expect(readAuthEnv({ ...REQUIRED_ENV }).nodeEnv).toBe("development");
+    // Absent, the default is the hardened one: a deployment that never set
+    // NODE_ENV — the Dockerfile does not — used to arrive in development, with
+    // Swagger served and non-Secure cookies. Asserted so the default cannot be
+    // loosened back.
+    expect(readAuthEnv({ ...REQUIRED_ENV }).nodeEnv).toBe(DEFAULT_NODE_ENV);
+    expect(isHardenedEnv(readAuthEnv({ ...REQUIRED_ENV }).nodeEnv)).toBe(true);
   });
 });
 
@@ -176,6 +187,60 @@ describe("readAuthEnvFromConfig", () => {
       } else {
         process.env.BETTER_AUTH_SECRET = previous;
       }
+    }
+  });
+});
+
+describe("the auth reference plugin", () => {
+  /**
+   * A read of the options `createAuth` was handed, rather than of the intent.
+   *
+   * Better Auth mounts its own reference at `/api/auth/reference` from the
+   * `openAPI()` plugin. That is a different surface from the NestJS documentation
+   * `app.ts` keeps behind `isHardenedEnv`, so gating only the latter left the
+   * auth endpoints documented in production.
+   */
+  function pluginIds(nodeEnv: string): string[] {
+    const prismaStub = {
+      $transaction: async () => [],
+      user: { findUnique: async () => null },
+    } as unknown as Parameters<typeof createAuth>[1];
+
+    const instance = createAuth(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: nodeEnv }),
+      prismaStub,
+    );
+    // Every plugin here is an object carrying an `id`; a function-shaped one
+    // would mean the shape changed and this read would be reading nothing.
+    return (instance.options.plugins ?? []).map((plugin) => {
+      if (typeof plugin !== "object" || plugin === null || !("id" in plugin)) {
+        throw new Error(
+          "a plugin carries no id: the options this reads have changed shape",
+        );
+      }
+      return String(plugin.id);
+    });
+  }
+
+  it("is absent once the environment is hardened", () => {
+    expect(pluginIds("production")).not.toContain("open-api");
+    expect(pluginIds("staging")).not.toContain("open-api");
+    // An unset NODE_ENV now defaults to production, so this is the path a
+    // deployment that never set it takes.
+    expect(pluginIds(DEFAULT_NODE_ENV)).not.toContain("open-api");
+  });
+
+  it("is present in development and test, where it is wanted", () => {
+    expect(pluginIds("development")).toContain("open-api");
+    expect(pluginIds("test")).toContain("open-api");
+  });
+
+  it("keeps the other plugins either way", () => {
+    for (const nodeEnv of ["production", "development"]) {
+      const ids = pluginIds(nodeEnv);
+      expect(ids.length).toBeGreaterThan(1);
+      expect(ids).toContain("next-cookies");
+      expect(ids).toContain("email-verification-status");
     }
   });
 });

@@ -4,7 +4,7 @@ import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
-import { isHardenedEnv } from "../../config/env";
+import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
 import {
   sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
@@ -131,7 +131,7 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       "DATA_DELETION_REQUEST_RETENTION_DAYS",
     ),
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
-    nodeEnv: env.NODE_ENV || "development",
+    nodeEnv: env.NODE_ENV || DEFAULT_NODE_ENV,
   };
 }
 
@@ -192,7 +192,8 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     deletionRequestRetentionDays:
       config.get<number>("dataDeletionRequestRetentionDays", 365) ?? 365,
     frontendUrl,
-    nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
+    nodeEnv:
+      config.get<string>("nodeEnv", DEFAULT_NODE_ENV) ?? DEFAULT_NODE_ENV,
   };
 }
 
@@ -209,7 +210,15 @@ export function createAuth(
     }),
 
     plugins: [
-      openAPI(),
+      // Better Auth serves its own reference at `/api/auth/reference`, served by
+      // the `openAPI()` plugin. That is a *different* surface from the NestJS
+      // documentation, which `app.ts` already keeps behind `isHardenedEnv` — so
+      // gating one and not the other left the auth endpoints documented in
+      // production while the REST ones were not.
+      //
+      // Read at module scope, which is fine here and wrong everywhere else:
+      // `NODE_ENV` does not change between the import and the request.
+      ...(isHardenedEnv(authEnv.nodeEnv) ? [] : [openAPI()]),
       nextCookies(),
       emailVerificationStatusPlugin(),
       ...(authEnv.jwtEnabled

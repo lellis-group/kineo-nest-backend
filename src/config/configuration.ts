@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_NODE_ENV, isHardenedEnv } from "./env";
 
 function positiveInteger(
   value: string | undefined,
@@ -72,10 +73,31 @@ export function durationSeconds(
   return seconds;
 }
 
+/**
+ * The largest delay `@nestjs/throttler` can be asked to wait.
+ *
+ * It arms a `setTimeout` with the value, and Node clamps any delay past
+ * `2^31-1` ms to **1 ms**. A `THROTTLE_LONG_TTL` of 30 days is a plausible thing
+ * to type, and it would not slow the tier down: it would run it on every request.
+ * So the ceiling is refused rather than accepted and quietly inverted.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** A timer value, bounded on both ends: 1 ms to `MAX_TIMER_MS`. */
+function timerMs(value: string | undefined, fallback: number, name: string) {
+  const parsed = positiveInteger(value, fallback, name);
+  if (parsed > MAX_TIMER_MS) {
+    throw new Error(
+      `${name} must be an integer between 1 and ${MAX_TIMER_MS} ms, got: ${parsed}`,
+    );
+  }
+  return parsed;
+}
+
 function configuration() {
   return {
     // ---- Env ----
-    nodeEnv: process.env.NODE_ENV || "development",
+    nodeEnv: process.env.NODE_ENV || DEFAULT_NODE_ENV,
 
     // ---- Server ----
     port: positiveInteger(process.env.PORT, 3000, "PORT"),
@@ -89,7 +111,15 @@ function configuration() {
       credentials: true,
     },
 
-    trustProxy: process.env.TRUST_PROXY === "true",
+    // Unset means "believe the proxy", and only where that is safe: this app is
+    // designed behind a proxy (a separate frontend origin), so trusting nothing by
+    // default made `req.ip` the proxy for every caller, and the throttler and every
+    // IP control then saw the whole platform as one client. Development has no
+    // proxy to trust, and trusting one there hides real client addresses.
+    trustProxy:
+      process.env.TRUST_PROXY === undefined || process.env.TRUST_PROXY === ""
+        ? isHardenedEnv(process.env.NODE_ENV)
+        : process.env.TRUST_PROXY === "true",
 
     // ---- Account erasure ----
     // The delay between anonymizing an account and dropping its row for good.
@@ -114,7 +144,7 @@ function configuration() {
     // ---- Throttler (NestJS ThrottlerModule) ----
     throttle: {
       short: {
-        ttl: positiveInteger(
+        ttl: timerMs(
           process.env.THROTTLE_SHORT_TTL,
           1_000,
           "THROTTLE_SHORT_TTL",
@@ -126,7 +156,7 @@ function configuration() {
         ),
       },
       medium: {
-        ttl: positiveInteger(
+        ttl: timerMs(
           process.env.THROTTLE_MEDIUM_TTL,
           10_000,
           "THROTTLE_MEDIUM_TTL",
@@ -138,7 +168,7 @@ function configuration() {
         ),
       },
       deletion: {
-        ttl: positiveInteger(
+        ttl: timerMs(
           process.env.THROTTLE_DELETION_TTL,
           900_000,
           "THROTTLE_DELETION_TTL",
@@ -150,7 +180,7 @@ function configuration() {
         ),
       },
       long: {
-        ttl: positiveInteger(
+        ttl: timerMs(
           process.env.THROTTLE_LONG_TTL,
           60_000,
           "THROTTLE_LONG_TTL",
@@ -219,8 +249,19 @@ function configuration() {
         process.env.SESSION_UPDATE_AGE,
         60 * 60 * 24, // 1 day
       ),
+      // Off unless it is asked for, which is the reverse of what it was.
+      //
+      // The cache bakes the whole session *and user* row into a signed cookie
+      // (`cookies/index.mjs:77`), and the only thing that invalidates it is its
+      // `version` field, which better-auth fixes at "1" unless a `version`
+      // function is registered (`cookies/index.mjs:80-86`). Nothing here changes
+      // it, so a row that was anonymized, un-verified or re-verified keeps being
+      // served from the cookie until it expires.
+      //
+      // Turning it on therefore means also registering a `version` that moves when
+      // the row does — which is why the knob is opt-in rather than opt-out.
       cookieCache: {
-        enabled: process.env.COOKIE_CACHE_ENABLED !== "false",
+        enabled: process.env.COOKIE_CACHE_ENABLED === "true",
         maxAge: positiveInteger(
           process.env.COOKIE_CACHE_MAX_AGE,
           300,
@@ -300,6 +341,22 @@ export default configuration;
 const BoolEnum = z.enum(["true", "false"]);
 const NodeEnvEnum = z.enum(["development", "production", "test", "provision"]);
 
+/** A `@nestjs/throttler` window: 1 ms to Node's own timer ceiling. */
+/**
+ * A `@nestjs/throttler` window: 1 ms to Node's own timer ceiling.
+ *
+ * Optional, because these four are unset in every normal deployment and the
+ * factory carries the defaults — and `z.coerce.number()` on an absent variable
+ * yields `NaN`, not `undefined`, so without this the schema would reject a
+ * perfectly ordinary configuration at boot.
+ */
+const TimerMsSchema = z.coerce
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_TIMER_MS)
+  .optional();
+
 /** Accepts plain seconds ("604800") or a suffixed duration ("15m", "1h"). */
 const DurationString = z.string().refine(
   (raw) => {
@@ -319,12 +376,14 @@ const DurationString = z.string().refine(
 export const envValidationSchema = z
   .object({
     // ---- Critical (required, no fallback) ----
-    BETTER_AUTH_SECRET: z.string().min(1),
+    // 32 characters is the floor better-auth's own guidance sets for a secret it
+    // signs with, and four characters is not a secret.
+    BETTER_AUTH_SECRET: z.string().min(32),
     DATABASE_URL: z.string().min(1),
 
     // ---- Server ----
     PORT: z.coerce.number().int().positive().max(65535).default(3000),
-    NODE_ENV: NodeEnvEnum.default("development"),
+    NODE_ENV: NodeEnvEnum.default(DEFAULT_NODE_ENV),
     BETTER_AUTH_URL: z.string().url().default("http://localhost:3000"),
 
     // ---- CORS / Frontend ----
@@ -350,9 +409,18 @@ export const envValidationSchema = z
     FRONTEND_URL: z.string().url().default("http://localhost:3001"),
 
     // ---- Proxy ----
-    TRUST_PROXY: BoolEnum.default("false"),
+    // No default: the factory decides between the environment and the hardened
+    // one, and a default here would replace that with a flat "false".
+    TRUST_PROXY: BoolEnum.optional(),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
+    // The TTLs were absent from this schema altogether, so a typo in one of them
+    // passed validation and was then rejected by the factory with a message about
+    // a different file. Bounded like the factory bounds them.
+    THROTTLE_SHORT_TTL: TimerMsSchema,
+    THROTTLE_MEDIUM_TTL: TimerMsSchema,
+    THROTTLE_LONG_TTL: TimerMsSchema,
+    THROTTLE_DELETION_TTL: TimerMsSchema,
     THROTTLE_SHORT_LIMIT: z.coerce.number().int().positive().default(5),
     THROTTLE_MEDIUM_LIMIT: z.coerce.number().int().positive().default(30),
     THROTTLE_LONG_LIMIT: z.coerce.number().int().positive().default(150),
@@ -364,7 +432,7 @@ export const envValidationSchema = z
     // ---- Session (better-auth) ----
     SESSION_EXPIRES_IN: DurationString.default("604800"),
     SESSION_UPDATE_AGE: DurationString.default("86400"),
-    COOKIE_CACHE_ENABLED: BoolEnum.default("true"),
+    COOKIE_CACHE_ENABLED: BoolEnum.optional(),
     COOKIE_CACHE_MAX_AGE: z.coerce.number().int().positive().default(300),
 
     // ---- JWT (better-auth, optional) ----
