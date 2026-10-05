@@ -1,6 +1,5 @@
 import { applyDecorators, SetMetadata } from "@nestjs/common";
-import { SkipThrottle, Throttle } from "@nestjs/throttler";
-import configuration from "../config/configuration";
+import { SkipThrottle } from "@nestjs/throttler";
 
 /**
  * The throttle tiers the global guard applies to every route.
@@ -13,15 +12,6 @@ export const THROTTLE_NAMES = ["short", "medium", "long"] as const;
 
 export type ThrottleName = (typeof THROTTLE_NAMES)[number];
 
-export interface ThrottleTier {
-  ttl: number;
-  limit: number;
-}
-
-export function throttleTier(name: ThrottleName): ThrottleTier {
-  return configuration().throttle[name];
-}
-
 /**
  * The erasure tier, and the metadata that opts a route into it.
  *
@@ -33,20 +23,31 @@ export function throttleTier(name: ThrottleName): ThrottleTier {
  */
 export const DELETION_THROTTLE_KEY = "kineo:throttle:deletion";
 
-export function deletionThrottleTier(): ThrottleTier {
-  return configuration().throttle.deletion;
-}
-
 /**
- * Applies the erasure tier to one route and skips the three global ones.
+ * Applies one configured tier to a route and skips the other global ones.
  *
- * The endpoint is anonymous and the token is the only proof of identity, so it
- * gets a long window with a small budget rather than the global 1-second tier.
+ * The decorator narrows *which* tiers apply; it deliberately does not say how big
+ * they are. `@nestjs/throttler` resolves the numbers in this order
+ * (`throttler.guard.js:83-84`):
+ *
+ * ```js
+ * const limit = await this.resolveValue(context, routeOrClassLimit || namedThrottler.limit);
+ * const ttl   = await this.resolveValue(context, routeOrClassTtl  || namedThrottler.ttl);
+ * ```
+ *
+ * So a `Throttle()` here wins over the tier registered by
+ * `ThrottlerModule.forRootAsync`. This decorator used to carry one, with values
+ * read by calling `configuration()` — which reads `process.env` and bypasses the
+ * validated `ConfigService` — at the moment the controller module was imported.
+ * The result was a second, frozen copy of every limit, on every route wearing
+ * the decorator: changing `THROTTLE_LONG_TTL` in the environment had no effect on
+ * them.
+ *
+ * The numbers now come from `forRootAsync` and its `ConfigService`, which is the
+ * single validated source. `throttle.spec.ts` pins that the decorators set no
+ * limit or TTL at all, so this cannot come back unnoticed.
  */
-/** Applies one configured tier to a route and skips the other global ones. */
 export function ThrottleWithConfig(throttleName: ThrottleName) {
-  const { limit, ttl } = throttleTier(throttleName);
-
   return applyDecorators(
     SkipThrottle(
       Object.fromEntries(
@@ -56,19 +57,22 @@ export function ThrottleWithConfig(throttleName: ThrottleName) {
         ]),
       ),
     ),
-    Throttle({ [throttleName]: { limit, ttl } }),
   );
 }
 
-/** Applies the erasure tier to one route and skips the three global ones. */
+/**
+ * The erasure tier on one route, and the erasure tier off everywhere else.
+ *
+ * Same reasoning as `ThrottleWithConfig`: this only opts in. The endpoint is
+ * anonymous and its token is the only proof of identity, so it gets the erasure
+ * budget — a long window with a small allowance — rather than the global
+ * one-second tier. The budget itself is the one `forRootAsync` registered.
+ */
 export function ThrottleDeletion() {
-  const { limit, ttl } = deletionThrottleTier();
-
   return applyDecorators(
     SetMetadata(DELETION_THROTTLE_KEY, true),
     SkipThrottle(
       Object.fromEntries(THROTTLE_NAMES.map((name) => [name, true])),
     ),
-    Throttle({ deletion: { limit, ttl } }),
   );
 }
