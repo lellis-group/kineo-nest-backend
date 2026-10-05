@@ -20,6 +20,47 @@ function pathOnly(url?: string): string | undefined {
   return queryStart === -1 ? url : url.slice(0, queryStart);
 }
 
+/**
+ * The same, for a message that embeds a URL.
+ *
+ * Needed because Nest's own "route not found" message *is* the URL, query string
+ * included, so stripping the request path was not enough to keep a token out of
+ * a 404 body. An exception message can equally quote the URL it was about.
+ */
+function withoutQueryString(message: string): string {
+  const queryStart = message.indexOf("?");
+  if (queryStart === -1) return message;
+
+  // Stop at the first character that ends the URL rather than assume the message
+  // ends with it: "Cannot GET /x?token=abc (already handled)" must keep its tail.
+  const rest = message.slice(queryStart + 1);
+  const terminator = rest.search(/[\s"'`)\]}]/);
+  if (terminator === -1) return message.slice(0, queryStart);
+
+  return message.slice(0, queryStart) + "<redacted>" + rest.slice(terminator);
+}
+
+/**
+ * The machine-readable code an exception carries, when it carries one.
+ *
+ * `refusal()` and the erasure endpoint both raise a body of
+ * `{ statusCode, code, message }` and the client branches on `code`. This filter
+ * rebuilt the body from `exception.message` alone, so in a hardened environment
+ * every one of those codes was dropped — while development, which delegates to
+ * the base filter, kept them. The same request would then be read two different
+ * ways depending on where it ran.
+ *
+ * Echoed only when the exception supplies one, so every route that has no code
+ * keeps the body shape it had.
+ */
+function codeOf(body: string | object | undefined): string | undefined {
+  if (typeof body === "object" && body !== null && "code" in body) {
+    const code = (body as { code?: unknown }).code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
+}
+
 @Catch(HttpException)
 export class HttpExceptionFilter extends BaseExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
@@ -68,14 +109,22 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       const response = ctx.getResponse();
       const request = ctx.getRequest();
       const status = exception.getStatus();
+      const exceptionBody = exception.getResponse();
+      const code = codeOf(exceptionBody);
+      const message = withoutQueryString(exception.message);
 
       this.logger.error(
-        `HTTP ${status} on ${request?.method} ${pathOnly(request?.url)}: ${exception.message}`,
+        `HTTP ${status} on ${request?.method} ${pathOnly(request?.url)}: ${message}`,
       );
 
       const sanitizedResponse = {
         statusCode: status,
-        message: status >= 500 ? "Internal server error" : exception.message,
+        message: status >= 500 ? "Internal server error" : message,
+        // A single status can mean several unrelated things — 409 covers both "a
+        // third party blocks this" and "no matching pending request" — so without a
+        // discriminator the client can only guess, and guesses wrong. Echoed only
+        // when the exception supplies one, so routes without a code are unchanged.
+        ...(code ? { code } : {}),
         path: pathOnly(request?.url),
         timestamp: new Date().toISOString(),
       };
