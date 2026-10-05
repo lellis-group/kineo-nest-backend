@@ -178,6 +178,96 @@ describe("deleting an account that holds another candidate's application", () =>
     expect(await fx.prisma.application.count()).toBe(1);
   });
 
+  it("allows DELETE /profile/:id when the active applications are elsewhere", async () => {
+    // The negative case of the one above, and the one the guard got wrong: it
+    // used to run with no listing filter at all, so any candidate anywhere in
+    // the platform applying to anything was enough to refuse this deletion. The
+    // refusal tests passed all the same — they assert a 409 that an unscoped
+    // query produces even more reliably than a scoped one.
+    const { owner, ownerProfile, application } = await seedScenario();
+    const cookies = await signIn(fx.baseUrl, owner.email, PASSWORD);
+
+    // This scenario refuses the delete on purpose, so the refusal is lifted by
+    // settling the owner's only third-party application. What is left is the
+    // shape the guard used to get wrong: the owner owns nothing at stake, and
+    // someone else's application is on someone else's listing.
+    await fx.prisma.application.delete({ where: { id: application.id } });
+
+    // Somebody else owns an unrelated listing, with its own applicant.
+    const stranger = await createVerifiedUser(
+      fx.prisma,
+      "user-stranger",
+      "stranger@test.invalid",
+      PASSWORD,
+    );
+    const strangerProfile = await fx.prisma.profile.create({
+      data: {
+        id: "profile-stranger",
+        userId: stranger.id,
+        specialty: "GENERALIST",
+        profileType: "INSTALLED",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    const otherListing = await fx.prisma.replacementListing.create({
+      data: {
+        id: "listing-stranger",
+        practiceId: (
+          await fx.prisma.practice.create({
+            data: {
+              id: "practice-stranger",
+              ownerId: strangerProfile.id,
+              name: "Other Practice",
+              address: "2 rue",
+              city: "Lyon",
+              createdAt: new Date(),
+            },
+          })
+        ).id,
+        createdById: strangerProfile.id,
+        title: "Another cover",
+        startDate: new Date("2026-12-01"),
+        endDate: new Date("2026-12-15"),
+        specialty: "GENERALIST",
+        status: "OPEN",
+        urgent: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await fx.prisma.application.create({
+      data: {
+        id: "application-stranger",
+        listingId: otherListing.id,
+        applicantId: strangerProfile.id,
+        status: "PENDING",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    const response = await request(fx.baseUrl)
+      .delete(`/profile/${ownerProfile.id}`)
+      .set("Cookie", cookies);
+
+    expect(response.status).toBe(200);
+    expect(
+      await fx.prisma.profile.count({
+        where: { id: { not: SYSTEM_SCAFFOLD.profileId } },
+      }),
+    ).toBe(2);
+    // The owner's profile, practice and listing went. The stranger's application
+    // survived a cascade that had nothing to do with it, which is the whole
+    // point of scoping the guard.
+    expect(await fx.prisma.application.count()).toBe(1);
+    expect(
+      await fx.prisma.application.count({
+        where: { id: "application-stranger" },
+      }),
+    ).toBe(1);
+  });
+
   it("allows the delete once the application is settled, and answers with the listing DTO", async () => {
     const { owner } = await seedScenario();
     await fx.prisma.application.update({

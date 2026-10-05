@@ -5,7 +5,10 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { assertNoThirdPartyApplications } from "../common/application-guard";
+import {
+  assertNoThirdPartyApplications,
+  ownedListingsFilter,
+} from "../common/application-guard";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
@@ -122,7 +125,16 @@ export class ProfileService {
       throw new ForbiddenException();
     }
 
-    await assertNoThirdPartyApplications(this.prisma, id);
+    // Scoped to the listings this profile owns, directly or through its
+    // practices, as the practice and listing deletes are. Without the filter the
+    // guard counts every application on every listing in the platform, and
+    // refuses this deletion because someone else — anywhere — applied to
+    // something.
+    await assertNoThirdPartyApplications(
+      this.prisma,
+      id,
+      ownedListingsFilter(id),
+    );
 
     return this.prisma.profile.delete({ where: { id } });
   }
