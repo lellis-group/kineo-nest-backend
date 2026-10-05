@@ -290,13 +290,53 @@ describe("GET /applications/mine", () => {
     });
   });
 
-  it("keeps the status filter working alongside the buckets", async () => {
+  it("filters by situation, and the totals do not follow it", async () => {
     const { cookies } = await seed();
 
-    const pending = await mine(cookies, { status: "PENDING" });
-    expect(pending.data.map((row: { id: string }) => row.id)).toEqual([
-      "pending",
-    ]);
-    expect(pending.meta.bucketCounts.PASSED_OVER).toBe(1);
+    const expected: Record<string, string[]> = {
+      PASSED_OVER: ["passed-over"],
+      POSTING_ENDED: ["withdrawn", "cancelled-now", "cancelled-legacy"],
+      REFUSED: ["refused-with-reason", "refused-without-reason"],
+    };
+
+    for (const [bucket, ids] of Object.entries(expected)) {
+      // Paged or not, the same set: `limit: 1` narrows the page without changing
+      // what the filter means.
+      const paged = await mine(cookies, { bucket, limit: "1" });
+      const whole = await mine(cookies, { bucket });
+
+      expect(whole.data).toHaveLength(ids.length);
+      expect(whole.meta.total).toBe(ids.length);
+      expect(paged.meta.total).toBe(ids.length);
+      expect(paged.data.length).toBeLessThanOrEqual(1);
+      expect(whole.meta.bucketCounts[bucket as keyof BucketCounts]).toBe(
+        ids.length,
+      );
+    }
+  });
+
+  it("composes a situation with a status the client also sent", async () => {
+    const { cookies } = await seed();
+
+    // The client sends both, one per chip row, so they have to compose rather than
+    // one silently winning.
+    const both = await mine(cookies, { bucket: "REFUSED", status: "REJECTED" });
+    expect(both.meta.total).toBe(2);
+
+    const contradiction = await mine(cookies, {
+      bucket: "REFUSED",
+      status: "PENDING",
+    });
+    expect(contradiction.meta.total).toBe(0);
+  });
+
+  it("refuses a situation it does not know", async () => {
+    const { cookies } = await seed();
+    const response = await request(fx.baseUrl)
+      .get("/applications/mine")
+      .query({ bucket: "SOMETHING_ELSE" })
+      .set("Cookie", cookies);
+
+    expect(response.status).toBe(400);
   });
 });

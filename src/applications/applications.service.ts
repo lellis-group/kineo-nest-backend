@@ -260,10 +260,17 @@ export class ApplicationsService {
 
     const { page, limit, skip } = paginate(filters);
 
-    const where = {
+    // Combined rather than spread: `rejectionBucketWhere` carries its own `status`,
+    // and spreading it over this object silently overwrote the caller's. A client
+    // sending `bucket=REFUSED&status=PENDING` — which the two chip rows do exactly
+    // that — got the rejections back instead of nothing, and nothing looked broken.
+    const where: Prisma.ApplicationWhereInput = {
       applicantId: profile.id,
-      status: filters.status,
       listingId: filters.listingId,
+      AND: [
+        ...(filters.status ? [{ status: filters.status }] : []),
+        ...(filters.bucket ? [rejectionBucketWhere(filters.bucket)] : []),
+      ],
     };
 
     // The counters answer over the whole collection, not the filtered slice — a chip
