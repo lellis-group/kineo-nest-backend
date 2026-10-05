@@ -157,13 +157,19 @@ describe("GET /practices around the antimeridian", () => {
     expect(ids(body)).toEqual(["near"]);
   });
 
-  it("counts the same population it returns", async () => {
-    await seedPractice("east", 0, 179.8);
-    await seedPractice("west", 0, -179.8);
+  it("counts the matches, not the page", async () => {
+    // The previous assertion was `total === data.length`, and it held for the
+    // wrong reason: both came out of the same capped array the service had
+    // already sliced. This one puts 30 practices inside the radius and asks for 5.
+    for (let i = 0; i < 30; i += 1) {
+      await seedPractice(`many-${i}`, 0, i * 0.001);
+    }
 
-    const body = await search(0, 179.9, 100);
+    const body = await search(0, 0, 100, { limit: "5" });
 
-    expect(body.meta.total).toBe(body.data.length);
+    expect(body.data).toHaveLength(5);
+    expect(body.meta.total).toBe(30);
+    expect(body.meta.totalPages).toBe(6);
   });
 
   it("honours the radius, not only the box", async () => {
@@ -178,6 +184,57 @@ describe("GET /practices around the antimeridian", () => {
 });
 
 describe("GET /practices away from the edges", () => {
+  it("returns the nearest, across more candidates than the old cap", async () => {
+    // The old path fetched at most 500 candidates ordered by id and took the
+    // nearest of *those*, so past 500 the reader got an arbitrary subset's
+    // nearest. These are 510, deliberately in an order that puts the closest last
+    // by id: a capped implementation returns "near-0" here.
+    for (let i = 1; i <= 510; i += 1) {
+      await seedPractice(`far-${i}`, 0, i * 0.001);
+    }
+    await seedPractice("near", 0, 0);
+
+    const body = await search(0, 0, 100, { limit: "3" });
+
+    expect(ids(body)).toEqual(["near", "far-1", "far-2"]);
+    expect(body.meta.total).toBe(511);
+  });
+
+  it("pages without repeating or skipping a row", async () => {
+    for (let i = 0; i < 12; i += 1) {
+      await seedPractice(`p-${i}`, 0, i * 0.001);
+    }
+
+    const first = ids(await search(0, 0, 100, { limit: "5", page: "1" }));
+    const second = ids(await search(0, 0, 100, { limit: "5", page: "2" }));
+    const third = ids(await search(0, 0, 100, { limit: "5", page: "3" }));
+
+    expect([...first, ...second, ...third]).toHaveLength(12);
+    expect(new Set([...first, ...second, ...third]).size).toBe(12);
+    // Nearest first throughout, so the ordering is the distance and not the id.
+    expect(first[0]).toBe("p-0");
+  });
+
+  it("reads a LIKE wildcard as a literal character", async () => {
+    await seedPractice("plain", 0, 0, { name: "Cabinet 100%" });
+    await seedPractice("other", 0, 0.001, { name: "Cabinet Pasteur" });
+
+    const body = await search(0, 0, 100, { name: "100%" });
+
+    expect(ids(body)).toEqual(["plain"]);
+  });
+
+  it("does not let a term break out of the pattern", async () => {
+    await seedPractice("plain", 0, 0, { name: "Cabinet Epsilon" });
+    await seedPractice("other", 0, 0.001, { name: "Cabinet Zeta" });
+
+    // Without the escaping this is a pattern that matches both, and with a naive
+    // concatenation it would be a syntax error rather than a wrong answer.
+    const body = await search(0, 0, 100, { name: "%" });
+
+    expect(ids(body)).toEqual([]);
+  });
+
   it("does not return the scaffold", async () => {
     await seedPractice("lyon", 45.75, 4.85);
 

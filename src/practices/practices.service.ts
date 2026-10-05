@@ -16,14 +16,19 @@ import {
   getOwnedProfileIdSafe,
 } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
+import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreatePracticeDto } from "./dto/create-practice.dto";
 import type { FindPracticesDto } from "./dto/find-practices.dto";
 import { UpdatePracticeDto } from "./dto/update-practice.dto";
-import { longitudeRanges } from "./longitude-range";
+import {
+  geoWhere,
+  haversineKm,
+  PRACTICE_GEO_COLUMNS,
+  type PracticeGeoRow,
+} from "./geo-query";
 
 const EARTH_RADIUS_KM = 6_371;
-const MAX_GEO_CANDIDATES = 500;
 
 @Injectable()
 export class PracticesService {
@@ -54,73 +59,44 @@ export class PracticesService {
     const { page, limit, skip } = paginate(filters);
     if (lat !== undefined && lng !== undefined && radiusKm !== undefined) {
       const latitudeDelta = (radiusKm / EARTH_RADIUS_KM) * (180 / Math.PI);
+      // Near the poles the longitude window widens without bound as cos(lat)
+      // approaches zero. Clamping to the whole globe is honest there, because the
+      // exact haversine predicate discards whatever does not belong.
+      const cosLat = Math.cos((lat * Math.PI) / 180);
       const longitudeDelta =
-        latitudeDelta / Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+        Math.abs(cosLat) < 1e-6 ? 180 : latitudeDelta / Math.abs(cosLat);
 
-      const candidates = await this.prisma.practice.findMany({
-        where: {
-          isPublic: true,
-          latitude: {
-            not: null,
-            gte: lat - latitudeDelta,
-            lte: lat + latitudeDelta,
-          },
-          longitude: { not: null },
-          // The same two text filters the non-geographic path applies. They used
-          // to be missing here, silently: `?city=Lyon` with coordinates returned
-          // every public practice inside the box, because nothing read the
-          // parameter.
-          ...(name && {
-            name: { contains: name, mode: "insensitive" as const },
-          }),
-          ...(city && {
-            city: { contains: city, mode: "insensitive" as const },
-          }),
-          // The ranges are alternatives, so they need OR rather than AND — and
-          // OR at the top level, because Prisma does not accept it inside a
-          // scalar field filter. Neither mistake is visible to the compiler: the
-          // first returns every practice within reach of no interval at all, the
-          // second is rejected outright by the query.
-          OR: longitudeRanges(lng, longitudeDelta).map((range) => ({
-            longitude: range,
-          })),
-        },
-        take: MAX_GEO_CANDIDATES,
-        orderBy: [{ id: "desc" }],
+      const where = geoWhere({
+        lat,
+        lng,
+        radiusKm,
+        latitudeDelta,
+        longitudeDelta,
+        name,
+        city,
       });
 
-      const located = candidates.filter(
-        (
-          practice,
-        ): practice is typeof practice & {
-          latitude: number;
-          longitude: number;
-        } => practice.latitude !== null && practice.longitude !== null,
-      );
+      // Built per statement rather than once and shared. Reusing a fragment is
+      // in fact safe — checked against this Prisma version, nested and with a
+      // `raw` inside — but a function reads as what it is: the same predicate,
+      // written out twice, from one definition.
+      const [rows, counts] = await Promise.all([
+        this.prisma.$queryRaw<PracticeGeoRow[]>(Prisma.sql`
+          SELECT ${Prisma.raw(PRACTICE_GEO_COLUMNS)}
+          FROM practice p
+          WHERE ${where}
+          ORDER BY ${haversineKm(lat, lng)} ASC, p."id" ASC
+          LIMIT ${limit} OFFSET ${skip}
+        `),
+        this.prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::bigint AS total FROM practice p WHERE ${where}
+        `),
+      ]);
 
-      const practices = located
-        .map((practice) => ({
-          practice,
-          distance: this.distanceInKm(
-            lat,
-            lng,
-            practice.latitude,
-            practice.longitude,
-          ),
-        }))
-        .filter(({ distance }) => distance <= radiusKm)
-        .sort(
-          (left, right) =>
-            left.distance - right.distance ||
-            left.practice.id.localeCompare(right.practice.id),
-        );
-
-      const total = practices.length;
+      const total = Number(counts[0]?.total ?? 0);
 
       return {
-        data: practices
-          .slice(skip, skip + limit)
-          .map(({ practice }) => practice),
+        data: rows,
         meta: paginationMeta(total, page, limit),
       };
     }
@@ -145,19 +121,6 @@ export class PracticesService {
       data,
       meta: paginationMeta(total, page, limit),
     };
-  }
-
-  private distanceInKm(lat1: number, lng1: number, lat2: number, lng2: number) {
-    const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
-    const latitudeDelta = toRadians(lat2 - lat1);
-    const longitudeDelta = toRadians(lng2 - lng1);
-    const haversine =
-      Math.sin(latitudeDelta / 2) ** 2 +
-      Math.cos(toRadians(lat1)) *
-        Math.cos(toRadians(lat2)) *
-        Math.sin(longitudeDelta / 2) ** 2;
-
-    return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(haversine));
   }
 
   async findMine(userId: string) {
