@@ -409,23 +409,73 @@ export class ApplicationsService {
     return toApplicationDto(updated);
   }
 
+  /**
+   * Loads an application and settles who is allowed to decide on it, with one
+   * rule for the answer.
+   *
+   * Two statuses, because they answer different questions. A caller who is
+   * neither the applicant nor the listing's owner is told the application does
+   * not exist: they have no business knowing that it does. A caller who *is* one
+   * of the two, but is not the one whose turn it is, is told 403 — they already
+   * know the application exists, since it is theirs.
+   *
+   * The rule was written out in `reject` and `withdraw` and re-derived in
+   * `accept`, which folded the two cases together and answered 404 to an applicant
+   * asking to accept their own application — the one caller who plainly knew it
+   * was there. `REFUSAL_CODES.applicationNotListingOwner` was written for the
+   * answer and never used.
+   */
+  private async loadForDecision(
+    tx: Prisma.TransactionClient,
+    id: string,
+    userId: string,
+    required: "isOwner" | "isApplicant",
+  ) {
+    const application = await tx.application.findUnique({ where: { id } });
+    if (!application) {
+      throw new NotFoundException(`Application ${id} not found`);
+    }
+
+    const profileId = await getOwnedProfileId(tx, userId);
+
+    const listing = await tx.replacementListing.findUnique({
+      where: { id: application.listingId },
+    });
+
+    const isOwner = listing?.createdById === profileId;
+    const isApplicant = application.applicantId === profileId;
+
+    if (!isOwner && !isApplicant) {
+      throw new NotFoundException(`Application ${id} not found`);
+    }
+    if (required === "isOwner" && !isOwner) {
+      throw new ForbiddenException();
+    }
+    if (required === "isApplicant" && !isApplicant) {
+      throw new ForbiddenException();
+    }
+
+    return { application, listing, isOwner, isApplicant };
+  }
+
   async accept(id: string, userId: string) {
     const accepted = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const profileId = await getOwnedProfileId(tx, userId);
+        const { application, listing } = await this.loadForDecision(
+          tx,
+          id,
+          userId,
+          "isOwner",
+        );
 
-        const application = await tx.application.findUnique({ where: { id } });
-        if (!application) {
+        if (!listing) {
+          // Unreachable, and the compiler cannot see why: ownership was
+          // required above, and that is `listing?.createdById` compared to the
+          // caller, so a listing that does not exist cannot have produced it.
           throw new NotFoundException(`Application ${id} not found`);
         }
 
-        const listing = await tx.replacementListing.findUnique({
-          where: { id: application.listingId },
-        });
-        if (!listing || listing.createdById !== profileId) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw refusal(
             REFUSAL_CODES.applicationNotAcceptable,
@@ -478,26 +528,12 @@ export class ApplicationsService {
     const rejected = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const application = await tx.application.findUnique({ where: { id } });
-        if (!application) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-
-        const profileId = await getOwnedProfileId(tx, userId);
-
-        const listing = await tx.replacementListing.findUnique({
-          where: { id: application.listingId },
-        });
-
-        const isOwner = listing?.createdById === profileId;
-        const isApplicant = application.applicantId === profileId;
-
-        if (!isOwner && !isApplicant) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-        if (!isOwner) {
-          throw new ForbiddenException();
-        }
+        const { application } = await this.loadForDecision(
+          tx,
+          id,
+          userId,
+          "isOwner",
+        );
 
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw refusal(
@@ -529,26 +565,12 @@ export class ApplicationsService {
     const withdrawn = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const application = await tx.application.findUnique({ where: { id } });
-        if (!application) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-
-        const profileId = await getOwnedProfileId(tx, userId);
-
-        const listing = await tx.replacementListing.findUnique({
-          where: { id: application.listingId },
-        });
-
-        const isApplicant = application.applicantId === profileId;
-        const isOwner = listing?.createdById === profileId;
-
-        if (!isApplicant && !isOwner) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-        if (!isApplicant) {
-          throw new ForbiddenException();
-        }
+        const { application } = await this.loadForDecision(
+          tx,
+          id,
+          userId,
+          "isApplicant",
+        );
 
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw refusal(

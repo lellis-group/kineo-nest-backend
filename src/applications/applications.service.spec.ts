@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 import { PrismaService } from "../prisma.service";
@@ -180,6 +184,87 @@ describe("ApplicationsService", () => {
         rejectionReason: "test",
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  /**
+   * One rule, three actions: hide the application from someone who is not part
+   * of it, and tell the two who are when it is not their turn.
+   *
+   * `accept` used to fold both cases into its 404, so an applicant asking to
+   * accept their own application was told it did not exist — of their own
+   * application, which they could see on screen.
+   */
+  describe("who may decide", () => {
+    const application = {
+      id: "application-1",
+      listingId: "listing-1",
+      applicantId: "applicant-1",
+      status: "PENDING",
+    };
+
+    function serviceWith(profileId: string, listingOwnerId: string) {
+      const transactionClient = {
+        profile: { findUnique: async () => ({ id: profileId }) },
+        application: { findUnique: async () => application },
+        replacementListing: {
+          findUnique: async () => ({
+            id: "listing-1",
+            createdById: listingOwnerId,
+            status: "OPEN",
+          }),
+        },
+      };
+      const prisma = {
+        $transaction: async (
+          operation: (tx: typeof transactionClient) => unknown,
+        ) => operation(transactionClient),
+      } as unknown as PrismaService;
+      return new ApplicationsService(prisma, {
+        get: () => undefined,
+      } as unknown as ConfigService);
+    }
+
+    const actions: Array<
+      [string, (s: ApplicationsService) => Promise<unknown>]
+    > = [
+      ["accept", (s) => s.accept("application-1", "caller-user")],
+      [
+        "reject",
+        (s) =>
+          s.reject("application-1", "caller-user", { rejectionReason: "x" }),
+      ],
+      [
+        "withdraw",
+        (s) =>
+          s.withdraw("application-1", "caller-user", { withdrawnReason: "x" }),
+      ],
+    ];
+
+    for (const [name, call] of actions) {
+      it(`${name} answers 404 to a caller who is neither applicant nor owner`, async () => {
+        await expect(
+          call(serviceWith("profile-stranger", "owner-1")),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+    }
+
+    it("accept answers 403 to the applicant, who is not the owner", async () => {
+      await expect(
+        actions[0][1](serviceWith("applicant-1", "owner-1")),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("reject answers 403 to the applicant, who is not the owner", async () => {
+      await expect(
+        actions[1][1](serviceWith("applicant-1", "owner-1")),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("withdraw answers 403 to the owner, who is not the applicant", async () => {
+      await expect(
+        actions[2][1](serviceWith("owner-1", "owner-1")),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
   });
 
   it("withdraws an application and recalculates listing status", async () => {
