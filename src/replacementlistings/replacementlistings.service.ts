@@ -27,6 +27,33 @@ import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
 
+/**
+ * Settles every active application on a listing the platform is taking out of
+ * circulation, on behalf of the owner who closed or cancelled it.
+ *
+ * One function because `close` and `cancel` were doing this inline, side by side
+ * and one field apart: `close` recorded who had decided, `cancel` did not, so a
+ * cancellation left `decisionSource` NULL and an audit reading "who decided this"
+ * answered differently for two ways of ending the same listing. The reason is the
+ * only thing that differs between them, so it is the only thing passed in.
+ */
+async function rejectActiveApplicationsOnListing(
+  client: PrismaService | Prisma.TransactionClient,
+  listingId: string,
+  reason: string,
+  at: Date,
+): Promise<void> {
+  await client.application.updateMany({
+    where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
+    data: {
+      status: "REJECTED",
+      decisionSource: "PRACTICE_REJECTED",
+      rejectionReason: reason,
+      respondedAt: at,
+    },
+  });
+}
+
 // A listing in one of these still counts against the owner's quota: a draft
 // and a filled listing are both work in progress that has to be dealt with.
 const ACTIVE_LISTING_STATUSES: ListingStatus[] = RECRUITING_LISTING_STATUSES;
@@ -381,15 +408,12 @@ export class ReplacementlistingsService {
       include: APPLICATIONS_COUNT_INCLUDE,
     });
 
-    await this.prisma.application.updateMany({
-      where: { listingId: id, status: { in: ACTIVE_APPLICATION_STATUSES } },
-      data: {
-        status: "REJECTED",
-        decisionSource: "PRACTICE_REJECTED",
-        rejectionReason: PLATFORM_REJECTION_REASONS.listingWithdrawn,
-        respondedAt: new Date(),
-      },
-    });
+    await rejectActiveApplicationsOnListing(
+      this.prisma,
+      id,
+      PLATFORM_REJECTION_REASONS.listingWithdrawn,
+      new Date(),
+    );
 
     return toReplacementListingDto(this.withCount(updated));
   }
@@ -424,17 +448,12 @@ export class ReplacementlistingsService {
 
         const now = new Date();
 
-        await tx.application.updateMany({
-          where: {
-            listingId: id,
-            status: { in: ACTIVE_APPLICATION_STATUSES },
-          },
-          data: {
-            status: "REJECTED",
-            rejectionReason: PLATFORM_REJECTION_REASONS.listingCancelled,
-            respondedAt: now,
-          },
-        });
+        await rejectActiveApplicationsOnListing(
+          tx,
+          id,
+          PLATFORM_REJECTION_REASONS.listingCancelled,
+          now,
+        );
 
         return tx.replacementListing.update({
           where: { id },
