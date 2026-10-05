@@ -18,6 +18,9 @@ const validApplication = {
   status: "PENDING",
   message: null,
   rejectionReason: null,
+  // Derived by the mapper, so every hand-built fixture has to say which bucket it
+  // lands in — or null, which is what a non-rejected application is.
+  rejectionBucket: null,
   withdrawnReason: null,
   viewedAt: null,
   respondedAt: null,

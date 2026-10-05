@@ -7,6 +7,7 @@ import {
   ProfileType,
   Specialty,
 } from "../../generated/prisma/enums";
+import { REJECTION_BUCKETS } from "../rejection-buckets";
 
 /**
  * Embedded listing snapshot so cards/details need no extra fetches or
@@ -53,6 +54,15 @@ export const ApplicationSchema = z.object({
   status: z.enum(ApplicationStatus),
   message: z.string().nullable(),
   rejectionReason: z.string().nullable(),
+  /**
+   * Which situation a rejection is, or null when it is none of them.
+   *
+   * Derived rather than stored: it is a reading of the two fields above, and a
+   * stored copy would be free to disagree with them. The client gets it so it can
+   * group and label without re-deriving the classification — which is what would
+   * otherwise have to be written twice, once in SQL and once in TypeScript.
+   */
+  rejectionBucket: z.enum(REJECTION_BUCKETS).nullable(),
   withdrawnReason: z.string().nullable(),
   viewedAt: z.iso.datetime().nullable(),
   respondedAt: z.iso.datetime().nullable(),

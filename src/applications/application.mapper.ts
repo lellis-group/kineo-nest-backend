@@ -3,6 +3,7 @@ import type {
   ProfileType,
   Specialty,
 } from "../generated/prisma/enums";
+import { rejectionBucketOf } from "./rejection-buckets";
 
 type EmbeddedListing = {
   id: string;
@@ -59,6 +60,9 @@ function toEmbeddedApplicantDto(applicant: EmbeddedApplicant) {
 
 export function toApplicationDto<
   T extends {
+    status: string;
+    decisionSource: string | null;
+    rejectionReason: string | null;
     viewedAt: Date | null;
     respondedAt: Date | null;
     createdAt: Date;
@@ -71,6 +75,10 @@ export function toApplicationDto<
 
   return {
     ...rest,
+    // After the spread, so it cannot be shadowed by a stored field of the same name:
+    // this is a reading of the three fields above, and a stale copy in the response
+    // would be worse than none.
+    rejectionBucket: rejectionBucketOf(application),
     viewedAt: application.viewedAt ? application.viewedAt.toISOString() : null,
     respondedAt: application.respondedAt
       ? application.respondedAt.toISOString()

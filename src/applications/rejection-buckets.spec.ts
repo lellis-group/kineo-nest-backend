@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   REJECTION_BUCKET_KEYS,
   type RejectionBucket,
+  rejectionBucketOf,
   rejectionBucketWhere,
   zeroBucketCounts,
 } from "./rejection-buckets";
@@ -33,9 +34,9 @@ describe("rejection bucket predicates", () => {
     const where = of("PASSED_OVER");
 
     expect(where.status).toBe("REJECTED");
-    expect(where.rejectionReason).toBe(
+    expect((where.rejectionReason as { in: string[] }).in).toEqual([
       PLATFORM_REJECTION_REASONS.anotherCandidateRetained,
-    );
+    ]);
   });
 
   it("covers both spellings of a cancellation in the ended-posting bucket", () => {
@@ -117,5 +118,91 @@ describe("rejection bucket predicates", () => {
       POSTING_ENDED: 0,
       REFUSED: 0,
     });
+  });
+});
+
+describe("rejectionBucketOf", () => {
+  /**
+   * The function the response body is built from, pinned on the row shapes the
+   * application can actually hold.
+   *
+   * The expectation is written out rather than recomputed: a table built from the
+   * function's own output and compared against it proves only that the function is
+   * deterministic. Unlike a helper that re-decides "does this row match", this
+   * calls the shipped classifier, so a wrong answer here is a wrong answer there.
+   */
+  const row = (
+    status: string,
+    decisionSource: string | null,
+    rejectionReason: string | null,
+  ) => ({ status, decisionSource, rejectionReason });
+
+  const PRACTICE = "PRACTICE_REJECTED";
+
+  const cases: Array<[string, RejectionBucket | null]> = [
+    ["another candidate was retained", "PASSED_OVER"],
+    ["the listing was withdrawn", "POSTING_ENDED"],
+    ["the listing was cancelled, current spelling", "POSTING_ENDED"],
+    ["the listing was cancelled, older spelling", "POSTING_ENDED"],
+    ["the practice refused in its own words", "REFUSED"],
+    ["the practice refused without a reason", "REFUSED"],
+    // The regression the whole module exists to prevent: an erasure settles a
+    // rejection with no reason, which is what a refusal with no reason also looks
+    // like. Filed as a refusal, it tells someone a practice turned them down.
+    ["an erasure settled it with no reason", null],
+    ["the account was erased and the application withdrawn", null],
+    ["a withdrawn application", null],
+    ["a pending application", null],
+  ];
+
+  const rowsFor: Record<string, ReturnType<typeof row>> = {
+    "another candidate was retained": row(
+      "REJECTED",
+      PRACTICE,
+      PLATFORM_REJECTION_REASONS.anotherCandidateRetained,
+    ),
+    "the listing was withdrawn": row(
+      "REJECTED",
+      PRACTICE,
+      PLATFORM_REJECTION_REASONS.listingWithdrawn,
+    ),
+    "the listing was cancelled, current spelling": row(
+      "REJECTED",
+      PRACTICE,
+      PLATFORM_REJECTION_REASONS.listingCancelled,
+    ),
+    "the listing was cancelled, older spelling": row(
+      "REJECTED",
+      PRACTICE,
+      "The listing has been cancelled",
+    ),
+    "the practice refused in its own words": row(
+      "REJECTED",
+      PRACTICE,
+      "We went with someone local",
+    ),
+    "the practice refused without a reason": row("REJECTED", PRACTICE, null),
+    "an erasure settled it with no reason": row("REJECTED", "SYSTEM", null),
+    "the account was erased and the application withdrawn": row(
+      "REJECTED",
+      "SYSTEM",
+      PLATFORM_REJECTION_REASONS.applicantAccountErased,
+    ),
+    "a withdrawn application": row("WITHDRAWN", null, null),
+    "a pending application": row("PENDING", null, null),
+  };
+
+  for (const [label, expected] of cases) {
+    it(`classifies ${label} as ${expected ?? "no bucket"}`, () => {
+      expect(rejectionBucketOf(rowsFor[label])).toBe(expected);
+    });
+  }
+
+  it("covers every row shape the table names", () => {
+    // A case with no fixture would silently assert on undefined and pass, which is
+    // how a row shape ends up untested without anyone noticing.
+    expect(Object.keys(rowsFor).sort()).toEqual(
+      cases.map(([label]) => label).sort(),
+    );
   });
 });

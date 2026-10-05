@@ -1,5 +1,6 @@
 import { Prisma } from "../generated/prisma/client";
 import {
+  LEGACY_LISTING_CANCELLED_REASON,
   PLATFORM_REASONS_INCLUDING_LEGACY,
   PLATFORM_REJECTION_REASONS,
 } from "./rejection-reasons";
@@ -35,48 +36,125 @@ export const REJECTION_BUCKETS = {
 export type RejectionBucket =
   (typeof REJECTION_BUCKETS)[keyof typeof REJECTION_BUCKETS];
 
+/** How a bucket reads a row's reason: one of these, or anything else. */
+type ReasonRule =
+  | { kind: "one-of"; reasons: string[] }
+  | { kind: "not-platform" };
+
 /**
- * The predicate for one bucket, over any scope.
+ * The classification, written once.
  *
- * Deliberately three separate predicates rather than one classifier applied
- * in JavaScript: the counts and the page have to be answered by the same rule, and
- * two implementations of a classification are two classifications.
+ * Both consumers are derived from this table rather than spelled out separately:
+ * `rejectionBucketWhere` becomes SQL for the counts and the filtering, and
+ * `rejectionBucketOf` names the bucket for a row in a response body. If those were
+ * two hand-written implementations they would agree only until someone edited one,
+ * and the disagreement would be silent — the counts would say one thing and the rows
+ * another, which is the version of this bug a user cannot even report clearly.
  */
+type BucketSpec = {
+  status: "REJECTED";
+  /** Omitted when the bucket is about the source rather than the reason. */
+  reason?: ReasonRule;
+  decisionSource?: "PRACTICE_REJECTED";
+};
+
+const BUCKET_SPECS: Record<RejectionBucket, BucketSpec> = {
+  [REJECTION_BUCKETS.PASSED_OVER]: {
+    status: "REJECTED",
+    reason: {
+      kind: "one-of",
+      reasons: [PLATFORM_REJECTION_REASONS.anotherCandidateRetained],
+    },
+  },
+
+  [REJECTION_BUCKETS.POSTING_ENDED]: {
+    status: "REJECTED",
+    reason: {
+      kind: "one-of",
+      reasons: [
+        PLATFORM_REJECTION_REASONS.listingWithdrawn,
+        PLATFORM_REJECTION_REASONS.listingCancelled,
+        // Named rather than inferred: the copy was reviewed and this spelling was
+        // written before that, so it is still in older databases. Missing it files a
+        // cancelled posting as a refusal, the one reading that is always wrong.
+        LEGACY_LISTING_CANCELLED_REASON,
+      ],
+    },
+  },
+
+  [REJECTION_BUCKETS.REFUSED]: {
+    status: "REJECTED",
+    // The load-bearing use of the source. An erasure settles an application the same
+    // way a refusal with no reason looks, and only this keeps them apart.
+    decisionSource: "PRACTICE_REJECTED",
+    reason: { kind: "not-platform" },
+  },
+};
+
+function matchesReason(rule: ReasonRule, reason: string | null): boolean {
+  switch (rule.kind) {
+    case "one-of":
+      // Spelled without `includes` on a possibly-null value on purpose: a null
+      // reason is never one of these.
+      return reason !== null && rule.reasons.includes(reason);
+    case "not-platform":
+      // A refusal needs no reason, so a missing one still counts — which is also
+      // why the SQL side has to spell the null case out.
+      return (
+        reason === null || !PLATFORM_REASONS_INCLUDING_LEGACY.includes(reason)
+      );
+  }
+}
+
+/**
+ * The bucket a stored row falls in, or null when it falls in none.
+ *
+ * Null is the ordinary answer, not an error: a pending application, and a rejection
+ * an erasure settled, are both in no bucket.
+ */
+export function rejectionBucketOf(row: {
+  status: string;
+  decisionSource: string | null;
+  rejectionReason: string | null;
+}): RejectionBucket | null {
+  for (const [bucket, spec] of Object.entries(BUCKET_SPECS) as Array<
+    [RejectionBucket, BucketSpec]
+  >) {
+    if (row.status !== spec.status) continue;
+    if (spec.decisionSource && row.decisionSource !== spec.decisionSource)
+      continue;
+    if (spec.reason && !matchesReason(spec.reason, row.rejectionReason))
+      continue;
+    return bucket;
+  }
+  return null;
+}
+
+/** The same rule as SQL, for the filter and for the counts. */
 export function rejectionBucketWhere(
   bucket: RejectionBucket,
 ): Prisma.ApplicationWhereInput {
-  switch (bucket) {
-    case REJECTION_BUCKETS.PASSED_OVER:
-      return {
-        status: "REJECTED",
-        rejectionReason: PLATFORM_REJECTION_REASONS.anotherCandidateRetained,
-      };
+  const spec = BUCKET_SPECS[bucket];
 
-    case REJECTION_BUCKETS.POSTING_ENDED:
-      return {
-        status: "REJECTED",
-        rejectionReason: {
-          in: [
-            PLATFORM_REJECTION_REASONS.listingWithdrawn,
-            PLATFORM_REJECTION_REASONS.listingCancelled,
-            "The listing has been cancelled",
-          ],
-        },
-      };
-
-    case REJECTION_BUCKETS.REFUSED:
-      return {
-        status: "REJECTED",
-        decisionSource: "PRACTICE_REJECTED",
-        // `notIn` excludes NULL — SQL semantics — and a practice may refuse
-        // without giving a reason, so the two cases are spelled out. The
-        // `decisionSource` above is what keeps an erasure's own settling out.
-        OR: [
-          { rejectionReason: null },
-          { rejectionReason: { notIn: PLATFORM_REASONS_INCLUDING_LEGACY } },
-        ],
-      };
+  const where: Prisma.ApplicationWhereInput = { status: spec.status };
+  if (spec.decisionSource) {
+    where.decisionSource = spec.decisionSource;
   }
+
+  if (spec.reason?.kind === "one-of") {
+    where.rejectionReason = { in: spec.reason.reasons };
+  }
+
+  if (spec.reason?.kind === "not-platform") {
+    // SQL `notIn` excludes NULL, so "no reason given" has to be its own clause or a
+    // practice refusing without writing anything disappears from the counts.
+    where.OR = [
+      { rejectionReason: null },
+      { rejectionReason: { notIn: PLATFORM_REASONS_INCLUDING_LEGACY } },
+    ];
+  }
+
+  return where;
 }
 
 /** Every bucket, for the counts. */

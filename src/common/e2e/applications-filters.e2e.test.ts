@@ -228,6 +228,37 @@ describe("GET /applications/mine", () => {
     }
   });
 
+  it("names the same bucket on a row as the filter uses to select it", async () => {
+    // The classification is written once and read twice — once as SQL for the
+    // counts and the filter, once as a field for the rows a client groups. This is
+    // the test that the two readings cannot drift: a row the `REFUSED` filter
+    // returns, and labels `PASSED_OVER`, is a page whose chip and cards disagree.
+    const { cookies, rows } = await seed();
+
+    const byFilter: Record<string, string[]> = {};
+    for (const bucket of ["PASSED_OVER", "POSTING_ENDED", "REFUSED"]) {
+      const body = await mine(cookies, { bucket });
+      byFilter[bucket] = ids(body);
+      for (const row of body.data) {
+        expect(row.rejectionBucket).toBe(bucket);
+      }
+    }
+
+    // And from the other side: every row carries the bucket its own fields say,
+    // with nothing claimed by a filter it does not belong to.
+    const all = await mine(cookies);
+    const named = Object.values(byFilter).flat();
+    for (const row of all.data) {
+      if (row.rejectionBucket === null) {
+        expect(named).not.toContain(row.id);
+      } else {
+        expect(byFilter[row.rejectionBucket]).toContain(row.id);
+      }
+    }
+
+    expect(rows).toHaveLength(8);
+  });
+
   it("counts the buckets over the whole collection, not the filtered page", async () => {
     const { cookies } = await seed();
 
