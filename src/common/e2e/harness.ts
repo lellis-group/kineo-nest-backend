@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import type { INestApplication } from "@nestjs/common";
 import { Client } from "pg";
 import type { PrismaClient } from "../../generated/prisma/client";
+import { SYSTEM_SCAFFOLD } from "../system-scaffold";
 
 // Derived from KINEO_E2E_SUITE, which package.json sets per suite, so suites
 // run in separate processes never race between DROP and CREATE DATABASE.
@@ -104,6 +105,13 @@ export async function bootApp(): Promise<E2EFixture> {
   process.env.BETTER_AUTH_SECRET = "s".repeat(64);
   process.env.BETTER_AUTH_URL = "http://localhost:3001";
   process.env.REQUIRE_EMAIL_VERIFICATION = "true";
+  // Outside development and test the pepper is its own secret; here it only has
+  // to be stable, so the fingerprints a test asserts can be recomputed.
+  process.env.DELETION_PEPPER = "e".repeat(64);
+  // The erasure budget is a production value; a suite makes far more calls than
+  // a human and would throttle itself.
+  process.env.THROTTLE_DELETION_LIMIT = "1000";
+  process.env.THROTTLE_DELETION_TTL = "60000";
   // The shipped limits are production values; a suite makes far more calls per
   // second than a human and would throttle itself.
   process.env.THROTTLE_SHORT_LIMIT = "10000";
@@ -137,6 +145,8 @@ export async function bootApp(): Promise<E2EFixture> {
   const { createPrismaClient } = await import("../../lib/prisma");
   const prisma = createPrismaClient();
 
+  await ensureScaffold(prisma);
+
   fixture = {
     app,
     baseUrl: await app.getUrl(),
@@ -157,16 +167,72 @@ export async function shutdownApp(): Promise<void> {
   await dropIfExists();
 }
 
+/** Truncates the data a suite writes, leaving the scaffold in place. */
 export async function resetData(prisma: PrismaClient): Promise<void> {
   await prisma.application.deleteMany({});
   await prisma.replacementListing.deleteMany({});
-  await prisma.practice.deleteMany({});
-  await prisma.profile.deleteMany({});
+  await prisma.practice.deleteMany({
+    where: { id: { not: SYSTEM_SCAFFOLD.practiceId } },
+  });
+  await prisma.profile.deleteMany({
+    where: { id: { not: SYSTEM_SCAFFOLD.profileId } },
+  });
   await prisma.account.deleteMany({});
   await prisma.session.deleteMany({});
   await prisma.verification.deleteMany({});
   await prisma.dataDeletionRequest.deleteMany({});
-  await prisma.user.deleteMany({});
+  await prisma.user.deleteMany({
+    where: { id: { not: SYSTEM_SCAFFOLD.userId } },
+  });
+}
+
+/**
+ * The rows an erasure parks third-party applications on.
+ *
+ * The seed owns them in a deployment; the suite cannot run the seed, and the
+ * ghost listing needs a real practice to point at.
+ */
+async function ensureScaffold(prisma: PrismaClient): Promise<void> {
+  const now = new Date();
+
+  await prisma.user.upsert({
+    where: { id: SYSTEM_SCAFFOLD.userId },
+    create: {
+      id: SYSTEM_SCAFFOLD.userId,
+      email: SYSTEM_SCAFFOLD.email,
+      emailVerified: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    update: {},
+  });
+  await prisma.profile.upsert({
+    where: { id: SYSTEM_SCAFFOLD.profileId },
+    create: {
+      id: SYSTEM_SCAFFOLD.profileId,
+      userId: SYSTEM_SCAFFOLD.userId,
+      specialty: "GENERALIST",
+      profileType: "INSTALLED",
+      verified: true,
+      isPublic: false,
+      createdAt: now,
+      updatedAt: now,
+    },
+    update: {},
+  });
+  await prisma.practice.upsert({
+    where: { id: SYSTEM_SCAFFOLD.practiceId },
+    create: {
+      id: SYSTEM_SCAFFOLD.practiceId,
+      ownerId: SYSTEM_SCAFFOLD.profileId,
+      name: "System",
+      address: "-",
+      city: "-",
+      isPublic: false,
+      createdAt: now,
+    },
+    update: {},
+  });
 }
 
 /** A verified user with a credential account, ready to sign in over HTTP. */

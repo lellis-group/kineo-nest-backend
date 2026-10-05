@@ -1,7 +1,8 @@
-import { betterAuth } from "better-auth";
+import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
+import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
 import { isHardenedEnv } from "../../config/env";
 import {
@@ -11,6 +12,7 @@ import {
   sendVerificationEmail,
 } from "../email";
 import { buildFrontendAuthUrl } from "../email/links";
+import { deletionHash, deletionPepper } from "../hash";
 import { logError } from "../log";
 import { createPrismaClient } from "../prisma";
 import { emailVerificationStatusPlugin } from "./email-verification-status";
@@ -32,6 +34,8 @@ export interface AuthEnv {
   jwtExpirationTime: string;
   jwtRotationInterval?: number;
   requireEmailVerification: boolean;
+  accountPurgeGraceDays: number;
+  deletionRequestRetentionDays: number;
   frontendUrl: string;
   nodeEnv: string;
 }
@@ -99,6 +103,16 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       ? positiveInt(env.JWT_ROTATION_INTERVAL, 0, "JWT_ROTATION_INTERVAL")
       : undefined,
     requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
+    accountPurgeGraceDays: positiveInt(
+      env.ACCOUNT_PURGE_GRACE_DAYS,
+      30,
+      "ACCOUNT_PURGE_GRACE_DAYS",
+    ),
+    deletionRequestRetentionDays: positiveInt(
+      env.DATA_DELETION_REQUEST_RETENTION_DAYS,
+      365,
+      "DATA_DELETION_REQUEST_RETENTION_DAYS",
+    ),
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
     nodeEnv: env.NODE_ENV || "development",
   };
@@ -152,6 +166,10 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     ),
     requireEmailVerification:
       config.get<boolean>("requireEmailVerification", false) ?? false,
+    accountPurgeGraceDays:
+      config.get<number>("accountPurgeGraceDays", 30) ?? 30,
+    deletionRequestRetentionDays:
+      config.get<number>("dataDeletionRequestRetentionDays", 365) ?? 365,
     frontendUrl,
     nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
   };
@@ -220,21 +238,42 @@ export function createAuth(
         deleteTokenExpiresIn: 60 * 60 * 24,
 
         // Better-auth is limited to the REQUEST phase: mint the single-use token
-        // and email the confirmation link (frontend `/goodbye`). The hard delete
+        // and email the confirmation link (frontend `/goodbye`). The erasure
         // itself is done by `POST /account/confirm-deletion`
         // (AccountDeletionService): it consumes the token without requiring a
-        // session, performs the audit tracking (DataDeletionRequest -> EXECUTED)
-        // and purges `verification` leftovers, all in one transaction. The
-        // deletion callbacks (beforeDelete/afterDelete) are intentionally NOT
-        // wired here — better-auth never deletes the user in this flow, so they
-        // would be dead code.
+        // session, anonymizes instead of deleting, and records the trail.
+        //
+        // Two routes reach the delete phase from here without ever consulting
+        // sendDeleteAccountVerification: `POST /delete-user` with a `token`
+        // body field, and `GET /delete-user/callback?token=`. Both consume the
+        // verification row this config mints, so the emailed link reaches a raw
+        // cascade straight through the anonymization. beforeDelete refuses them
+        // both, and AccountErasureBypassSuite is what keeps it that way.
+        beforeDelete: async (user) => {
+          throw new APIError("FORBIDDEN", {
+            message:
+              "Account erasure runs through the emailed confirmation link. Use the link sent to the account, or POST /account/confirm-deletion with its token.",
+          });
+        },
+
         sendDeleteAccountVerification: async ({ user, url }) => {
+          // Counted before the email goes out, so the disclosure is about this
+          // account rather than a generic paragraph.
+          const thirdPartyApplications = await countThirdPartyApplications(
+            prisma,
+            user.id,
+          );
+
           // Accountability trail (art. 5(2) GDPR): record the request before
           // any execution. Never blocks the deletion flow on a bookkeeping
           // failure — the hourly sweep keeps the process resilient.
           try {
+            const pepper = deletionPepper();
             await prisma.dataDeletionRequest.create({
-              data: { userId: user.id, email: user.email },
+              data: {
+                userIdHash: deletionHash(user.id, pepper),
+                emailHash: deletionHash(user.email, pepper),
+              },
             });
           } catch (error) {
             logError("account.deletion.request.audit_failed", error, {
@@ -246,6 +285,9 @@ export function createAuth(
             email: user.email,
             name: user.name,
             url: buildFrontendAuthUrl(url, "/goodbye", undefined, frontendUrl),
+            thirdPartyApplications,
+            purgeGraceDays: authEnv.accountPurgeGraceDays,
+            trailRetentionDays: authEnv.deletionRequestRetentionDays,
           });
         },
       },

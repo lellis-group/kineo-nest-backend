@@ -17,8 +17,8 @@ import {
   Session,
 } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
-import { ThrottleWithConfig } from "../common/decorators/throttle-with-config.decorator";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
+import { ThrottleWithConfig } from "../common/throttle";
 import { CreatePracticeDto } from "./dto/create-practice.dto";
 import { FindPracticesDto } from "./dto/find-practices.dto";
 import { UpdatePracticeDto } from "./dto/update-practice.dto";

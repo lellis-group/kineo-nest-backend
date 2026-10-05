@@ -17,8 +17,8 @@ import {
   Session,
 } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
-import { ThrottleWithConfig } from "../common/decorators/throttle-with-config.decorator";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
+import { ThrottleWithConfig } from "../common/throttle";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
 import { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";

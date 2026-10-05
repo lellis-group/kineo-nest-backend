@@ -91,6 +91,26 @@ function configuration() {
 
     trustProxy: process.env.TRUST_PROXY === "true",
 
+    // ---- Account erasure ----
+    // The delay between anonymizing an account and dropping its row for good.
+    accountPurgeGraceDays: positiveInteger(
+      process.env.ACCOUNT_PURGE_GRACE_DAYS,
+      30,
+      "ACCOUNT_PURGE_GRACE_DAYS",
+    ),
+    // How long the executed trail is kept: it is the only proof the erasure
+    // happened, and it holds no identifier.
+    dataDeletionRequestRetentionDays: positiveInteger(
+      process.env.DATA_DELETION_REQUEST_RETENTION_DAYS,
+      365,
+      "DATA_DELETION_REQUEST_RETENTION_DAYS",
+    ),
+    pendingDeletionRequestRetentionDays: positiveInteger(
+      process.env.PENDING_DELETION_REQUEST_RETENTION_DAYS,
+      30,
+      "PENDING_DELETION_REQUEST_RETENTION_DAYS",
+    ),
+
     // ---- Throttler (NestJS ThrottlerModule) ----
     throttle: {
       short: {
@@ -115,6 +135,18 @@ function configuration() {
           process.env.THROTTLE_MEDIUM_LIMIT,
           30,
           "THROTTLE_MEDIUM_LIMIT",
+        ),
+      },
+      deletion: {
+        ttl: positiveInteger(
+          process.env.THROTTLE_DELETION_TTL,
+          900_000,
+          "THROTTLE_DELETION_TTL",
+        ),
+        limit: positiveInteger(
+          process.env.THROTTLE_DELETION_LIMIT,
+          5,
+          "THROTTLE_DELETION_LIMIT",
         ),
       },
       long: {
@@ -224,19 +256,6 @@ function configuration() {
 
     // ---- Database (mirrors validated DATABASE_URL for DI consumers) ----
     databaseUrl: (process.env.DATABASE_URL ?? "").trim(),
-
-    // ---- Data lifecycle ----
-    dataDeletionRequestRetentionDays: (() => {
-      const raw = process.env.DATA_DELETION_REQUEST_RETENTION_DAYS;
-      if (!raw) return 365;
-      const parsed = Number(raw);
-      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-        throw new Error(
-          "DATA_DELETION_REQUEST_RETENTION_DAYS must be a positive integer",
-        );
-      }
-      return parsed;
-    })(),
 
     // ---- Swagger (can be overridden via env if needed) ----
     swagger: {

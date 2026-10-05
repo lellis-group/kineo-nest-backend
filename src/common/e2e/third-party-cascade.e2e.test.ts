@@ -14,6 +14,7 @@ import {
   it,
 } from "bun:test";
 import request from "supertest";
+import { SYSTEM_SCAFFOLD } from "../system-scaffold";
 import {
   bootApp,
   createVerifiedUser,
@@ -151,7 +152,12 @@ describe("deleting an account that holds another candidate's application", () =>
       .set("Cookie", cookies);
 
     expect(response.status).toBe(409);
-    expect(await fx.prisma.practice.count()).toBe(1);
+    // The scaffold is the only other practice, and it is not the owner's.
+    expect(
+      await fx.prisma.practice.count({
+        where: { id: { not: SYSTEM_SCAFFOLD.practiceId } },
+      }),
+    ).toBe(1);
     expect(await fx.prisma.application.count()).toBe(1);
   });
 
@@ -164,7 +170,11 @@ describe("deleting an account that holds another candidate's application", () =>
       .set("Cookie", cookies);
 
     expect(response.status).toBe(409);
-    expect(await fx.prisma.profile.count()).toBe(2);
+    expect(
+      await fx.prisma.profile.count({
+        where: { id: { not: SYSTEM_SCAFFOLD.profileId } },
+      }),
+    ).toBe(2);
     expect(await fx.prisma.application.count()).toBe(1);
   });
 

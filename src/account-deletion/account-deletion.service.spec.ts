@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { GoneException, NotFoundException } from "@nestjs/common";
+import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import type { PrismaService } from "../prisma.service";
 import { AccountDeletionService } from "./account-deletion.service";
+import { ANONYMIZED_LISTING_TITLE } from "./anonymize";
+
+const PEPPER = "e".repeat(64);
 
 type Scenario = {
   verification?: {
@@ -10,11 +14,23 @@ type Scenario = {
     value: string;
     expiresAt: Date;
   } | null;
-  user?: { id: string; email: string } | null;
+  user?: {
+    id: string;
+    email: string;
+    deletedAt?: Date | null;
+  } | null;
+  profile?: { id: string; userId: string } | null;
+  listings?: { id: string; status: string }[];
+  applications?: { id: string; status: string }[];
+  thirdPartyApplications?: { id: string; listingId: string }[];
+  ghostListing?: { id: string } | null;
+  scaffoldMissing?: boolean;
 };
 
 function makeService(scenario: Scenario) {
   const calls: string[] = [];
+  const writes: Record<string, unknown> = {};
+
   const tx = {
     verification: {
       findFirst: async () => scenario.verification ?? null,
@@ -22,52 +38,210 @@ function makeService(scenario: Scenario) {
         calls.push("verification.delete");
         return {};
       },
-      deleteMany: async () => {
+      deleteMany: async (args: unknown) => {
         calls.push("verification.deleteMany");
+        writes.verificationWhere = args;
         return { count: 1 };
       },
     },
     user: {
       findUnique: async () => scenario.user ?? null,
-      delete: async () => {
-        calls.push("user.delete");
+      update: async (args: unknown) => {
+        calls.push("user.update");
+        writes.user = args;
         return {};
       },
     },
+    profile: {
+      findUnique: async () => scenario.profile ?? null,
+      update: async (args: unknown) => {
+        calls.push("profile.update");
+        writes.profile = args;
+        return {};
+      },
+    },
+    // The scaffold the third-party applications are parked on.
+    practice: {
+      findUnique: async () =>
+        scenario.scaffoldMissing ? null : { id: SYSTEM_SCAFFOLD.practiceId },
+    },
+    replacementListing: {
+      findFirst: async () => scenario.ghostListing ?? null,
+      create: async () => ({ id: "listing-ghost" }),
+      findMany: async () => scenario.listings ?? [],
+      updateMany: async (args: unknown) => {
+        calls.push("replacementListing.updateMany");
+        writes.listings = args;
+        return { count: (scenario.listings ?? []).length };
+      },
+    },
+    application: {
+      findMany: async (args: unknown) => {
+        calls.push("application.findMany");
+        writes.detachedWhere = args;
+        return scenario.thirdPartyApplications ?? [];
+      },
+      updateMany: async (args: unknown) => {
+        calls.push("application.updateMany");
+        writes.applications = args;
+        return { count: 1 };
+      },
+    },
+    session: {
+      deleteMany: async () => {
+        calls.push("session.deleteMany");
+        return { count: 2 };
+      },
+    },
+    account: {
+      deleteMany: async () => {
+        calls.push("account.deleteMany");
+        return { count: 1 };
+      },
+    },
     dataDeletionRequest: {
-      updateMany: async () => {
+      updateMany: async (args: unknown) => {
         calls.push("dataDeletionRequest.updateMany");
+        writes.trail = args;
         return { count: 1 };
       },
     },
   };
+
   const prisma = {
-    $transaction: async (run: (transaction: typeof tx) => Promise<void>) =>
+    $transaction: async (run: (transaction: typeof tx) => Promise<unknown>) =>
       run(tx),
   } as unknown as PrismaService;
 
-  return { service: new AccountDeletionService(prisma), calls };
+  return { service: new AccountDeletionService(prisma), calls, writes };
 }
 
+const LIVE_TOKEN = {
+  id: "verification-1",
+  identifier: "delete-account-abc",
+  value: "user-1",
+  expiresAt: new Date(Date.now() + 60_000),
+};
+
+beforeEach(() => {
+  process.env.DELETION_PEPPER = PEPPER;
+});
+
+afterEach(() => {
+  delete process.env.DELETION_PEPPER;
+});
+
 describe("AccountDeletionService", () => {
-  it("deletes the user, purges verification rows and marks the request executed", async () => {
-    const { service, calls } = makeService({
-      verification: {
-        id: "v1",
-        identifier: "delete-account-abc",
-        value: "user-1",
-        expiresAt: new Date(Date.now() + 60_000),
+  it("anonymizes the account instead of deleting the row", async () => {
+    const { service, writes } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "OPEN" }],
+      applications: [{ id: "application-1", status: "PENDING" }],
+    });
+
+    const result = await service.confirmDeletion("abc");
+
+    const userWrite = writes.user as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(userWrite.where).toEqual({ id: "user-1" });
+    expect(userWrite.data.email).toMatch(
+      /^erased-[0-9a-f]{32}@deleted\.invalid$/,
+    );
+    expect(userWrite.data.email).not.toContain("user@example.com");
+    expect(userWrite.data.name).toBeNull();
+    expect(userWrite.data.emailVerified).toBe(false);
+    expect(userWrite.data.deletedAt).toBeInstanceOf(Date);
+    expect(result.anonymizedAt).toEqual(expect.any(String));
+  });
+
+  it("scrubs the profile and takes the listings out of circulation", async () => {
+    const { service, writes } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "OPEN" }],
+    });
+
+    const result = await service.confirmDeletion("abc");
+
+    expect(writes.profile).toMatchObject({
+      data: {
+        rppsNumber: null,
+        city: null,
+        latitude: null,
+        longitude: null,
+        isPublic: false,
       },
+    });
+    const listingWrite = writes.listings as {
+      where: { id: { in: string[] } };
+      data: Record<string, unknown>;
+    };
+    expect(listingWrite.data.title).toBe(ANONYMIZED_LISTING_TITLE);
+    expect(listingWrite.data.status).toBe("CLOSED_NO_CANDIDATE");
+    expect(result.anonymizedListings).toBe(1);
+  });
+
+  it("leaves a listing that holds an accepted placement alone", async () => {
+    const { service, writes, calls } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "FILLED" }],
+    });
+
+    const result = await service.confirmDeletion("abc");
+
+    expect(calls).not.toContain("replacementListing.updateMany");
+    expect(result.protectedPlacements).toBe(1);
+    expect(result.anonymizedListings).toBe(0);
+    expect(writes.user).toBeDefined();
+  });
+
+  it("ends the sessions and the credentials, and purges the tokens", async () => {
+    const { service, calls, writes } = makeService({
+      verification: LIVE_TOKEN,
       user: { id: "user-1", email: "user@example.com" },
     });
 
     await service.confirmDeletion("abc");
 
-    expect(calls).toEqual([
-      "dataDeletionRequest.updateMany",
-      "user.delete",
-      "verification.deleteMany",
-    ]);
+    expect(calls).toContain("session.deleteMany");
+    expect(calls).toContain("account.deleteMany");
+    expect(calls).toContain("verification.deleteMany");
+    expect(writes.verificationWhere).toEqual({
+      where: {
+        OR: [
+          { identifier: "user@example.com" },
+          {
+            AND: [
+              { identifier: { startsWith: "delete-account-" } },
+              { value: "user-1" },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("marks the trail executed, keyed by the fingerprint rather than the id", async () => {
+    const { service, writes } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+    });
+
+    await service.confirmDeletion("abc");
+
+    expect(writes.trail).toMatchObject({
+      data: { status: "EXECUTED", executedAt: expect.any(Date) },
+    });
+    const where = (writes.trail as { where: { userIdHash: string } }).where;
+    expect(where.userIdHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(where).not.toHaveProperty("userId");
   });
 
   it("rejects an unknown or already used token with 404", async () => {
@@ -81,60 +255,59 @@ describe("AccountDeletionService", () => {
   it("rejects an expired token with 410 and consumes it", async () => {
     const { service, calls } = makeService({
       verification: {
-        id: "v1",
-        identifier: "delete-account-expired",
-        value: "user-1",
+        ...LIVE_TOKEN,
         expiresAt: new Date(Date.now() - 1_000),
       },
-      user: { id: "user-1", email: "user@example.com" },
-    });
-
-    await expect(service.confirmDeletion("expired")).rejects.toBeInstanceOf(
-      GoneException,
-    );
-    expect(calls).toEqual(["verification.delete"]);
-  });
-
-  it("rejects with 410 when the account is already deleted", async () => {
-    const { service, calls } = makeService({
-      verification: {
-        id: "v1",
-        identifier: "delete-account-abc",
-        value: "user-1",
-        expiresAt: new Date(Date.now() + 60_000),
-      },
-      user: null,
     });
 
     await expect(service.confirmDeletion("abc")).rejects.toBeInstanceOf(
       GoneException,
     );
-    expect(calls).toEqual(["verification.delete"]);
+    expect(calls).toContain("verification.delete");
   });
 
-  it("trims the token before lookup", async () => {
-    const seen: unknown[] = [];
-    const prisma = {
-      $transaction: async (
-        fn: (tx: {
-          verification: { findFirst: (args: unknown) => Promise<null> };
-        }) => Promise<void>,
-      ) =>
-        fn({
-          verification: {
-            findFirst: async (args: unknown) => {
-              seen.push(args);
-              return null;
-            },
-          },
-        }),
-    } as unknown as PrismaService;
-    const service = new AccountDeletionService(prisma);
-
-    await expect(service.confirmDeletion("  abc  ")).rejects.toBeInstanceOf(
-      NotFoundException,
+  it("rejects with 410 when the account is gone or already anonymized", async () => {
+    const missing = makeService({ verification: LIVE_TOKEN, user: null });
+    await expect(missing.service.confirmDeletion("abc")).rejects.toBeInstanceOf(
+      GoneException,
     );
-    expect(JSON.stringify(seen[0])).toContain("delete-account-abc");
-    expect(JSON.stringify(seen[0])).not.toContain("  abc  ");
+
+    const alreadyAnonymized = makeService({
+      verification: LIVE_TOKEN,
+      user: {
+        id: "user-1",
+        email: "erased-abc@deleted.invalid",
+        deletedAt: new Date(),
+      },
+    });
+    await expect(
+      alreadyAnonymized.service.confirmDeletion("abc"),
+    ).rejects.toBeInstanceOf(GoneException);
+    expect(alreadyAnonymized.calls).not.toContain("user.update");
+  });
+
+  it("trims the token before looking it up", async () => {
+    const { service } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+    });
+
+    await expect(service.confirmDeletion("  abc  ")).resolves.toMatchObject({
+      anonymizedAt: expect.any(String),
+    });
+  });
+
+  it("refuses to erase anything without a pepper", async () => {
+    delete process.env.DELETION_PEPPER;
+
+    const { service, calls } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+    });
+
+    await expect(service.confirmDeletion("abc")).rejects.toThrow(
+      "DELETION_PEPPER is required",
+    );
+    expect(calls).toHaveLength(0);
   });
 });

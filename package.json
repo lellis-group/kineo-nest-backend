@@ -17,9 +17,10 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
     "db:check": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
-    "test:e2e": "bun run test:e2e:cascade",
+    "test:e2e": "bun run test:e2e:cascade && bun run test:e2e:erasure",
     "test:all": "bun run test && bun run test:e2e",
-    "test:e2e:cascade": "KINEO_E2E_SUITE=cascade bun test src/common/e2e/third-party-cascade.e2e.test.ts"
+    "test:e2e:cascade": "KINEO_E2E_SUITE=cascade bun test src/common/e2e/third-party-cascade.e2e.test.ts",
+    "test:e2e:erasure": "KINEO_E2E_SUITE=erasure bun test src/common/e2e/erasure-bypass.e2e.test.ts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.3",

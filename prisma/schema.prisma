@@ -16,10 +16,15 @@ model User {
   updatedAt     DateTime  @updatedAt
   emailVerified Boolean   @default(false)
   image         String?
+  /// Set when the account has been anonymized by an erasure. The row stays, and
+  /// is only dropped by the purge sweep once the grace period has passed, so the
+  /// anonymized listings keep resolving to a real owner during that window.
+  deletedAt     DateTime?
   accounts      Account[]
   sessions      Session[]
   profile       Profile?
 
+  @@index([deletedAt])
   @@map("user")
 }
 
@@ -35,6 +40,9 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  // The hourly retention sweep deletes on expiresAt alone, in the process that
+  // serves requests.
+  @@index([expiresAt])
   @@map("session")
 }
 
@@ -66,7 +74,12 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@index([identifier], type: Hash)
+  // The erasure purges by identifier prefix, which is a range: a HASH index
+  // serves equality only, and the existing btree on identifier alone is the one
+  // that can answer it.
+  @@index([identifier])
+  @@index([expiresAt])
+  @@index([identifier, expiresAt])
   @@map("verification")
 }
 
@@ -223,15 +236,24 @@ model Application {
  * row must survive the account hard delete (which cascades everything else)
  * so the request/execution timeline stays provable.
  */
+/// Art. 5(2) accountability trail. The identifiers are keyed fingerprints: the
+/// trail has to answer "was my request processed?" without keeping the email it
+/// is about, and the pepper that produces them never reaches the database.
 model DataDeletionRequest {
   id         String                    @id @default(cuid())
-  userId     String
-  email      String
+  userIdHash String
+  emailHash  String
   status     DataDeletionRequestStatus @default(PENDING)
   createdAt  DateTime                  @default(now())
+  updatedAt  DateTime                  @updatedAt
   executedAt DateTime?
 
-  @@unique([userId], where: { status: "PENDING" }, map: "data_deletion_request_userId_idx")
-  @@index([userId, createdAt(sort: Desc)])
+  // UNIQUE, not a plain index: it is the only thing that makes a second PENDING
+  // request for the same person impossible. A new confirmation link supersedes
+  // the previous one and inserts a new row, so two concurrent requests can both
+  // read "one PENDING" and both insert.
+  @@unique([userIdHash], where: { status: "PENDING" }, map: "data_deletion_request_userIdHash_idx")
+  @@index([userIdHash, createdAt(sort: Desc)])
+  @@index([status, updatedAt])
   @@map("data_deletion_request")
 }
