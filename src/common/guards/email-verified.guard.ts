@@ -38,15 +38,16 @@ export class EmailVerifiedGuard implements CanActivate {
     }
 
     // The row, not the session: better-auth may serve the session from its
-    // cookie cache, and the account erasure is exactly where that snapshot
-    // lies — anonymization clears emailVerified while the cookie still says
-    // true.
+    // cookie cache, and the account erasure is exactly where that snapshot lies —
+    // anonymization clears emailVerified while the cookie still says true.
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { emailVerified: true },
+      select: { emailVerified: true, deletedAt: true },
     });
 
-    if (!user) {
+    // Checked before the flag, so an anonymized or purged account is refused
+    // either way: with the flag off, its emailVerified says nothing.
+    if (!user || user.deletedAt) {
       throw new ForbiddenException(
         "Email must be verified to perform this action",
       );
