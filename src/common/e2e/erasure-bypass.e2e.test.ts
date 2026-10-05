@@ -244,6 +244,29 @@ describe("POST /account/confirm-deletion", () => {
     expect(anonymized?.deletedAt).toBeInstanceOf(Date);
     expect(anonymized?.email).toMatch(/@deleted\.invalid$/);
 
+    // The practice the erased account owned, read back two ways: the row, and
+    // the public endpoint that used to list it with its real name and address for
+    // the whole grace window.
+    const practice = await fx.prisma.practice.findUnique({
+      where: { id: "practice-owner" },
+    });
+    expect(practice).toMatchObject({
+      isPublic: false,
+      latitude: null,
+      longitude: null,
+    });
+    expect(practice?.name).not.toBe("Test Practice");
+
+    const listed = await request(fx.baseUrl).get("/practices");
+    expect(listed.status).toBe(200);
+    expect(JSON.stringify(listed.body)).not.toContain("Test Practice");
+    // And out of the geographic index, since it has no coordinates left.
+    const geo = await request(fx.baseUrl).get(
+      "/practices?lat=45.75&lng=4.85&radiusKm=50",
+    );
+    expect(geo.status).toBe(200);
+    expect(JSON.stringify(geo.body)).not.toContain("Test Practice");
+
     // The application survives, on a listing owned by the scaffold.
     const application = await fx.prisma.application.findUnique({
       where: { id: "application-1" },

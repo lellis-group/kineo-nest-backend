@@ -64,6 +64,11 @@ function makeService(scenario: Scenario) {
     practice: {
       findUnique: async () =>
         scenario.scaffoldMissing ? null : { id: SYSTEM_SCAFFOLD.practiceId },
+      updateMany: async (args: unknown) => {
+        calls.push("practice.updateMany");
+        writes.practices = args;
+        return { count: 1 };
+      },
     },
     replacementListing: {
       findFirst: async () => scenario.ghostListing ?? null,
@@ -170,6 +175,52 @@ describe("AccountDeletionService", () => {
     expect(userWrite.data.emailVerified).toBe(false);
     expect(userWrite.data.deletedAt).toBeInstanceOf(Date);
     expect(result.anonymizedAt).toEqual(expect.any(String));
+  });
+
+  it("scrubs the practices the profile owned", async () => {
+    // The one thing an erasure used to walk past. `user`, `profile`,
+    // `replacementListing` and `application` were all scrubbed while a practice
+    // kept its real name, its real address and its coordinates, and stayed
+    // `isPublic` — still listed, still in the geographic index, for the whole
+    // grace window, pointing at a profile whose fields were all null.
+    const { service, writes, calls } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "OPEN" }],
+    });
+
+    await service.confirmDeletion("abc");
+
+    expect(calls).toContain("practice.updateMany");
+
+    // Copied before any assertion: `toMatchObject` with `expect.any` leaves its
+    // matchers in the object it matched, and this fake hands over a reference to
+    // the arguments it recorded.
+    const write = structuredClone(writes.practices) as {
+      where: { ownerId: string };
+      data: Record<string, string | number | boolean | null>;
+    };
+
+    expect(write.where).toEqual({ ownerId: "profile-1" });
+    expect(write.data.isPublic).toBe(false);
+
+    // Coordinates cleared, never moved to zero: a `lat`/`lng` of 0/0 is a real
+    // place in the Atlantic, and an indexed practice there is worse than one that
+    // has left the geo query's `latitude IS NOT NULL` branch.
+    expect(write.data.latitude).toBeNull();
+    expect(write.data.longitude).toBeNull();
+
+    // `name` is not nullable, so it takes a placeholder rather than null — and
+    // that placeholder has to say nothing and identify nobody.
+    for (const field of ["name", "address", "city"]) {
+      const value = write.data[field];
+      expect(typeof value).toBe("string");
+      expect(String(value)).not.toBe("");
+      expect(String(value).toLowerCase()).not.toContain("practice");
+      expect(String(value).toLowerCase()).not.toContain("cabinet");
+      expect(String(value).toLowerCase()).not.toContain("dr");
+    }
   });
 
   it("scrubs the profile and takes the listings out of circulation", async () => {

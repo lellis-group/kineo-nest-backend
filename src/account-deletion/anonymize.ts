@@ -31,6 +31,15 @@ export const ANONYMIZED_DESCRIPTION = "Withdrawn at the request of its author.";
 const ANONYMIZED_DATE = new Date("1970-01-01T00:00:00.000Z");
 
 /**
+ * What a practice name becomes.
+ *
+ * `name` is not nullable, so it cannot be blanked the way the profile's fields
+ * are. The string says nothing and identifies nobody, and `isPublic` is what
+ * actually takes the row out of circulation.
+ */
+const ANONYMIZED_PRACTICE_FIELD = "Erased with its owner";
+
+/**
  * An email that satisfies the unique index without identifying anyone.
  *
  * Keyed by the user fingerprint, so two erasures never collide and neither
@@ -154,6 +163,30 @@ export async function anonymizeAccount(
         longitude: null,
         isPublic: false,
         verified: false,
+      },
+    });
+
+    // The practices this profile owned.
+    //
+    // They were the one thing an erasure walked past: `user`, `profile`,
+    // `replacementListing` and `application` were all scrubbed, so a practice
+    // kept its real name, its real address and its coordinates, and stayed
+    // `isPublic` — still listed in `GET /practices` and still in the geographic
+    // index, for the whole `ACCOUNT_PURGE_GRACE_DAYS` window, pointing at a
+    // profile whose fields were all null.
+    //
+    // Coordinates are cleared rather than moved: a `lat`/`lng` of zero is a real
+    // place in the Atlantic, and an indexed practice there is worse than one that
+    // has left the `latitude IS NOT NULL` branch of the geo query entirely.
+    await prisma.practice.updateMany({
+      where: { ownerId: profile.id },
+      data: {
+        name: ANONYMIZED_PRACTICE_FIELD,
+        address: ANONYMIZED_PRACTICE_FIELD,
+        city: ANONYMIZED_PRACTICE_FIELD,
+        latitude: null,
+        longitude: null,
+        isPublic: false,
       },
     });
   }
