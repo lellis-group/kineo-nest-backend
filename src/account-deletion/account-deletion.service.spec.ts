@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { GoneException, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  GoneException,
+  NotFoundException,
+} from "@nestjs/common";
 import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import type { PrismaService } from "../prisma.service";
 import { AccountDeletionService } from "./account-deletion.service";
@@ -108,7 +112,9 @@ function makeService(scenario: Scenario) {
       updateMany: async (args: unknown) => {
         calls.push("dataDeletionRequest.updateMany");
         writes.trail = args;
-        return { count: 1 };
+        // Zero means no pending request matched this confirmation, which the
+        // service has to treat as a refusal rather than an erasure with no proof.
+        return { count: scenario.scaffoldMissing ? 0 : 1 };
       },
     },
   };
@@ -255,6 +261,32 @@ describe("AccountDeletionService", () => {
     expect(listingWrite.data.title).toBe(ANONYMIZED_LISTING_TITLE);
     expect(listingWrite.data.status).toBe("CLOSED_NO_CANDIDATE");
     expect(result.anonymizedListings).toBe(1);
+  });
+
+  it("refuses to erase when no pending request matches, and erases nothing", async () => {
+    // The trail row is the accountability trail (art. 5(2)). Anonymizing an
+    // account without one is the outcome that trail exists to prevent, and the
+    // count was ignored — so a rotated pepper, a swept row or a forged link all
+    // produced a completed erasure with no record of it.
+    const { service, calls, writes } = makeService({
+      scaffoldMissing: true,
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "OPEN" }],
+    });
+
+    await expect(service.confirmDeletion("abc")).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    // Nothing was rewritten: not the user, not the profile, not the listings.
+    expect(calls).not.toContain("user.update");
+    expect(calls).not.toContain("profile.update");
+    expect(calls).not.toContain("replacementListing.updateMany");
+    expect(writes.user).toBeUndefined();
+    expect(writes.profile).toBeUndefined();
+    expect(writes.listings).toBeUndefined();
   });
 
   it("leaves a listing that holds an accepted placement alone", async () => {

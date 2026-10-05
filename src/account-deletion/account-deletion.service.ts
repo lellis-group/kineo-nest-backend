@@ -1,4 +1,9 @@
-import { GoneException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  GoneException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { deletionHash, deletionPepper } from "../lib/hash";
 import { logEvent } from "../lib/log";
@@ -90,15 +95,35 @@ export class AccountDeletionService {
 
         const userIdHash = deletionHash(user.id, pepper);
 
+        // The trail row is settled *before* the erasure, and the count is read.
+        //
+        // It used to be settled afterwards and the count ignored: if no `PENDING`
+        // row matched — the pepper rotated, the row swept, a link forged — the
+        // account was anonymized and nothing recorded it. An erasure that cannot
+        // be accounted for is the one outcome art. 5(2) exists to prevent, and it
+        // is the one that must not pass silently.
+        //
+        // First, so that a failure here leaves the account intact and the reader
+        // able to ask again — the opposite of erasing and then discovering there
+        // is no proof.
+        const audited = await tx.dataDeletionRequest.updateMany({
+          where: { userIdHash, status: "PENDING" },
+          data: { status: "EXECUTED", executedAt: new Date() },
+        });
+
+        if (audited.count === 0) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: ERASURE_ERROR_CODES.NO_PENDING_REQUEST,
+            message:
+              "No pending erasure request matches this confirmation. Please request the deletion again.",
+          });
+        }
+
         const erasure = await anonymizeAccount(tx, {
           userId,
           email: user.email,
           userIdHash,
-        });
-
-        await tx.dataDeletionRequest.updateMany({
-          where: { userIdHash, status: "PENDING" },
-          data: { status: "EXECUTED", executedAt: new Date() },
         });
 
         return { ...erasure, anonymizedAt: new Date().toISOString() };
