@@ -7,6 +7,10 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
+  assertNoThirdPartyApplications,
+  PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+} from "../common/application-guard";
+import {
   getOwnedProfileId,
   getOwnedProfileIdSafe,
 } from "../common/profile-lookup";
@@ -182,6 +186,13 @@ export class PracticesService {
     if (practice.ownerId !== ownerId) {
       throw new ForbiddenException();
     }
+
+    await assertNoThirdPartyApplications(
+      this.prisma,
+      ownerId,
+      { practice: { ownerId } },
+      PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+    );
 
     return this.prisma.practice.delete({ where: { id } });
   }

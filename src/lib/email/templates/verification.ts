@@ -1,3 +1,5 @@
+import { escapeHtml, safeUrl } from "../escape";
+
 export function verificationEmailTemplate({
   name,
   url,
@@ -5,7 +7,8 @@ export function verificationEmailTemplate({
   name?: string | null;
   url: string;
 }) {
-  const displayName = name ?? "nouvel utilisateur";
+  const displayName = escapeHtml(name ?? "nouvel utilisateur");
+  const href = safeUrl(url);
 
   return `
 <!DOCTYPE html>
@@ -87,7 +90,7 @@ export function verificationEmailTemplate({
               <table align="center" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                 <tr>
                   <td align="center" style="background-color:#D7D1B0; padding:15px 34px; border-radius:999px;" bgcolor="#D7D1B0">
-                    <a href="${url}" style="color:#11100F; font-weight:600; font-size:16px; text-decoration:none; display:inline-block; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Vérifier mon email</a>
+                    <a href="${href}" style="color:#11100F; font-weight:600; font-size:16px; text-decoration:none; display:inline-block; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Vérifier mon email</a>
                   </td>
                 </tr>
               </table>

@@ -30,12 +30,12 @@ import {
 import { ProfileService } from "./profile.service";
 
 @ApiTags("Profile")
+@UseGuards(EmailVerifiedGuard)
 @Controller("profile")
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({
     summary: "Create a professional profile for the current user",
@@ -95,6 +95,7 @@ export class ProfileController {
   }
 
   @Delete(":id")
+  @ZodSerializerDto(Profile)
   @ApiOperation({ summary: "Delete a profile" })
   @ApiResponse({ status: 403, description: "Not the owner of this profile" })
   remove(@Session() session: UserSession, @Param("id") id: string) {

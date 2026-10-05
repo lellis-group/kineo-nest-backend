@@ -29,6 +29,7 @@ import {
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 @ApiTags("Replacement Listings")
+@UseGuards(EmailVerifiedGuard)
 @Controller("replacement-listings")
 export class ReplacementlistingsController {
   constructor(
@@ -36,7 +37,6 @@ export class ReplacementlistingsController {
   ) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({
     summary: "Create a draft replacement listing for a practice you own",
@@ -117,6 +117,7 @@ export class ReplacementlistingsController {
   }
 
   @Delete(":id")
+  @ZodSerializerDto(ReplacementListing)
   @ApiOperation({ summary: "Delete a listing" })
   @ApiResponse({ status: 403, description: "Not the owner of this listing" })
   remove(@Session() session: UserSession, @Param("id") id: string) {

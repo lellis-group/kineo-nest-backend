@@ -29,6 +29,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://johndoe:randompassword@localhost:5432/mydb?schema=public
       SHADOW_DATABASE_URL: postgresql://johndoe:randompassword@localhost:5432/kineo_shadow?schema=public
+      TEST_DATABASE_ADMIN_URL: postgresql://johndoe:randompassword@localhost:5432/postgres
       BETTER_AUTH_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_ci_secret
       BETTER_AUTH_URL: http://localhost:3000
       NODE_ENV: test
@@ -45,5 +46,8 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run test
+      # Each suite creates and drops its own throwaway database, so it needs the
+      # admin URL of the postgres instance rather than the application database.
+      - run: bun run test:e2e
       - run: bun run db:seed
       - run: bun run db:check

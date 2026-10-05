@@ -10,6 +10,7 @@ import { AppController } from "./app.controller";
 import { ApplicationsModule } from "./applications/applications.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception/http-exception.filter";
 import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-proxy.guard";
+import { THROTTLE_NAMES } from "./common/throttle";
 import configuration, { envValidationSchema } from "./config/configuration";
 import { DataLifecycleModule } from "./data-lifecycle/data-lifecycle.module";
 import { HealthModule } from "./health/health.module";
@@ -36,23 +37,14 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        throttlers: [
-          {
-            name: "short",
-            ttl: config.get<number>("throttle.short.ttl", 1000),
-            limit: config.get<number>("throttle.short.limit", 5),
-          },
-          {
-            name: "medium",
-            ttl: config.get<number>("throttle.medium.ttl", 10000),
-            limit: config.get<number>("throttle.medium.limit", 30),
-          },
-          {
-            name: "long",
-            ttl: config.get<number>("throttle.long.ttl", 60000),
-            limit: config.get<number>("throttle.long.limit", 150),
-          },
-        ],
+        // No fallback literals here: configuration() is the only place the
+        // limits are declared, and the numbers it used to repeat were a second
+        // source that could drift from it.
+        throttlers: THROTTLE_NAMES.map((name) => ({
+          name,
+          ttl: config.getOrThrow<number>(`throttle.${name}.ttl`),
+          limit: config.getOrThrow<number>(`throttle.${name}.limit`),
+        })),
       }),
     }),
     AuthModule.forRootAsync({

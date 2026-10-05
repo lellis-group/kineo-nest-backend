@@ -30,7 +30,6 @@ export class AccountDeletionService {
     const trimmed = token.trim();
 
     let deletedUserId: string | null = null;
-    let deletedUserEmail: string | null = null;
 
     await this.prisma.$transaction(async (tx) => {
       const verification = await tx.verification.findFirst({
@@ -64,7 +63,6 @@ export class AccountDeletionService {
 
       const userEmail = user.email;
       deletedUserId = userId;
-      deletedUserEmail = userEmail;
 
       await tx.dataDeletionRequest.updateMany({
         where: { userId, status: "PENDING" },
@@ -73,9 +71,9 @@ export class AccountDeletionService {
 
       await tx.user.delete({ where: { id: userId } });
 
-      // `verification` n'a pas de FK vers `user` : sans cette purge, les jetons
-      // liés à l'identité supprimée (vérification d'email, reset password
-      // indexés par email) survivraient au compte.
+      // `verification` has no foreign key to `user`: without this purge, the
+      // tokens tied to the deleted identity (email verification, password reset,
+      // both indexed by email) would outlive the account.
       await tx.verification.deleteMany({
         where: {
           OR: [
@@ -90,10 +88,7 @@ export class AccountDeletionService {
     });
 
     if (deletedUserId) {
-      logEvent("account.deletion.confirmed", {
-        userId: deletedUserId,
-        email: deletedUserEmail,
-      });
+      logEvent("account.deletion.confirmed", { userId: deletedUserId });
     }
   }
 }

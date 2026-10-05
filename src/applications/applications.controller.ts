@@ -26,12 +26,12 @@ import {
 } from "./entities/application.entity";
 
 @ApiTags("Applications")
+@UseGuards(EmailVerifiedGuard)
 @Controller("applications")
 export class ApplicationsController {
   constructor(private readonly applicationsService: ApplicationsService) {}
 
   @Post()
-  @UseGuards(EmailVerifiedGuard)
   @ThrottleWithConfig("medium")
   @ApiOperation({ summary: "Apply to a replacement listing" })
   @ApiResponse({ status: 201, description: "Application submitted" })

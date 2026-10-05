@@ -6,6 +6,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import {
+  assertNoThirdPartyApplications,
+  LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+} from "../common/application-guard";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import type {
@@ -286,7 +290,21 @@ export class ReplacementlistingsService {
       );
     }
 
-    return this.prisma.replacementListing.delete({ where: { id } });
+    await assertNoThirdPartyApplications(
+      this.prisma,
+      listing.createdById,
+      { id: listing.id },
+      LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+    );
+
+    // Mapped like every other read: the route serializes with the listing DTO,
+    // which expects ISO dates and an application count, and a raw Prisma row
+    // satisfies neither.
+    const deleted = await this.prisma.replacementListing.delete({
+      where: { id },
+    });
+
+    return toReplacementListingDto({ ...deleted, applicationsCount: 0 });
   }
 
   async close(id: string, userId: string) {

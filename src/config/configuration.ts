@@ -94,7 +94,11 @@ function configuration() {
     // ---- Throttler (NestJS ThrottlerModule) ----
     throttle: {
       short: {
-        ttl: 1_000,
+        ttl: positiveInteger(
+          process.env.THROTTLE_SHORT_TTL,
+          1_000,
+          "THROTTLE_SHORT_TTL",
+        ),
         limit: positiveInteger(
           process.env.THROTTLE_SHORT_LIMIT,
           5,
@@ -102,7 +106,11 @@ function configuration() {
         ),
       },
       medium: {
-        ttl: 10_000,
+        ttl: positiveInteger(
+          process.env.THROTTLE_MEDIUM_TTL,
+          10_000,
+          "THROTTLE_MEDIUM_TTL",
+        ),
         limit: positiveInteger(
           process.env.THROTTLE_MEDIUM_LIMIT,
           30,
@@ -110,7 +118,11 @@ function configuration() {
         ),
       },
       long: {
-        ttl: 60_000,
+        ttl: positiveInteger(
+          process.env.THROTTLE_LONG_TTL,
+          60_000,
+          "THROTTLE_LONG_TTL",
+        ),
         limit: positiveInteger(
           process.env.THROTTLE_LONG_LIMIT,
           150,
@@ -127,6 +139,22 @@ function configuration() {
         "RATE_LIMIT_WINDOW",
       ),
       max: positiveInteger(process.env.RATE_LIMIT_MAX, 20, "RATE_LIMIT_MAX"),
+    },
+
+    // better-auth applies its own, much tighter rule to the credential
+    // endpoints and ignores rateLimit.max for them: 3 attempts per 10 seconds,
+    // which locks out everyone behind a shared egress IP.
+    credentialRateLimit: {
+      window: positiveInteger(
+        process.env.CREDENTIAL_RATE_LIMIT_WINDOW,
+        10,
+        "CREDENTIAL_RATE_LIMIT_WINDOW",
+      ),
+      max: positiveInteger(
+        process.env.CREDENTIAL_RATE_LIMIT_MAX,
+        3,
+        "CREDENTIAL_RATE_LIMIT_MAX",
+      ),
     },
 
     // ---- Session (better-auth) ----
