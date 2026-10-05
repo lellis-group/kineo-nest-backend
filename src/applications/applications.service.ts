@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -7,8 +6,14 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
+import {
+  ACTIVE_APPLICATION_STATUSES,
+  APPLICABLE_LISTING_STATUSES,
+  deriveListingStatus,
+  isTerminalListingStatus,
+} from "../common/listing-status";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
+import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type { ApplicationStatus } from "../generated/prisma/enums";
@@ -19,6 +24,7 @@ import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
+import { PLATFORM_REJECTION_REASONS } from "./rejection-reasons";
 
 // The mapper publishes name and image and nothing else, so a paginated list
 // does not need the email, the verification flag and the timestamps that
@@ -32,6 +38,13 @@ export class ApplicationsService {
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * Realigns a listing's status with the applications it actually holds.
+   *
+   * The rule lives in deriveListingStatus, which is also what the quota check
+   * in create() reads. This method used to redraw it inline, and the two copies
+   * agreed by coincidence.
+   */
   private async recalcListingStatus(
     tx: Prisma.TransactionClient,
     listingId: string,
@@ -40,36 +53,24 @@ export class ApplicationsService {
       where: { id: listingId },
     });
 
-    if (
-      !listing ||
-      listing.status === "FILLED" ||
-      listing.status === "CLOSED" ||
-      listing.status === "CANCELLED"
-    ) {
+    if (!listing) {
       return;
     }
 
-    const activeCount = await tx.application.count({
+    const activeApplications = await tx.application.count({
       where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
     });
 
-    let nextStatus = listing.status;
+    const status = deriveListingStatus({
+      current: listing.status,
+      activeApplications,
+      maxApplications: listing.maxApplications,
+    });
 
-    if (activeCount === 0) {
-      nextStatus = "OPEN";
-    } else if (
-      listing.maxApplications &&
-      activeCount >= listing.maxApplications
-    ) {
-      nextStatus = "FULL";
-    } else {
-      nextStatus = "IN_DISCUSSION";
-    }
-
-    if (nextStatus !== listing.status) {
+    if (status !== listing.status) {
       await tx.replacementListing.update({
         where: { id: listingId },
-        data: { status: nextStatus },
+        data: { status },
       });
     }
   }
@@ -129,7 +130,8 @@ export class ApplicationsService {
             });
 
             if (activeCount >= maxApplications) {
-              throw new BadRequestException(
+              throw refusal(
+                REFUSAL_CODES.applicationQuotaReached,
                 `You cannot have more than ${maxApplications} active applications`,
               );
             }
@@ -146,8 +148,9 @@ export class ApplicationsService {
               "You cannot apply to your own listing",
             );
           }
-          if (listing.status !== "OPEN" && listing.status !== "IN_DISCUSSION") {
-            throw new BadRequestException(
+          if (!APPLICABLE_LISTING_STATUSES.includes(listing.status)) {
+            throw refusal(
+              REFUSAL_CODES.applicationListingNotAccepting,
               "This listing is not accepting applications",
             );
           }
@@ -162,7 +165,8 @@ export class ApplicationsService {
             listing.maxApplications &&
             activeListingCount >= listing.maxApplications
           ) {
-            throw new BadRequestException(
+            throw refusal(
+              REFUSAL_CODES.applicationListingLimitReached,
               "This listing has reached its application limit",
             );
           }
@@ -178,11 +182,13 @@ export class ApplicationsService {
           await tx.replacementListing.update({
             where: { id: listing.id },
             data: {
-              status:
-                listing.maxApplications &&
-                activeListingCount + 1 >= listing.maxApplications
-                  ? "FULL"
-                  : "IN_DISCUSSION",
+              // The same derivation the settle paths use, with the
+              // application being created included in the count.
+              status: deriveListingStatus({
+                current: listing.status,
+                activeApplications: activeListingCount + 1,
+                maxApplications: listing.maxApplications,
+              }),
             },
           });
 
@@ -196,7 +202,11 @@ export class ApplicationsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
       ) {
-        throw new ConflictException("You already applied to this listing");
+        throw new ConflictException({
+          statusCode: 409,
+          code: REFUSAL_CODES.applicationAlreadyExists,
+          message: "You already applied to this listing",
+        });
       }
       throw error;
     }
@@ -232,7 +242,10 @@ export class ApplicationsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: {
           applicant: { include: { user: { select: USER_CARD_SELECT } } },
         },
@@ -271,7 +284,10 @@ export class ApplicationsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: { listing: { include: { practice: true } } },
       }),
       this.prisma.application.count({ where }),
@@ -357,7 +373,10 @@ export class ApplicationsService {
     }
 
     if (application.status !== "PENDING") {
-      throw new BadRequestException("Only pending applications can be edited");
+      throw refusal(
+        REFUSAL_CODES.applicationNotPending,
+        "Only pending applications can be edited",
+      );
     }
 
     const updated = await this.prisma.application.update({
@@ -376,7 +395,8 @@ export class ApplicationsService {
     }
 
     if (application.status !== "PENDING") {
-      throw new BadRequestException(
+      throw refusal(
+        REFUSAL_CODES.applicationNotShortlistable,
         "Only pending applications can be shortlisted",
       );
     }
@@ -407,16 +427,14 @@ export class ApplicationsService {
           throw new NotFoundException(`Application ${id} not found`);
         }
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
-          throw new BadRequestException(
+          throw refusal(
+            REFUSAL_CODES.applicationNotAcceptable,
             "Only pending or shortlisted applications can be accepted",
           );
         }
-        if (
-          listing.status === "FILLED" ||
-          listing.status === "CLOSED" ||
-          listing.status === "CANCELLED"
-        ) {
-          throw new BadRequestException(
+        if (isTerminalListingStatus(listing.status)) {
+          throw refusal(
+            REFUSAL_CODES.applicationListingNotAccepting,
             "This listing can no longer accept an application",
           );
         }
@@ -424,7 +442,11 @@ export class ApplicationsService {
         const now = new Date();
         const updated = await tx.application.update({
           where: { id },
-          data: { status: "ACCEPTED", respondedAt: now },
+          data: {
+            status: "ACCEPTED",
+            decisionSource: "PRACTICE_ACCEPTED",
+            respondedAt: now,
+          },
         });
         await tx.application.updateMany({
           where: {
@@ -434,7 +456,9 @@ export class ApplicationsService {
           },
           data: {
             status: "REJECTED",
-            rejectionReason: "Another candidate was selected for this listing",
+            decisionSource: "PRACTICE_REJECTED",
+            rejectionReason:
+              PLATFORM_REJECTION_REASONS.anotherCandidateRetained,
             respondedAt: now,
           },
         });
@@ -475,11 +499,9 @@ export class ApplicationsService {
           throw new ForbiddenException();
         }
 
-        if (
-          application.status !== "PENDING" &&
-          application.status !== "SHORTLISTED"
-        ) {
-          throw new BadRequestException(
+        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
+          throw refusal(
+            REFUSAL_CODES.applicationNotRejectable,
             "Only pending or shortlisted applications can be rejected",
           );
         }
@@ -488,6 +510,7 @@ export class ApplicationsService {
           where: { id },
           data: {
             status: "REJECTED",
+            decisionSource: "PRACTICE_REJECTED",
             rejectionReason: dto.rejectionReason,
             respondedAt: new Date(),
           },
@@ -527,11 +550,9 @@ export class ApplicationsService {
           throw new ForbiddenException();
         }
 
-        if (
-          application.status !== "PENDING" &&
-          application.status !== "SHORTLISTED"
-        ) {
-          throw new BadRequestException(
+        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
+          throw refusal(
+            REFUSAL_CODES.applicationNotWithdrawable,
             "Only pending or shortlisted applications can be withdrawn",
           );
         }
@@ -540,6 +561,7 @@ export class ApplicationsService {
           where: { id },
           data: {
             status: "WITHDRAWN",
+            decisionSource: "CANDIDATE_WITHDREW",
             withdrawnReason: dto.withdrawnReason,
           },
         });

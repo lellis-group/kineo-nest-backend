@@ -22,6 +22,22 @@ export class ReplacementListing extends createZodDto(
   ReplacementListingSchema,
 ) {}
 
+/**
+ * Totals per status, so the tabs on the owner's own listings can stay stable
+ * across pages and filters. `total` backs the "all" tab.
+ */
+export const ListingStatusCountsSchema = z.object({
+  total: z.number(),
+  DRAFT: z.number(),
+  OPEN: z.number(),
+  IN_DISCUSSION: z.number(),
+  FULL: z.number(),
+  FILLED: z.number(),
+  CLOSED: z.number(),
+  CLOSED_NO_CANDIDATE: z.number(),
+  CANCELLED: z.number(),
+});
+
 export const PaginatedReplacementListingsSchema = z.object({
   data: z.array(ReplacementListingSchema),
   meta: z.object({
@@ -29,6 +45,7 @@ export const PaginatedReplacementListingsSchema = z.object({
     page: z.number(),
     limit: z.number(),
     totalPages: z.number(),
+    counts: ListingStatusCountsSchema.optional(),
   }),
 });
 

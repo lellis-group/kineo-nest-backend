@@ -53,7 +53,12 @@ export class ProfileService {
     };
 
     const [data, total] = await Promise.all([
-      this.prisma.profile.findMany({ where, skip, take: limit }),
+      this.prisma.profile.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
       this.prisma.profile.count({ where }),
     ]);
 

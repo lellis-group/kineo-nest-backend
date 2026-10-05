@@ -1,38 +1,35 @@
 import {
-  BadRequestException,
   ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { PLATFORM_REJECTION_REASONS } from "../applications/rejection-reasons";
 import {
   assertNoThirdPartyApplications,
   LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
+import {
+  ACTIVE_APPLICATION_STATUSES,
+  isTerminalListingStatus,
+  RECRUITING_LISTING_STATUSES,
+} from "../common/listing-status";
 import { getOwnedProfileId } from "../common/profile-lookup";
+import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
-import type {
-  ApplicationStatus,
-  ListingStatus,
-} from "../generated/prisma/enums";
+import { Prisma } from "../generated/prisma/client";
+import type { ListingStatus } from "../generated/prisma/enums";
+import { ListingStatus as LISTING_STATUSES } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
 import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
 
-const ACTIVE_LISTING_STATUSES: ListingStatus[] = [
-  "DRAFT",
-  "OPEN",
-  "IN_DISCUSSION",
-  "FULL",
-  "FILLED",
-];
-const ACTIVE_APPLICATION_STATUSES: ApplicationStatus[] = [
-  "PENDING",
-  "SHORTLISTED",
-];
+// A listing in one of these still counts against the owner's quota: a draft
+// and a filled listing are both work in progress that has to be dealt with.
+const ACTIVE_LISTING_STATUSES: ListingStatus[] = RECRUITING_LISTING_STATUSES;
 
 const APPLICATIONS_COUNT_INCLUDE = {
   _count: {
@@ -82,7 +79,8 @@ export class ReplacementlistingsService {
             },
           });
           if (count >= maxListings) {
-            throw new BadRequestException(
+            throw refusal(
+              REFUSAL_CODES.listingQuotaReached,
               `You cannot have more than ${maxListings} active listings`,
             );
           }
@@ -109,6 +107,7 @@ export class ReplacementlistingsService {
 
   private buildListingsWhere(filters: FindReplacementListingsDto) {
     return {
+      status: filters.status,
       specialty: filters.specialty,
       urgent: filters.urgent,
       startDate:
@@ -133,9 +132,13 @@ export class ReplacementlistingsService {
     const limit = filters.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where = {
-      status: "OPEN" as const,
-      ...this.buildListingsWhere(filters),
+    // The public feed is OPEN whatever the caller asked for: a status filter on
+    // a listing somebody else owns would turn the feed into a way to read the
+    // statuses of postings still in circulation.
+    const { status: _statusFilter, ...publicFilters } = filters;
+    const where: Prisma.ReplacementListingWhereInput = {
+      ...this.buildListingsWhere(publicFilters),
+      status: "OPEN",
     };
 
     const [data, total] = await Promise.all([
@@ -143,7 +146,10 @@ export class ReplacementlistingsService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
@@ -169,23 +175,64 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(filters),
     };
 
-    const [data, total] = await Promise.all([
+    const // The buckets count every filter the paginator applies except the
+      // status one: bucketing by a status the caller already filtered on would
+      // zero every other tab.
+      { status: _status, ...countFilters } = filters;
+    const countsWhere = {
+      createdById: profileId,
+      ...this.buildListingsWhere(countFilters),
+    };
+
+    const [data, total, counts] = await Promise.all([
       this.prisma.replacementListing.findMany({
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        // createdAt is not unique, so ordering by it alone leaves Postgres free to
+        // return two rows in either order between two pages: offset pagination then
+        // repeats one and skips the other. The id breaks the tie.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         include: APPLICATIONS_COUNT_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
+      this.countListingsByStatus(countsWhere),
     ]);
 
     return {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCount(listing)),
       ),
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        counts,
+      },
     };
+  }
+
+  private async countListingsByStatus(
+    where: Prisma.ReplacementListingWhereInput,
+  ) {
+    const grouped = await this.prisma.replacementListing.groupBy({
+      by: ["status"],
+      where,
+      _count: true,
+    });
+
+    const counts = Object.fromEntries(
+      Object.values(LISTING_STATUSES).map((status) => [status, 0]),
+    ) as Record<ListingStatus, number>;
+    let total = 0;
+
+    for (const row of grouped) {
+      counts[row.status] = row._count;
+      total += row._count;
+    }
+
+    return { ...counts, total };
   }
 
   async findOne(id: string, requesterUserId?: string) {
@@ -238,7 +285,10 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status !== "DRAFT") {
-      throw new BadRequestException("Only draft listings can be published");
+      throw refusal(
+        REFUSAL_CODES.listingNotDraft,
+        "Only draft listings can be published",
+      );
     }
 
     const updated = await this.prisma.replacementListing.update({
@@ -252,12 +302,11 @@ export class ReplacementlistingsService {
   async update(id: string, userId: string, dto: UpdateReplacementListingDto) {
     const listing = await this.assertOwnership(id, userId);
 
-    if (
-      listing.status === "FILLED" ||
-      listing.status === "CLOSED" ||
-      listing.status === "CANCELLED"
-    ) {
-      throw new BadRequestException("This listing can no longer be modified");
+    if (isTerminalListingStatus(listing.status)) {
+      throw refusal(
+        REFUSAL_CODES.listingNotModifiable,
+        "This listing can no longer be modified",
+      );
     }
 
     const startDate = dto.startDate
@@ -265,7 +314,10 @@ export class ReplacementlistingsService {
       : listing.startDate;
     const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
     if (startDate >= endDate) {
-      throw new BadRequestException("startDate must be before endDate");
+      throw refusal(
+        REFUSAL_CODES.listingInvalidDates,
+        "startDate must be before endDate",
+      );
     }
 
     const updated = await this.prisma.replacementListing.update({
@@ -285,7 +337,8 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status === "FILLED") {
-      throw new BadRequestException(
+      throw refusal(
+        REFUSAL_CODES.listingFilledCannotBeDeleted,
         "A filled listing cannot be deleted, close it instead",
       );
     }
@@ -311,15 +364,31 @@ export class ReplacementlistingsService {
     const listing = await this.assertOwnership(id, userId);
 
     if (listing.status !== "OPEN" && listing.status !== "FILLED") {
-      throw new BadRequestException(
+      throw refusal(
+        REFUSAL_CODES.listingNotCloseable,
         "Only open or filled listings can be closed",
       );
     }
 
+    // A FILLED listing closed out with a placement on it, an OPEN one was closed
+    // with nobody retained. Both leave circulation, and a candidate who was
+    // shortlisted has to be able to tell the two apart.
     const updated = await this.prisma.replacementListing.update({
       where: { id },
-      data: { status: "CLOSED" },
+      data: {
+        status: listing.status === "FILLED" ? "CLOSED" : "CLOSED_NO_CANDIDATE",
+      },
       include: APPLICATIONS_COUNT_INCLUDE,
+    });
+
+    await this.prisma.application.updateMany({
+      where: { listingId: id, status: { in: ACTIVE_APPLICATION_STATUSES } },
+      data: {
+        status: "REJECTED",
+        decisionSource: "PRACTICE_REJECTED",
+        rejectionReason: PLATFORM_REJECTION_REASONS.listingWithdrawn,
+        respondedAt: new Date(),
+      },
     });
 
     return toReplacementListingDto(this.withCount(updated));
@@ -342,8 +411,13 @@ export class ReplacementlistingsService {
           throw new ForbiddenException();
         }
 
-        if (listing.status === "CLOSED" || listing.status === "CANCELLED") {
-          throw new BadRequestException(
+        if (
+          listing.status === "CLOSED" ||
+          listing.status === "CLOSED_NO_CANDIDATE" ||
+          listing.status === "CANCELLED"
+        ) {
+          throw refusal(
+            REFUSAL_CODES.listingAlreadyClosed,
             "This listing is already closed or cancelled",
           );
         }
@@ -357,7 +431,7 @@ export class ReplacementlistingsService {
           },
           data: {
             status: "REJECTED",
-            rejectionReason: "The listing has been cancelled",
+            rejectionReason: PLATFORM_REJECTION_REASONS.listingCancelled,
             respondedAt: now,
           },
         });
