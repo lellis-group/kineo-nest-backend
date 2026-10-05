@@ -1,5 +1,5 @@
 import { ConflictException } from "@nestjs/common";
-import type { ApplicationStatus, Prisma } from "../generated/prisma/client";
+import type { Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
 import {
   ACTIVE_APPLICATION_STATUSES,
@@ -9,18 +9,17 @@ import {
 type ApplicationClient = PrismaService | Prisma.TransactionClient;
 
 /**
- * Statuses that must not be destroyed on someone else's behalf.
+ * Statuses that must not be destroyed on someone else's behalf, spelled out
+ * where they are enforced rather than in a list of their own.
  *
- * ACCEPTED belongs here because accept writes a real placement: the cascade
+ * ACCEPTED is protected because accept writes a real placement: the cascade
  * would take it, along with the message the candidate wrote and the decision
- * the practice made, without either of them being asked.
+ * the practice made, without either of them being asked. It also outlives the
+ * statuses that merely hold a slot, so the guard draws the line in two branches
+ * — see `thirdPartyActiveApplicationsFilter`. A single exported list of the
+ * three used to sit here, matching neither branch, and agreeing with the guard
+ * only by coincidence.
  */
-export const PROTECTED_APPLICATION_STATUSES: ApplicationStatus[] = [
-  "PENDING",
-  "SHORTLISTED",
-  "ACCEPTED",
-];
-
 const STATUS_LIST = "pending, shortlisted, or an accepted placement";
 
 export const LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE =

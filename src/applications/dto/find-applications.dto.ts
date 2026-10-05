@@ -1,6 +1,12 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import {
+  paginationBoundsRefine,
+  paginationQueryShape,
+  paginationWithinBounds,
+} from "../../common/pagination";
 import { ApplicationStatus } from "../../generated/prisma/enums";
+import { REJECTION_BUCKETS } from "../rejection-buckets";
 
 export const FindApplicationsSchema = z
   .object({
@@ -12,26 +18,19 @@ export const FindApplicationsSchema = z
       .enum(ApplicationStatus)
       .optional()
       .describe("Filter by application status"),
-    page: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(10000)
-      .default(1)
-      .describe("Page number, starting at 1"),
-    limit: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(20)
-      .describe("Number of results per page, max 100"),
+    // The situation rather than the status. Three of the four rejections are the
+    // same status, so this is what tells them apart; it sits beside `status`
+    // rather than replacing it, because the status is what the chips above group
+    // by and a caller may want both.
+    bucket: z
+      .enum(REJECTION_BUCKETS)
+      .optional()
+      .describe(
+        "Filter by situation: another candidate retained, the posting ended, or refused by the practice",
+      ),
+    ...paginationQueryShape,
   })
   .strict()
-  .refine((data) => data.page * data.limit <= 10_000, {
-    message:
-      "page and limit combination is too large (no more than 10,000 results can be requested)",
-    path: ["page"],
-  });
+  .refine(paginationWithinBounds, paginationBoundsRefine);
 
 export class FindApplicationsDto extends createZodDto(FindApplicationsSchema) {}

@@ -136,7 +136,8 @@ enum ApplicationStatus {
 
 enum DataDeletionRequestStatus {
   PENDING
-  EXECUTED
+  ANONYMIZED
+  SUPERSEDED
 }
 
 model Profile {

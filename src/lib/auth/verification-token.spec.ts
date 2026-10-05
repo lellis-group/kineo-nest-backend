@@ -31,6 +31,34 @@ describe("decodeVerificationToken", () => {
     });
   });
 
+  it("decodes a change-email token with the address it moves to", async () => {
+    const token = await signToken(
+      {
+        email: "old@example.com",
+        updateTo: "new@example.com",
+        requestType: "change-email-verification",
+      },
+      { expiresIn: 3600 },
+    );
+
+    expect(await decodeVerificationToken(token, SECRET)).toEqual({
+      email: "old@example.com",
+      updateTo: "new@example.com",
+      requestType: "change-email-verification",
+    });
+  });
+
+  it("ignores an unknown requestType rather than trusting it", async () => {
+    const token = await signToken(
+      { email: "user@example.com", requestType: "something-else" },
+      { expiresIn: 3600 },
+    );
+
+    expect(await decodeVerificationToken(token, SECRET)).toEqual({
+      email: "user@example.com",
+    });
+  });
+
   it("decodes an expired token because only the signature matters here", async () => {
     const token = await signToken(
       { email: "user@example.com" },

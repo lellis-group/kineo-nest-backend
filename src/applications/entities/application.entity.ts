@@ -1,11 +1,13 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import { PaginationMetaSchema } from "../../common/pagination";
 import {
   ApplicationStatus,
   ListingStatus,
   ProfileType,
   Specialty,
 } from "../../generated/prisma/enums";
+import { REJECTION_BUCKETS } from "../rejection-buckets";
 
 /**
  * Embedded listing snapshot so cards/details need no extra fetches or
@@ -52,6 +54,15 @@ export const ApplicationSchema = z.object({
   status: z.enum(ApplicationStatus),
   message: z.string().nullable(),
   rejectionReason: z.string().nullable(),
+  /**
+   * Which situation a rejection is, or null when it is none of them.
+   *
+   * Derived rather than stored: it is a reading of the two fields above, and a
+   * stored copy would be free to disagree with them. The client gets it so it can
+   * group and label without re-deriving the classification — which is what would
+   * otherwise have to be written twice, once in SQL and once in TypeScript.
+   */
+  rejectionBucket: z.enum(REJECTION_BUCKETS).nullable(),
   withdrawnReason: z.string().nullable(),
   viewedAt: z.iso.datetime().nullable(),
   respondedAt: z.iso.datetime().nullable(),
@@ -76,14 +87,24 @@ export const ApplicationStatusCountsSchema = z.object({
   WITHDRAWN: z.number(),
 });
 
+/**
+ * Per-situation totals, over the whole collection like `counts`.
+ *
+ * Optional because an older backend does not send it and a rolling deploy must not
+ * take the page down over a counter: every reader treats it as possibly absent and
+ * falls back to zero, which shows an empty chip rather than a broken page.
+ */
+export const ApplicationBucketCountsSchema = z.object({
+  PASSED_OVER: z.number(),
+  POSTING_ENDED: z.number(),
+  REFUSED: z.number(),
+});
+
 export const PaginatedApplicationsSchema = z.object({
   data: z.array(ApplicationSchema),
-  meta: z.object({
-    total: z.number(),
-    page: z.number(),
-    limit: z.number(),
-    totalPages: z.number(),
+  meta: PaginationMetaSchema.extend({
     counts: ApplicationStatusCountsSchema,
+    bucketCounts: ApplicationBucketCountsSchema.optional(),
   }),
 });
 

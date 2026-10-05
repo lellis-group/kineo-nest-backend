@@ -5,7 +5,12 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { assertNoThirdPartyApplications } from "../common/application-guard";
+import {
+  assertNoThirdPartyApplications,
+  ownedListingsFilter,
+} from "../common/application-guard";
+import { paginate, paginationMeta } from "../common/pagination";
+import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
@@ -41,10 +46,7 @@ export class ProfileService {
   }
 
   async findAll(filters: FindProfilesDto) {
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = {
       isPublic: true,
       specialty: filters.specialty,
@@ -64,7 +66,7 @@ export class ProfileService {
 
     return {
       data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: paginationMeta(total, page, limit),
     };
   }
 
@@ -115,15 +117,33 @@ export class ProfileService {
     }
   }
 
+  /**
+   * Deletes a profile, unless a cascade would take somebody else's application.
+   *
+   * One serializable transaction: the ownership read, the count and the delete ran
+   * on three connections, so an application committed in the gap was invisible to
+   * the guard and went with the cascade.
+   */
   async remove(id: string, userId: string) {
-    const profile = await this.findOne(id, userId);
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const profile = await tx.profile.findUnique({ where: { id } });
 
-    if (profile.userId !== userId) {
-      throw new ForbiddenException();
-    }
+      if (!profile) {
+        throw new NotFoundException(`Profile ${id} not found`);
+      }
 
-    await assertNoThirdPartyApplications(this.prisma, id);
+      if (profile.userId !== userId) {
+        throw new ForbiddenException();
+      }
 
-    return this.prisma.profile.delete({ where: { id } });
+      // Scoped to the listings this profile owns, directly or through its
+      // practices, as the practice and listing deletes are. Without the filter the
+      // guard counts every application on every listing in the platform, and
+      // refuses this deletion because someone else — anywhere — applied to
+      // something.
+      await assertNoThirdPartyApplications(tx, id, ownedListingsFilter(id));
+
+      return tx.profile.delete({ where: { id } });
+    });
   }
 }

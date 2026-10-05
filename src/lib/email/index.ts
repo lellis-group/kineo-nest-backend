@@ -14,7 +14,7 @@ export async function sendVerificationEmail({
 }) {
   return sendEmail({
     to: email,
-    subject: "Vérifiez votre adresse email",
+    subject: "Verify your email address",
     html: verificationEmailTemplate({
       name,
       url,
@@ -33,7 +33,7 @@ export async function sendResetPasswordEmail({
 }) {
   return sendEmail({
     to: email,
-    subject: "Réinitialisation de votre mot de passe",
+    subject: "Reset your password",
     html: resetPasswordEmailTemplate({
       name,
       url,
@@ -53,12 +53,12 @@ export async function sendChangeEmailEmail({
   return sendNotificationEmail({
     email,
     name,
-    subject: "Confirmez votre nouvelle adresse email",
-    title: "Changement d'adresse email",
+    subject: "Confirm your new email address",
+    title: "Email address change",
     message:
-      "Une demande de changement d'adresse email a été effectuée sur votre compte. Confirmez cette adresse via le bouton ci-dessous pour l'appliquer. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email et votre adresse actuelle restera inchangée.",
+      "A request to change the email address on your account was made. Confirm this address with the button below to apply it. If you did not make this request, ignore this email and your current address stays unchanged.",
     url,
-    ctaLabel: "Confirmer ma nouvelle adresse",
+    ctaLabel: "Confirm my new address",
   });
 }
 
@@ -90,32 +90,72 @@ export async function sendDeleteAccountEmail({
   return sendNotificationEmail({
     email,
     name,
-    subject: "Suppression de votre compte",
-    title: "Suppression de votre compte",
+    subject: "Account deletion",
+    title: "Account deletion",
     message: [
-      "Vous avez demandé la suppression de votre compte. Ce lien est valable 24 heures.",
-      "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email : rien ne sera supprimé.",
+      "You asked for your account to be deleted. This link is valid for 24 hours.",
+      "If you did not make this request, ignore this email: nothing will be deleted.",
       "",
-      "Ce qui se passe si vous confirmez, dans l'ordre :",
-      "1. Votre compte est déconnecté immédiatement. L'adresse " +
+      "What happens when you confirm, in order:",
+      "1. Your account is disconnected immediately. The address " +
         email +
-        " est libérée dès maintenant.",
-      "2. Vos données personnelles sont anonymisées sur-le-champ : nom, e-mail, numéro RPPS, localisation, ainsi que le titre, la description et les dates de vos annonces.",
-      "3. Vos annonces sortent de la recherche publique et ne reçoivent plus de candidature.",
-      "4. Sous " +
+        " is released immediately.",
+      "2. Your personal data is anonymized on the spot: name, email, RPPS number, location, and the title, description and dates of your listings.",
+      "3. Your listings leave the public search and take no more applications.",
+      "4. After " +
         purgeGraceDays +
-        " jours, ce qui reste est définitivement effacé.",
+        " days, whatever is left is permanently deleted.",
       "",
-      "Ce que nous conservons, et pourquoi :",
-      "Pour prouver que l'effacement a bien eu lieu, une trace de votre demande est gardée " +
+      "What we keep, and why:",
+      "To prove the erasure happened, a trace of your request is kept for " +
         trailRetentionDays +
-        " jours. Elle ne contient que deux empreintes non réversibles de votre identité et les dates, jamais votre e-mail.",
+        " days. It holds two non-reversible fingerprints of your identity and the dates, never your email address.",
       keptApplications
-        ? "Les candidatures que d'autres candidats vous ont adressées. Elles ne vous appartiennent pas : nous ne pouvons pas les supprimer à votre demande. Elles restent accessibles à leurs auteurs."
-        : "Rien d'autre que cette trace. Aucune de vos données n'est transmise à un tiers.",
+        ? "The applications other candidates sent you. They are not yours: we cannot delete them at your request. They stay accessible to their authors."
+        : "Nothing else besides that trace. None of your data is passed to a third party.",
     ].join("\n"),
     url,
-    ctaLabel: "Supprimer définitivement mon compte",
+    ctaLabel: "Delete my account for good",
+  });
+}
+
+/**
+ * The approval request, sent to the address being replaced.
+ *
+ * This is better-auth's `sendChangeEmailConfirmation`: it is a gate, not a
+ * heads-up. Opening its link is what releases the verification email towards the
+ * new address, so until the owner of the current address approves, nothing is
+ * sent anywhere else and nothing changes. That is what makes a stolen session
+ * harmless here — without it, whoever holds the session can redirect the
+ * account's address and nobody else ever hears about it.
+ *
+ * It therefore carries a button, and that button is the only thing on the page.
+ */
+export async function sendChangeEmailApprovalEmail({
+  email,
+  name,
+  newEmail,
+  url,
+}: {
+  email: string;
+  name?: string | null;
+  newEmail: string;
+  url: string;
+}) {
+  return sendNotificationEmail({
+    email,
+    name,
+    subject: "Approve this email address change",
+    title: "Email address change requested",
+    message: [
+      `A request was made to change the email address on your account to ${newEmail}.`,
+      "",
+      "Nothing happens until you approve it. Once you do, a confirmation is sent to the new address, and only the person who controls that address can complete the change.",
+      "",
+      "If this was not you, do not approve it, change your password, and contact support.",
+    ].join("\n"),
+    url,
+    ctaLabel: "Approve the change",
   });
 }
 

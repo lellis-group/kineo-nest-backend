@@ -1,5 +1,6 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import { PaginationMetaSchema } from "../../common/pagination";
 
 export const PracticeSchema = z.object({
   id: z.string(),
@@ -16,12 +17,7 @@ export class Practice extends createZodDto(PracticeSchema) {}
 
 export const PaginatedPracticesSchema = z.object({
   data: z.array(PracticeSchema),
-  meta: z.object({
-    total: z.number(),
-    page: z.number(),
-    limit: z.number(),
-    totalPages: z.number(),
-  }),
+  meta: PaginationMetaSchema,
 });
 
 export class PaginatedPractices extends createZodDto(

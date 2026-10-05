@@ -1,6 +1,20 @@
+import { ownedListingsFilter } from "../common/application-guard";
+import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
 import type { Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
 import { verificationRowsForIdentity } from "./deletion-token";
+
+/**
+ * A `cuid`-shaped id nothing can hold, so a where clause can ask for "no
+ * listing" or "no profile" without branching the query.
+ *
+ * `id` is TEXT and unconstrained, which is what makes this safe: it is not a
+ * reserved value the database would reject, and nothing enumerates ids that could
+ * collide with it.
+ */
+const NO_SUCH_LISTING_ID = "__no_such_listing__";
+const NO_SUCH_PROFILE_ID = "__no_such_profile__";
+
 import { detachThirdPartyApplications } from "./ghost-listing";
 
 type Client = PrismaService | Prisma.TransactionClient;
@@ -12,10 +26,18 @@ type Client = PrismaService | Prisma.TransactionClient;
  * the schema, and still has to be recognisable in the owner's own list as "the
  * one you erased" rather than as an empty row that looks like a bug.
  */
-export const ANONYMIZED_LISTING_TITLE = "Annonce retirée";
-export const ANONYMIZED_DESCRIPTION =
-  "Annonce retirée à la demande de son auteur.";
+export const ANONYMIZED_LISTING_TITLE = "Withdrawn listing";
+export const ANONYMIZED_DESCRIPTION = "Withdrawn at the request of its author.";
 const ANONYMIZED_DATE = new Date("1970-01-01T00:00:00.000Z");
+
+/**
+ * What a practice name becomes.
+ *
+ * `name` is not nullable, so it cannot be blanked the way the profile's fields
+ * are. The string says nothing and identifies nobody, and `isPublic` is what
+ * actually takes the row out of circulation.
+ */
+const ANONYMIZED_PRACTICE_FIELD = "Erased with its owner";
 
 /**
  * An email that satisfies the unique index without identifying anyone.
@@ -61,14 +83,12 @@ export async function anonymizeAccount(
     select: { id: true },
   });
 
+  // The same filter the third-party guard uses, plus the branch for a profile
+  // that is already gone: there is nothing to own, so nothing may match, and a
+  // sentinel id is how a where clause says "none" without a second query.
   const practiceFilter = profile
-    ? {
-        OR: [
-          { createdById: profile.id },
-          { practice: { ownerId: profile.id } },
-        ],
-      }
-    : { id: "__no_such_listing__" };
+    ? ownedListingsFilter(profile.id)
+    : { id: NO_SUCH_LISTING_ID };
 
   const listingIds = await prisma.replacementListing.findMany({
     where: practiceFilter,
@@ -83,7 +103,7 @@ export async function anonymizeAccount(
         ownerProfileId: profile.id,
         listingIds: listingIds.map((listing) => listing.id),
       })
-    : { ghostListingId: "", detachedApplications: 0 };
+    : { ghostListingIds: [], detachedApplications: 0 };
 
   // A listing holding an accepted placement stays as it is: the placement is a
   // real one, agreed with a candidate, and the candidate is still waiting for an
@@ -122,8 +142,8 @@ export async function anonymizeAccount(
 
   const settledApplications = await prisma.application.updateMany({
     where: profile
-      ? { applicantId: profile.id, status: { in: ["PENDING", "SHORTLISTED"] } }
-      : { applicantId: "__no_such_profile__" },
+      ? { applicantId: profile.id, status: { in: ACTIVE_APPLICATION_STATUSES } }
+      : { applicantId: NO_SUCH_PROFILE_ID },
     data: {
       status: "WITHDRAWN",
       decisionSource: "SYSTEM",
@@ -143,6 +163,30 @@ export async function anonymizeAccount(
         longitude: null,
         isPublic: false,
         verified: false,
+      },
+    });
+
+    // The practices this profile owned.
+    //
+    // They were the one thing an erasure walked past: `user`, `profile`,
+    // `replacementListing` and `application` were all scrubbed, so a practice
+    // kept its real name, its real address and its coordinates, and stayed
+    // `isPublic` — still listed in `GET /practices` and still in the geographic
+    // index, for the whole `ACCOUNT_PURGE_GRACE_DAYS` window, pointing at a
+    // profile whose fields were all null.
+    //
+    // Coordinates are cleared rather than moved: a `lat`/`lng` of zero is a real
+    // place in the Atlantic, and an indexed practice there is worse than one that
+    // has left the `latitude IS NOT NULL` branch of the geo query entirely.
+    await prisma.practice.updateMany({
+      where: { ownerId: profile.id },
+      data: {
+        name: ANONYMIZED_PRACTICE_FIELD,
+        address: ANONYMIZED_PRACTICE_FIELD,
+        city: ANONYMIZED_PRACTICE_FIELD,
+        latitude: null,
+        longitude: null,
+        isPublic: false,
       },
     });
   }

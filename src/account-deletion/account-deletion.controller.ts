@@ -55,7 +55,7 @@ export class AccountDeletionController {
       detachedApplications: result.detachedApplications,
       settledApplications: result.settledApplications,
       protectedPlacements: result.protectedPlacements,
-      message: "Votre compte a été anonymisé.",
+      message: "Your account has been anonymized.",
     };
   }
 }

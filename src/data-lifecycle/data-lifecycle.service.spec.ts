@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { ConfigService } from "@nestjs/config";
 import type { PrismaService } from "../prisma.service";
 import {
   ACCOUNT_PURGE_GRACE_DAYS,
@@ -73,12 +74,73 @@ describe("DataLifecycleService retention sweep", () => {
 
     await new DataLifecycleService(prisma).purgeExpired();
 
+    // Two steps on the trail, because the two statuses have different retentions.
     expect(calls.map((call) => call.model)).toEqual([
       "session",
       "verification",
       "user",
       "dataDeletionRequest",
+      "dataDeletionRequest",
     ]);
+  });
+
+  it("keeps the proof of an erasure longer than an abandoned request", async () => {
+    // Two horizons, because one statement could not express them. An anonymized row
+    // is the art. 5(2) proof; a request nobody confirmed holds only the abandoned
+    // intention and the reader's own rows.
+    const { prisma, calls } = makePrisma();
+
+    await new DataLifecycleService(prisma).purgeExpired();
+
+    const abandoned = calls[3].where as {
+      status: { in: string[] };
+      updatedAt: { lt: Date };
+    };
+    const executed = calls[4].where as {
+      status: string;
+      updatedAt: { lt: Date };
+    };
+
+    expect(abandoned.status.in).toEqual(["PENDING", "SUPERSEDED"]);
+    expect(executed.status).toBe("ANONYMIZED");
+
+    // And the abandoned one goes first: its cutoff is the more recent of the two.
+    expect(abandoned.updatedAt.lt.getTime()).toBeGreaterThan(
+      executed.updatedAt.lt.getTime(),
+    );
+  });
+
+  it("anchors both horizons on the last write, not on the request", async () => {
+    // On `createdAt`, a request made 400 days ago and confirmed an hour ago was
+    // swept within the hour: the account was erased and the proof of it gone, by
+    // the sweep whose job is data minimization.
+    const { prisma, calls } = makePrisma();
+
+    await new DataLifecycleService(prisma).purgeExpired();
+
+    for (const index of [3, 4]) {
+      const where = calls[index].where as Record<string, unknown>;
+      expect(where.createdAt).toBeUndefined();
+      expect(where.updatedAt).toBeDefined();
+    }
+  });
+
+  it("honours a configured pending horizon, which used to be read by nothing", async () => {
+    const { prisma, calls } = makePrisma();
+    const config = {
+      get: (key: string) =>
+        key === "pendingDeletionRequestRetentionDays" ? 3 : undefined,
+    } as unknown as ConfigService;
+
+    const before = Date.now();
+    await new DataLifecycleService(prisma, config).purgeExpired();
+
+    const abandoned = calls[3].where as { updatedAt: { lt: Date } };
+    // Three days back, not the thirty-day default and not the executed horizon.
+    expect(abandoned.updatedAt.lt.getTime()).toBeLessThanOrEqual(before);
+    expect(abandoned.updatedAt.lt.getTime()).toBeGreaterThan(
+      before - 4 * 86_400_000,
+    );
   });
 
   it("deletes anonymized accounts only after the grace period", async () => {

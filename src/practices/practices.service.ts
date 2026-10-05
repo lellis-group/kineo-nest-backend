@@ -10,19 +10,25 @@ import {
   assertNoThirdPartyApplications,
   PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
+import { paginate, paginationMeta } from "../common/pagination";
 import {
   getOwnedProfileId,
   getOwnedProfileIdSafe,
 } from "../common/profile-lookup";
 import { runSerializableTransaction } from "../common/serializable-transaction";
+import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { CreatePracticeDto } from "./dto/create-practice.dto";
 import type { FindPracticesDto } from "./dto/find-practices.dto";
 import { UpdatePracticeDto } from "./dto/update-practice.dto";
-import { longitudeRanges } from "./longitude-range";
+import {
+  geoWhere,
+  haversineKm,
+  PRACTICE_GEO_COLUMNS,
+  type PracticeGeoRow,
+} from "./geo-query";
 
 const EARTH_RADIUS_KM = 6_371;
-const MAX_GEO_CANDIDATES = 500;
 
 @Injectable()
 export class PracticesService {
@@ -50,70 +56,48 @@ export class PracticesService {
 
   async findAll(filters: FindPracticesDto) {
     const { name, city, lat, lng, radiusKm } = filters;
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     if (lat !== undefined && lng !== undefined && radiusKm !== undefined) {
       const latitudeDelta = (radiusKm / EARTH_RADIUS_KM) * (180 / Math.PI);
+      // Near the poles the longitude window widens without bound as cos(lat)
+      // approaches zero. Clamping to the whole globe is honest there, because the
+      // exact haversine predicate discards whatever does not belong.
+      const cosLat = Math.cos((lat * Math.PI) / 180);
       const longitudeDelta =
-        latitudeDelta / Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+        Math.abs(cosLat) < 1e-6 ? 180 : latitudeDelta / Math.abs(cosLat);
 
-      const candidates = await this.prisma.practice.findMany({
-        where: {
-          isPublic: true,
-          latitude: {
-            not: null,
-            gte: lat - latitudeDelta,
-            lte: lat + latitudeDelta,
-          },
-          longitude: { not: null },
-          // The ranges are alternatives, so they need OR rather than AND — and
-          // OR at the top level, because Prisma does not accept it inside a
-          // scalar field filter. Neither mistake is visible to the compiler: the
-          // first returns every practice within reach of no interval at all, the
-          // second is rejected outright by the query.
-          OR: longitudeRanges(lng, longitudeDelta).map((range) => ({
-            longitude: range,
-          })),
-        },
-        take: MAX_GEO_CANDIDATES,
-        orderBy: [{ id: "desc" }],
+      const where = geoWhere({
+        lat,
+        lng,
+        radiusKm,
+        latitudeDelta,
+        longitudeDelta,
+        name,
+        city,
       });
 
-      const located = candidates.filter(
-        (
-          practice,
-        ): practice is typeof practice & {
-          latitude: number;
-          longitude: number;
-        } => practice.latitude !== null && practice.longitude !== null,
-      );
+      // Built per statement rather than once and shared. Reusing a fragment is
+      // in fact safe — checked against this Prisma version, nested and with a
+      // `raw` inside — but a function reads as what it is: the same predicate,
+      // written out twice, from one definition.
+      const [rows, counts] = await Promise.all([
+        this.prisma.$queryRaw<PracticeGeoRow[]>(Prisma.sql`
+          SELECT ${Prisma.raw(PRACTICE_GEO_COLUMNS)}
+          FROM practice p
+          WHERE ${where}
+          ORDER BY ${haversineKm(lat, lng)} ASC, p."id" ASC
+          LIMIT ${limit} OFFSET ${skip}
+        `),
+        this.prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::bigint AS total FROM practice p WHERE ${where}
+        `),
+      ]);
 
-      const practices = located
-        .map((practice) => ({
-          practice,
-          distance: this.distanceInKm(
-            lat,
-            lng,
-            practice.latitude,
-            practice.longitude,
-          ),
-        }))
-        .filter(({ distance }) => distance <= radiusKm)
-        .sort(
-          (left, right) =>
-            left.distance - right.distance ||
-            left.practice.id.localeCompare(right.practice.id),
-        );
-
-      const total = practices.length;
+      const total = Number(counts[0]?.total ?? 0);
 
       return {
-        data: practices
-          .slice(skip, skip + limit)
-          .map(({ practice }) => practice),
-        meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        data: rows,
+        meta: paginationMeta(total, page, limit),
       };
     }
 
@@ -135,21 +119,8 @@ export class PracticesService {
 
     return {
       data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: paginationMeta(total, page, limit),
     };
-  }
-
-  private distanceInKm(lat1: number, lng1: number, lat2: number, lng2: number) {
-    const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
-    const latitudeDelta = toRadians(lat2 - lat1);
-    const longitudeDelta = toRadians(lng2 - lng1);
-    const haversine =
-      Math.sin(latitudeDelta / 2) ** 2 +
-      Math.cos(toRadians(lat1)) *
-        Math.cos(toRadians(lat2)) *
-        Math.sin(longitudeDelta / 2) ** 2;
-
-    return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(haversine));
   }
 
   async findMine(userId: string) {
@@ -194,21 +165,39 @@ export class PracticesService {
     });
   }
 
+  /**
+   * Deletes a practice, unless a cascade would take somebody else's application.
+   *
+   * One serializable transaction, like the listing and profile deletes: read,
+   * count and delete on three connections let an application committed in the gap
+   * slip past the count and go with the cascade.
+   */
   async remove(id: string, userId: string) {
-    const practice = await this.findOne(id, userId);
-    const ownerId = await getOwnedProfileId(this.prisma, userId);
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const practice = await tx.practice.findUnique({ where: { id } });
+      if (!practice) {
+        throw new NotFoundException(`Practice ${id} not found`);
+      }
 
-    if (practice.ownerId !== ownerId) {
-      throw new ForbiddenException();
-    }
+      const ownerId = await getOwnedProfileId(tx, userId);
 
-    await assertNoThirdPartyApplications(
-      this.prisma,
-      ownerId,
-      { practice: { ownerId } },
-      PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      if (practice.ownerId !== ownerId) {
+        throw new ForbiddenException();
+      }
 
-    return this.prisma.practice.delete({ where: { id } });
+      // This practice only, not its owner's others. The filter used to be
+      // `{ practice: { ownerId } }`, so deleting one location was refused because a
+      // *different* row of the same owner carried somebody's application — and a
+      // practice with several locations could not lose any one of them until every
+      // one of them was empty.
+      await assertNoThirdPartyApplications(
+        tx,
+        ownerId,
+        { practiceId: id },
+        PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+      );
+
+      return tx.practice.delete({ where: { id } });
+    });
   }
 }

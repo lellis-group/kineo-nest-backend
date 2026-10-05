@@ -4,11 +4,13 @@
     "rootDir": "src",
     "outDir": "dist"
   },
+  // The generated Prisma client is deliberately absent: `exclude` does not stop
+  // it from being compiled, because prisma.service.ts imports it. Listing it
+  // implied the opposite.
   "include": ["src/**/*.ts"],
   "exclude": [
     "node_modules",
     "dist",
-    "src/generated",
     "src/**/*.spec.ts",
     "src/**/*.e2e.test.ts",
     "src/**/e2e/**"

@@ -4,8 +4,9 @@ import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
-import { isHardenedEnv } from "../../config/env";
+import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
 import {
+  sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
   sendDeleteAccountEmail,
   sendResetPasswordEmail,
@@ -17,6 +18,10 @@ import { logError } from "../log";
 import { createPrismaClient } from "../prisma";
 import { emailVerificationStatusPlugin } from "./email-verification-status";
 import { inputValidationHook } from "./input-validation";
+import {
+  decodeVerificationToken,
+  isChangeEmailVerificationToken,
+} from "./verification-token";
 
 export interface AuthEnv {
   secret: string;
@@ -26,6 +31,8 @@ export interface AuthEnv {
   rateLimitMax: number;
   credentialRateLimitWindow: number;
   credentialRateLimitMax: number;
+  changeEmailRateLimitWindow: number;
+  changeEmailRateLimitMax: number;
   sessionExpiresIn: number;
   sessionUpdateAge: number;
   cookieCacheEnabled: boolean;
@@ -89,6 +96,16 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       3,
       "CREDENTIAL_RATE_LIMIT_MAX",
     ),
+    changeEmailRateLimitWindow: positiveInt(
+      env.CHANGE_EMAIL_RATE_LIMIT_WINDOW,
+      900,
+      "CHANGE_EMAIL_RATE_LIMIT_WINDOW",
+    ),
+    changeEmailRateLimitMax: positiveInt(
+      env.CHANGE_EMAIL_RATE_LIMIT_MAX,
+      10,
+      "CHANGE_EMAIL_RATE_LIMIT_MAX",
+    ),
     sessionExpiresIn: durationSeconds(env.SESSION_EXPIRES_IN, 60 * 60 * 24 * 7),
     sessionUpdateAge: durationSeconds(env.SESSION_UPDATE_AGE, 60 * 60 * 24),
     cookieCacheEnabled: env.COOKIE_CACHE_ENABLED !== "false",
@@ -114,7 +131,7 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       "DATA_DELETION_REQUEST_RETENTION_DAYS",
     ),
     frontendUrl: env.FRONTEND_URL || "http://localhost:3001",
-    nodeEnv: env.NODE_ENV || "development",
+    nodeEnv: env.NODE_ENV || DEFAULT_NODE_ENV,
   };
 }
 
@@ -150,6 +167,10 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
       config.get<number>("credentialRateLimit.window", 10) ?? 10,
     credentialRateLimitMax:
       config.get<number>("credentialRateLimit.max", 3) ?? 3,
+    changeEmailRateLimitWindow:
+      config.get<number>("changeEmailRateLimit.window", 900) ?? 900,
+    changeEmailRateLimitMax:
+      config.get<number>("changeEmailRateLimit.max", 10) ?? 10,
     sessionExpiresIn:
       config.get<number>("session.expiresIn", 60 * 60 * 24 * 7) ??
       60 * 60 * 24 * 7,
@@ -171,7 +192,8 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     deletionRequestRetentionDays:
       config.get<number>("dataDeletionRequestRetentionDays", 365) ?? 365,
     frontendUrl,
-    nodeEnv: config.get<string>("nodeEnv", "development") ?? "development",
+    nodeEnv:
+      config.get<string>("nodeEnv", DEFAULT_NODE_ENV) ?? DEFAULT_NODE_ENV,
   };
 }
 
@@ -188,7 +210,15 @@ export function createAuth(
     }),
 
     plugins: [
-      openAPI(),
+      // Better Auth serves its own reference at `/api/auth/reference`, served by
+      // the `openAPI()` plugin. That is a *different* surface from the NestJS
+      // documentation, which `app.ts` already keeps behind `isHardenedEnv` — so
+      // gating one and not the other left the auth endpoints documented in
+      // production while the REST ones were not.
+      //
+      // Read at module scope, which is fine here and wrong everywhere else:
+      // `NODE_ENV` does not change between the import and the request.
+      ...(isHardenedEnv(authEnv.nodeEnv) ? [] : [openAPI()]),
       nextCookies(),
       emailVerificationStatusPlugin(),
       ...(authEnv.jwtEnabled
@@ -208,22 +238,26 @@ export function createAuth(
     ],
 
     user: {
-      // Email self-service (right to rectification, art. 16 GDPR): the
-      // confirmation email goes to the NEW address, so only someone controlling
-      // it can apply the change.
+      // Email self-service (right to rectification, art. 16 GDPR), in the shape
+      // better-auth documents it for added security: the current address approves
+      // first, and only then is a verification sent to the new one.
+      //
+      // Both parties hold a key, so neither a stolen session (which can start the
+      // change but not approve it) nor control of a throwaway address (which can
+      // verify but not request) is enough on its own. Two clicks for the
+      // legitimate account, which is the price.
       changeEmail: {
         enabled: true,
 
         sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
-          await sendChangeEmailEmail({
-            email: newEmail,
+          await sendChangeEmailApprovalEmail({
+            email: user.email,
             name: user.name,
+            newEmail,
             url: buildFrontendAuthUrl(
               url,
               "/verify-email",
-              {
-                email: newEmail,
-              },
+              { email: user.email, flow: "change-email-approval" },
               frontendUrl,
             ),
           });
@@ -264,20 +298,47 @@ export function createAuth(
             user.id,
           );
 
-          // Accountability trail (art. 5(2) GDPR): record the request before
-          // any execution. Never blocks the deletion flow on a bookkeeping
-          // failure — the hourly sweep keeps the process resilient.
+          // Accountability trail (art. 5(2) GDPR): the request is recorded
+          // before any execution, and a failure here stops the email rather than
+          // being logged and stepped over.
+          //
+          // It used to be swallowed on purpose, "never blocks the deletion flow on
+          // a bookkeeping failure". That is backwards: a confirmation link sent
+          // without a trail row produces an erasure nobody can account for, which
+          // is the outcome the trail exists to prevent — and the reader has no way
+          // to tell that from a link that simply failed.
+          //
+          // The previous request is superseded rather than overwritten. A partial
+          // unique index allows one `PENDING` row per fingerprint, so the second
+          // request used to fail its insert here, leave the *first* row pending,
+          // and then send a link that would execute that earlier request — whose
+          // `createdAt` could be weeks old. A request nobody made any more stayed
+          // confirmable because the trail could not say it had been replaced.
+          const pepper = deletionPepper();
+          const userIdHash = deletionHash(user.id, pepper);
+
           try {
-            const pepper = deletionPepper();
-            await prisma.dataDeletionRequest.create({
-              data: {
-                userIdHash: deletionHash(user.id, pepper),
-                emailHash: deletionHash(user.email, pepper),
-              },
+            await prisma.$transaction(async (tx) => {
+              await tx.dataDeletionRequest.updateMany({
+                where: { userIdHash, status: "PENDING" },
+                data: { status: "SUPERSEDED" },
+              });
+              await tx.dataDeletionRequest.create({
+                data: {
+                  userIdHash,
+                  emailHash: deletionHash(user.email, pepper),
+                },
+              });
             });
           } catch (error) {
             logError("account.deletion.request.audit_failed", error, {
               userId: user.id,
+            });
+            // No trail row, no link: better-auth surfaces this as a failed
+            // request, which the reader can retry.
+            throw new APIError("INTERNAL_SERVER_ERROR", {
+              message:
+                "The erasure request could not be recorded, so no confirmation link was sent. Please try again.",
             });
           }
 
@@ -303,8 +364,11 @@ export function createAuth(
       enabled: true,
       window: authEnv.rateLimitWindow,
       max: authEnv.rateLimitMax,
-      // better-auth's own rule for the credential endpoints is 3 attempts per
-      // 10 seconds and is not reachable through rateLimit.max.
+      // better-auth rate-limits a set of routes itself, at 3 attempts per 10
+      // seconds, and rateLimit.max does not reach them: any prefix match on
+      // /sign-in, /sign-up, /change-password or /change-email. They are only
+      // configurable through customRules, which is why each one is named here —
+      // leaving one out means a knob that does not exist.
       customRules: {
         "/sign-in/email": {
           window: authEnv.credentialRateLimitWindow,
@@ -313,6 +377,10 @@ export function createAuth(
         "/sign-up/email": {
           window: authEnv.credentialRateLimitWindow,
           max: authEnv.credentialRateLimitMax,
+        },
+        "/change-email": {
+          window: authEnv.changeEmailRateLimitWindow,
+          max: authEnv.changeEmailRateLimitMax,
         },
       },
     },
@@ -353,7 +421,37 @@ export function createAuth(
     },
 
     emailVerification: {
-      sendVerificationEmail: async ({ user, url }) => {
+      // This handler serves a sign-up, a re-send, and the second half of a
+      // change of address; the token is what tells them apart. Sending the
+      // sign-up template for the last one is what a user sees as "an account
+      // creation email" arriving when they only changed their address.
+      //
+      // The first half — the approval the current address has to give — goes
+      // through `sendChangeEmailConfirmation` above and never lands here.
+      sendVerificationEmail: async ({ user, url, token }) => {
+        const decoded = await decodeVerificationToken(token, authEnv.secret);
+
+        if (
+          decoded &&
+          isChangeEmailVerificationToken(decoded) &&
+          decoded.updateTo
+        ) {
+          // The confirmation goes to the new address, since that is what proves
+          // the person asking for the change controls it.
+          await sendChangeEmailEmail({
+            email: user.email,
+            name: user.name,
+            url: buildFrontendAuthUrl(
+              url,
+              "/verify-email",
+              { email: user.email, flow: "change-email" },
+              frontendUrl,
+            ),
+          });
+
+          return;
+        }
+
         await sendVerificationEmail({
           email: user.email,
           name: user.name,
@@ -381,5 +479,3 @@ export function createAuth(
  * (see `AppModule`), so the validated config stays the single source of truth.
  */
 export const auth = createAuth();
-
-export type BetterAuthInstance = ReturnType<typeof createAuth>;

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { GoneException, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  GoneException,
+  NotFoundException,
+} from "@nestjs/common";
 import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
 import type { PrismaService } from "../prisma.service";
 import { AccountDeletionService } from "./account-deletion.service";
@@ -64,6 +68,11 @@ function makeService(scenario: Scenario) {
     practice: {
       findUnique: async () =>
         scenario.scaffoldMissing ? null : { id: SYSTEM_SCAFFOLD.practiceId },
+      updateMany: async (args: unknown) => {
+        calls.push("practice.updateMany");
+        writes.practices = args;
+        return { count: 1 };
+      },
     },
     replacementListing: {
       findFirst: async () => scenario.ghostListing ?? null,
@@ -103,17 +112,33 @@ function makeService(scenario: Scenario) {
       updateMany: async (args: unknown) => {
         calls.push("dataDeletionRequest.updateMany");
         writes.trail = args;
-        return { count: 1 };
+        // Zero means no pending request matched this confirmation, which the
+        // service has to treat as a refusal rather than an erasure with no proof.
+        return { count: scenario.scaffoldMissing ? 0 : 1 };
       },
     },
   };
 
+  let transactionOptions: unknown;
   const prisma = {
-    $transaction: async (run: (transaction: typeof tx) => Promise<unknown>) =>
-      run(tx),
+    $transaction: async (
+      run: (transaction: typeof tx) => Promise<unknown>,
+      options?: unknown,
+    ) => {
+      transactionOptions = options;
+      return run(tx);
+    },
   } as unknown as PrismaService;
 
-  return { service: new AccountDeletionService(prisma), calls, writes };
+  return {
+    service: new AccountDeletionService(prisma),
+    calls,
+    writes,
+    // Exposed so a test can assert how the erasure transaction is configured —
+    // this fake used to swallow the options, which is why nothing noticed the
+    // erasure running without the shared helper's retry and `maxWait`.
+    transactionOptions: () => transactionOptions,
+  };
 }
 
 const LIVE_TOKEN = {
@@ -158,8 +183,54 @@ describe("AccountDeletionService", () => {
     expect(result.anonymizedAt).toEqual(expect.any(String));
   });
 
+  it("scrubs the practices the profile owned", async () => {
+    // The one thing an erasure used to walk past. `user`, `profile`,
+    // `replacementListing` and `application` were all scrubbed while a practice
+    // kept its real name, its real address and its coordinates, and stayed
+    // `isPublic` — still listed, still in the geographic index, for the whole
+    // grace window, pointing at a profile whose fields were all null.
+    const { service, writes, calls } = makeService({
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "OPEN" }],
+    });
+
+    await service.confirmDeletion("abc");
+
+    expect(calls).toContain("practice.updateMany");
+
+    // Copied before any assertion: `toMatchObject` with `expect.any` leaves its
+    // matchers in the object it matched, and this fake hands over a reference to
+    // the arguments it recorded.
+    const write = structuredClone(writes.practices) as {
+      where: { ownerId: string };
+      data: Record<string, string | number | boolean | null>;
+    };
+
+    expect(write.where).toEqual({ ownerId: "profile-1" });
+    expect(write.data.isPublic).toBe(false);
+
+    // Coordinates cleared, never moved to zero: a `lat`/`lng` of 0/0 is a real
+    // place in the Atlantic, and an indexed practice there is worse than one that
+    // has left the geo query's `latitude IS NOT NULL` branch.
+    expect(write.data.latitude).toBeNull();
+    expect(write.data.longitude).toBeNull();
+
+    // `name` is not nullable, so it takes a placeholder rather than null — and
+    // that placeholder has to say nothing and identify nobody.
+    for (const field of ["name", "address", "city"]) {
+      const value = write.data[field];
+      expect(typeof value).toBe("string");
+      expect(String(value)).not.toBe("");
+      expect(String(value).toLowerCase()).not.toContain("practice");
+      expect(String(value).toLowerCase()).not.toContain("cabinet");
+      expect(String(value).toLowerCase()).not.toContain("dr");
+    }
+  });
+
   it("scrubs the profile and takes the listings out of circulation", async () => {
-    const { service, writes } = makeService({
+    const { service, writes, transactionOptions } = makeService({
       verification: LIVE_TOKEN,
       user: { id: "user-1", email: "user@example.com" },
       profile: { id: "profile-1", userId: "user-1" },
@@ -167,6 +238,12 @@ describe("AccountDeletionService", () => {
     });
 
     const result = await service.confirmDeletion("abc");
+
+    // The erasure is the one write that must not half-happen, and it is the one
+    // that now goes through the shared serializable helper like every other.
+    expect(transactionOptions()).toMatchObject({
+      isolationLevel: "Serializable",
+    });
 
     expect(writes.profile).toMatchObject({
       data: {
@@ -184,6 +261,32 @@ describe("AccountDeletionService", () => {
     expect(listingWrite.data.title).toBe(ANONYMIZED_LISTING_TITLE);
     expect(listingWrite.data.status).toBe("CLOSED_NO_CANDIDATE");
     expect(result.anonymizedListings).toBe(1);
+  });
+
+  it("refuses to erase when no pending request matches, and erases nothing", async () => {
+    // The trail row is the accountability trail (art. 5(2)). Anonymizing an
+    // account without one is the outcome that trail exists to prevent, and the
+    // count was ignored — so a rotated pepper, a swept row or a forged link all
+    // produced a completed erasure with no record of it.
+    const { service, calls, writes } = makeService({
+      scaffoldMissing: true,
+      verification: LIVE_TOKEN,
+      user: { id: "user-1", email: "user@example.com" },
+      profile: { id: "profile-1", userId: "user-1" },
+      listings: [{ id: "listing-1", status: "OPEN" }],
+    });
+
+    await expect(service.confirmDeletion("abc")).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    // Nothing was rewritten: not the user, not the profile, not the listings.
+    expect(calls).not.toContain("user.update");
+    expect(calls).not.toContain("profile.update");
+    expect(calls).not.toContain("replacementListing.updateMany");
+    expect(writes.user).toBeUndefined();
+    expect(writes.profile).toBeUndefined();
+    expect(writes.listings).toBeUndefined();
   });
 
   it("leaves a listing that holds an accepted placement alone", async () => {
@@ -237,7 +340,7 @@ describe("AccountDeletionService", () => {
     await service.confirmDeletion("abc");
 
     expect(writes.trail).toMatchObject({
-      data: { status: "EXECUTED", executedAt: expect.any(Date) },
+      data: { status: "ANONYMIZED", executedAt: expect.any(Date) },
     });
     const where = (writes.trail as { where: { userIdHash: string } }).where;
     expect(where.userIdHash).toMatch(/^[0-9a-f]{64}$/);

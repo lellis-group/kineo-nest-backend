@@ -1,5 +1,6 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import { PaginationMetaSchema } from "../../common/pagination";
 import { ListingStatus, Specialty } from "../../generated/prisma/enums";
 
 export const ReplacementListingSchema = z.object({
@@ -40,11 +41,7 @@ export const ListingStatusCountsSchema = z.object({
 
 export const PaginatedReplacementListingsSchema = z.object({
   data: z.array(ReplacementListingSchema),
-  meta: z.object({
-    total: z.number(),
-    page: z.number(),
-    limit: z.number(),
-    totalPages: z.number(),
+  meta: PaginationMetaSchema.extend({
     counts: ListingStatusCountsSchema.optional(),
   }),
 });

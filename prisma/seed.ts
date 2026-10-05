@@ -20,18 +20,18 @@ const LISTINGS_PER_PRACTICE = 3;
 const MAX_APPLICATIONS_PER_LISTING = 5;
 
 const MONTHS = [
-  "janvier",
-  "février",
-  "mars",
-  "avril",
-  "mai",
-  "juin",
-  "juillet",
-  "août",
-  "septembre",
-  "octobre",
-  "novembre",
-  "décembre",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 // Rough city centers so geo searches spread across France instead of
@@ -53,20 +53,20 @@ const cityCoordinates: Record<string, { latitude: number; longitude: number }> =
   };
 
 const specialtyLabels: Record<Specialty, string> = {
-  GENERALIST: "généraliste",
-  DENTIST: "dentiste",
-  DERMATOLOGIST: "dermatologue",
-  PSYCHIATRIST: "psychiatre",
-  OTHER: "praticien",
+  GENERALIST: "general practitioner",
+  DENTIST: "dentist",
+  DERMATOLOGIST: "dermatologist",
+  PSYCHIATRIST: "psychiatrist",
+  OTHER: "practitioner",
 };
 
 const urgentTitleTemplates: Array<
   (label: string, city: string, practice: string) => string
 > = [
-  (label, city) => `Urgent : remplacement ${label} — ${city}`,
-  (label, city) => `Remplacement immédiat ${label} à ${city}`,
-  (label, city, practice) => `${practice} cherche ${label} en urgence`,
-  (label, city) => `Dernière minute : ${label} recherché(e) — ${city}`,
+  (label, city) => `Urgent: ${label} cover needed — ${city}`,
+  (label, city) => `Immediate ${label} cover in ${city}`,
+  (label, city, practice) => `${practice} urgently seeks a ${label}`,
+  (label, city) => `Last minute: ${label} wanted — ${city}`,
 ];
 
 const plannedTitleTemplates: Array<
@@ -78,46 +78,45 @@ const plannedTitleTemplates: Array<
     month: string,
   ) => string
 > = [
-  (label, city, _practice, duration) =>
-    `Remplacement ${label} ${duration} — ${city}`,
+  (label, city, _practice, duration) => `${label} cover, ${duration} — ${city}`,
   (label, city, _practice, _duration, month) =>
-    `Recherche remplaçant(e) ${label} pour ${month}`,
+    `Looking for a ${label} for ${month}`,
   (label, city, practice, _duration, month) =>
-    `${practice} : remplacement ${label} dès ${month}`,
+    `${practice}: ${label} cover from ${month}`,
   (label, city, _practice, _duration, month) =>
-    `Remplacement ${label} à ${city} (début ${month})`,
-  (label, city, practice) => `${practice} recrute un(e) remplaçant(e) ${label}`,
+    `${label} cover in ${city} (starting ${month})`,
+  (label, city, practice) => `${practice} is recruiting a ${label}`,
   (label, city, _practice, duration) =>
-    `Remplacement ${label} ${duration} à ${city}`,
+    `${label} cover, ${duration}, in ${city}`,
 ];
 
 const absenceReasons = [
-  "des congés d'été",
-  "un congé maternité",
-  "une formation continue",
-  "un arrêt maladie",
-  "des vacances scolaires",
-  "un congé sabbatique",
-  "des congés d'hiver",
+  "summer holidays",
+  "maternity leave",
+  "continued training",
+  "a period of sick leave",
+  "school holidays",
+  "a sabbatical",
+  "winter holidays",
 ];
 
 const listingDescriptionTemplates = [
   (practice: string, city: string, reason: string) =>
-    `${practice} (${city}) recherche un(e) remplaçant(e) pour ${reason}. Patientèle fidèle, équipe accueillante et matériel complet sur place.`,
+    `${practice} (${city}) is looking for cover for ${reason}. Loyal patient base, a welcoming team and the equipment already on site.`,
   (practice: string, city: string, reason: string) =>
-    `Période de ${reason} à couvrir. Plateau technique complet, secrétariat assuré, contact rapide privilégié.`,
+    `Cover needed for ${reason}. Fully equipped practice, reception handled, and quick contact preferred.`,
   (practice: string, city: string, reason: string) =>
-    `Nous cherchons un(e) remplaçant(e) pour ${reason}. ${practice} est situé au cœur de ${city}, stationnement facile.`,
+    `We are looking for cover for ${reason}. ${practice} is in the heart of ${city}, with easy parking.`,
   (practice: string, city: string, reason: string) =>
-    `Remplacement à assurer pour ${reason}. Assistance administrative incluse, patientèle variée.`,
+    `Cover needed for ${reason}. Administrative support included, varied patient base.`,
 ];
 
 function getDurationLabel(days: number): string {
-  if (days <= 5) return "de courte durée";
-  if (days <= 12) return "d'une semaine";
-  if (days <= 21) return "de deux semaines";
-  if (days <= 35) return "d'un mois";
-  return "de longue durée";
+  if (days <= 5) return "short notice";
+  if (days <= 12) return "one week";
+  if (days <= 21) return "two weeks";
+  if (days <= 35) return "one month";
+  return "a longer period";
 }
 
 function buildListingTitle(
@@ -283,7 +282,7 @@ async function ensureSystemScaffold() {
     create: {
       id: SYSTEM_SCAFFOLD.practiceId,
       ownerId: SYSTEM_SCAFFOLD.profileId,
-      name: "System (annonces retirees)",
+      name: "System (withdrawn listings)",
       address: "-",
       city: "-",
       isPublic: false,
@@ -430,13 +429,13 @@ async function main() {
   );
 
   const practicePrefixes = [
-    "Cabinet Dentaire",
-    "Cabinet Médical",
+    "Dental Practice",
+    "Medical Practice",
     "Centre Dentaire",
-    "Centre Médical",
-    "Cabinet",
+    "Medical Centre",
+    "Practice",
     "SCM Dentaire",
-    "Pôle Santé",
+    "Health Centre",
     "Polyclinique",
   ];
   const practiceQualifiers = [
@@ -594,26 +593,26 @@ async function main() {
   ];
 
   const rejectionReasons = [
-    "Autre candidat retenu",
-    "Disponibilités incompatibles",
-    "Profil déjà pourvu",
-    "Spécialité non correspondante",
+    "Another candidate selected",
+    "Availability does not match",
+    "Position already filled",
+    "Specialty does not match",
   ];
   const withdrawnReasons = [
-    "J'ai finalement trouvé un autre remplacement",
-    "Je ne suis plus disponible sur cette période",
-    "La distance de déplacement est trop importante",
+    "I eventually found another cover",
+    "I am no longer available over that period",
+    "The distance is too far to commute",
   ];
 
   const applicationMessageTemplates = [
     (title: string, from: string, to: string) =>
-      `Bonjour, votre annonce « ${title} » correspond parfaitement à mes disponibilités du ${from} au ${to}. Je serais ravi(e) d'échanger avec vous.`,
+      `Hello, your listing "${title}" fits my availability from ${from} to ${to} exactly. I would be glad to talk it through.`,
     (title: string, from: string, to: string) =>
-      `Bonjour, je suis intéressé(e) par le remplacement « ${title} ». Je suis disponible sur toute la période (${from} - ${to}) et peux passer au cabinet pour une rencontre préalable.`,
+      `Hello, I am interested in the "${title}" listing. I am available for the whole period (${from} - ${to}) and can come by for an informal meeting first.`,
     (title: string) =>
-      `Bonjour, je réponds à votre annonce « ${title} ». Habitué(e) aux remplacements, je peux vous transmettre mes références et mon planning.`,
+      `Hello, I am replying to your "${title}" listing. I cover regularly and can send my references and my diary.`,
     (title: string) =>
-      `Bonjour, votre annonce « ${title} » m'intéresse beaucoup. N'hésitez pas à me contacter pour discuter des modalités pratiques.`,
+      `Hello, I am very interested in your "${title}" listing. Feel free to get in touch to discuss the practicalities.`,
   ];
 
   const applicationRows: Prisma.ApplicationCreateManyInput[] = [];

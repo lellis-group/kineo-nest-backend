@@ -13,9 +13,15 @@ import {
 import {
   ACTIVE_APPLICATION_STATUSES,
   isTerminalListingStatus,
+  MANUAL_LISTING_STATUSES,
   RECRUITING_LISTING_STATUSES,
+  recalcListingStatus,
 } from "../common/listing-status";
-import { getOwnedProfileId } from "../common/profile-lookup";
+import { paginate, paginationMeta } from "../common/pagination";
+import {
+  getOwnedProfileId,
+  getOwnedProfileIdSafe,
+} from "../common/profile-lookup";
 import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
@@ -26,6 +32,33 @@ import type { CreateReplacementListingDto } from "./dto/create-replacementlistin
 import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
+
+/**
+ * Settles every active application on a listing the platform is taking out of
+ * circulation, on behalf of the owner who closed or cancelled it.
+ *
+ * One function because `close` and `cancel` were doing this inline, side by side
+ * and one field apart: `close` recorded who had decided, `cancel` did not, so a
+ * cancellation left `decisionSource` NULL and an audit reading "who decided this"
+ * answered differently for two ways of ending the same listing. The reason is the
+ * only thing that differs between them, so it is the only thing passed in.
+ */
+async function rejectActiveApplicationsOnListing(
+  client: PrismaService | Prisma.TransactionClient,
+  listingId: string,
+  reason: string,
+  at: Date,
+): Promise<void> {
+  await client.application.updateMany({
+    where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
+    data: {
+      status: "REJECTED",
+      decisionSource: "PRACTICE_REJECTED",
+      rejectionReason: reason,
+      respondedAt: at,
+    },
+  });
+}
 
 // A listing in one of these still counts against the owner's quota: a draft
 // and a filled listing are both work in progress that has to be dealt with.
@@ -128,10 +161,7 @@ export class ReplacementlistingsService {
   }
 
   async findAll(filters: FindReplacementListingsDto) {
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     // The public feed is OPEN whatever the caller asked for: a status filter on
     // a listing somebody else owns would turn the feed into a way to read the
     // statuses of postings still in circulation.
@@ -159,17 +189,14 @@ export class ReplacementlistingsService {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCount(listing)),
       ),
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: paginationMeta(total, page, limit),
     };
   }
 
   async findMine(userId: string, filters: FindReplacementListingsDto) {
     const profileId = await getOwnedProfileId(this.prisma, userId);
 
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = {
       createdById: profileId,
       ...this.buildListingsWhere(filters),
@@ -204,10 +231,7 @@ export class ReplacementlistingsService {
         toReplacementListingDto(this.withCount(listing)),
       ),
       meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        ...paginationMeta(total, page, limit),
         counts,
       },
     };
@@ -250,10 +274,10 @@ export class ReplacementlistingsService {
         throw new NotFoundException(`Replacement listing ${id} not found`);
       }
 
-      const profileId = await getOwnedProfileId(
+      const profileId = await getOwnedProfileIdSafe(
         this.prisma,
         requesterUserId,
-      ).catch(() => undefined);
+      );
 
       if (listing.createdById !== profileId) {
         throw new NotFoundException(`Replacement listing ${id} not found`);
@@ -263,8 +287,20 @@ export class ReplacementlistingsService {
     return toReplacementListingDto(this.withCount(listing));
   }
 
-  private async assertOwnership(id: string, userId: string) {
-    const listing = await this.prisma.replacementListing.findUnique({
+  /**
+   * Loads a listing and settles who may act on it.
+   *
+   * Takes the client rather than reading through `this.prisma`, so a caller
+   * already inside a transaction keeps its read and its write in one: a guard that
+   * reads on another connection can be overtaken between the read and the write,
+   * which is the whole reason `remove` is transactional.
+   */
+  private async assertOwnershipWith(
+    client: PrismaService | Prisma.TransactionClient,
+    id: string,
+    userId: string,
+  ) {
+    const listing = await client.replacementListing.findUnique({
       where: { id },
     });
 
@@ -272,13 +308,18 @@ export class ReplacementlistingsService {
       throw new NotFoundException(`Replacement listing ${id} not found`);
     }
 
-    const profileId = await getOwnedProfileId(this.prisma, userId);
+    const profileId = await getOwnedProfileId(client, userId);
 
     if (listing.createdById !== profileId) {
       throw new ForbiddenException();
     }
 
     return listing;
+  }
+
+  /** The same, on the service's own client. */
+  private assertOwnership(id: string, userId: string) {
+    return this.assertOwnershipWith(this.prisma, id, userId);
   }
 
   async publish(id: string, userId: string) {
@@ -299,63 +340,106 @@ export class ReplacementlistingsService {
     return toReplacementListingDto({ ...updated, applicationsCount: 0 });
   }
 
+  /**
+   * Updates a listing's content.
+   *
+   * A change of `maxApplications` also re-derives the status. That was missing,
+   * and the listing is the worse for it: a `FULL` listing whose owner raised the
+   * cap stayed `FULL` and refused every candidate it now had room for, with no
+   * transition anywhere that could undo it. The capacity is one of the two inputs
+   * to `deriveListingStatus`, so writing it without re-deriving leaves the row
+   * claiming something the code no longer believes.
+   *
+   * One transaction, so the count the derivation reads and the write it decides on
+   * agree. When the derivation moved the status, the row is read again: the value
+   * the route answers with has to be the one that was written.
+   */
   async update(id: string, userId: string, dto: UpdateReplacementListingDto) {
-    const listing = await this.assertOwnership(id, userId);
+    const updated = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    if (isTerminalListingStatus(listing.status)) {
-      throw refusal(
-        REFUSAL_CODES.listingNotModifiable,
-        "This listing can no longer be modified",
-      );
-    }
+        if (isTerminalListingStatus(listing.status)) {
+          throw refusal(
+            REFUSAL_CODES.listingNotModifiable,
+            "This listing can no longer be modified",
+          );
+        }
 
-    const startDate = dto.startDate
-      ? new Date(dto.startDate)
-      : listing.startDate;
-    const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
-    if (startDate >= endDate) {
-      throw refusal(
-        REFUSAL_CODES.listingInvalidDates,
-        "startDate must be before endDate",
-      );
-    }
+        const startDate = dto.startDate
+          ? new Date(dto.startDate)
+          : listing.startDate;
+        const endDate = dto.endDate ? new Date(dto.endDate) : listing.endDate;
+        if (startDate >= endDate) {
+          throw refusal(
+            REFUSAL_CODES.listingInvalidDates,
+            "startDate must be before endDate",
+          );
+        }
 
-    const updated = await this.prisma.replacementListing.update({
-      where: { id },
-      data: {
-        ...dto,
-        startDate: dto.startDate ? startDate : undefined,
-        endDate: dto.endDate ? endDate : undefined,
+        const updated = await tx.replacementListing.update({
+          where: { id },
+          data: {
+            ...dto,
+            startDate: dto.startDate ? startDate : undefined,
+            endDate: dto.endDate ? endDate : undefined,
+          },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
+
+        if (dto.maxApplications === undefined) {
+          return updated;
+        }
+
+        await recalcListingStatus(tx, id);
+
+        return tx.replacementListing.findUniqueOrThrow({
+          where: { id },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
       },
-      include: APPLICATIONS_COUNT_INCLUDE,
-    });
+    );
 
     return toReplacementListingDto(this.withCount(updated));
   }
 
+  /**
+   * Deletes a listing, unless a cascade would take somebody else's application.
+   *
+   * The whole body is one serializable transaction, and that is the point rather
+   * than tidiness. Reading the listing, counting the third-party applications and
+   * deleting were three statements on three connections: an application committed
+   * in the gap was not seen by the count and went with the cascade. The guard is
+   * there to protect another candidate's row, and outside a transaction it does
+   * not.
+   */
   async remove(id: string, userId: string) {
-    const listing = await this.assertOwnership(id, userId);
-
-    if (listing.status === "FILLED") {
-      throw refusal(
-        REFUSAL_CODES.listingFilledCannotBeDeleted,
-        "A filled listing cannot be deleted, close it instead",
-      );
-    }
-
-    await assertNoThirdPartyApplications(
+    const deleted = await runSerializableTransaction(
       this.prisma,
-      listing.createdById,
-      { id: listing.id },
-      LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    // Mapped like every other read: the route serializes with the listing DTO,
-    // which expects ISO dates and an application count, and a raw Prisma row
-    // satisfies neither.
-    const deleted = await this.prisma.replacementListing.delete({
-      where: { id },
-    });
+        if (listing.status === "FILLED") {
+          throw refusal(
+            REFUSAL_CODES.listingFilledCannotBeDeleted,
+            "A filled listing cannot be deleted, close it instead",
+          );
+        }
+
+        await assertNoThirdPartyApplications(
+          tx,
+          listing.createdById,
+          { id: listing.id },
+          LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+        );
+
+        // Returned raw and mapped below: the route serializes with the listing
+        // DTO, which expects ISO dates and an application count, and a Prisma row
+        // satisfies neither.
+        return tx.replacementListing.delete({ where: { id } });
+      },
+    );
 
     return toReplacementListingDto({ ...deleted, applicationsCount: 0 });
   }
@@ -363,16 +447,29 @@ export class ReplacementlistingsService {
   async close(id: string, userId: string) {
     const listing = await this.assertOwnership(id, userId);
 
-    if (listing.status !== "OPEN" && listing.status !== "FILLED") {
+    // Closing is for a posting still in circulation, so a DRAFT or an
+    // already-terminal listing is refused.
+    //
+    // `IN_DISCUSSION` and `FULL` are *not* refused, and that is the fix. They are
+    // what a listing with candidates on it becomes, so the previous guard — which
+    // accepted only `OPEN` and `FILLED` — made it impossible to close a posting
+    // that had shortlisted candidates. `cancel` was the only way out, and cancel
+    // tells every one of those candidates the posting was abandoned rather than
+    // closed, which is a different sentence about the same event.
+    if (
+      MANUAL_LISTING_STATUSES.includes(listing.status) ||
+      (isTerminalListingStatus(listing.status) && listing.status !== "FILLED")
+    ) {
       throw refusal(
         REFUSAL_CODES.listingNotCloseable,
-        "Only open or filled listings can be closed",
+        "Only a listing still in circulation can be closed",
       );
     }
 
-    // A FILLED listing closed out with a placement on it, an OPEN one was closed
-    // with nobody retained. Both leave circulation, and a candidate who was
-    // shortlisted has to be able to tell the two apart.
+    // A FILLED listing closed out with a placement on it; any other was closed
+    // with nobody retained, candidates or not. Both leave circulation, and a
+    // candidate who was shortlisted has to be able to tell the two apart — which
+    // the reason below also does.
     const updated = await this.prisma.replacementListing.update({
       where: { id },
       data: {
@@ -381,15 +478,12 @@ export class ReplacementlistingsService {
       include: APPLICATIONS_COUNT_INCLUDE,
     });
 
-    await this.prisma.application.updateMany({
-      where: { listingId: id, status: { in: ACTIVE_APPLICATION_STATUSES } },
-      data: {
-        status: "REJECTED",
-        decisionSource: "PRACTICE_REJECTED",
-        rejectionReason: PLATFORM_REJECTION_REASONS.listingWithdrawn,
-        respondedAt: new Date(),
-      },
-    });
+    await rejectActiveApplicationsOnListing(
+      this.prisma,
+      id,
+      PLATFORM_REJECTION_REASONS.listingWithdrawn,
+      new Date(),
+    );
 
     return toReplacementListingDto(this.withCount(updated));
   }
@@ -411,30 +505,27 @@ export class ReplacementlistingsService {
           throw new ForbiddenException();
         }
 
-        if (
-          listing.status === "CLOSED" ||
-          listing.status === "CLOSED_NO_CANDIDATE" ||
-          listing.status === "CANCELLED"
-        ) {
+        // Every terminal status, `FILLED` included. A filled listing carries a
+        // placement that was agreed with a candidate; cancelling it would leave
+        // that candidate holding a replacement on a posting that no longer
+        // exists, which is why it has to be closed instead.
+        if (isTerminalListingStatus(listing.status)) {
           throw refusal(
             REFUSAL_CODES.listingAlreadyClosed,
-            "This listing is already closed or cancelled",
+            listing.status === "FILLED"
+              ? "A filled listing cannot be cancelled, close it instead"
+              : "This listing is already closed or cancelled",
           );
         }
 
         const now = new Date();
 
-        await tx.application.updateMany({
-          where: {
-            listingId: id,
-            status: { in: ACTIVE_APPLICATION_STATUSES },
-          },
-          data: {
-            status: "REJECTED",
-            rejectionReason: PLATFORM_REJECTION_REASONS.listingCancelled,
-            respondedAt: now,
-          },
-        });
+        await rejectActiveApplicationsOnListing(
+          tx,
+          id,
+          PLATFORM_REJECTION_REASONS.listingCancelled,
+          now,
+        );
 
         return tx.replacementListing.update({
           where: { id },

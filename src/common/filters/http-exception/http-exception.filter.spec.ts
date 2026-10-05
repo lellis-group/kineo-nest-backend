@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { type ArgumentsHost, HttpException, HttpStatus } from "@nestjs/common";
+import {
+  type ArgumentsHost,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+} from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import type { HttpAdapterHost } from "@nestjs/core";
 import { ZodSerializationException, ZodValidationException } from "nestjs-zod";
@@ -166,6 +171,82 @@ describe("HttpExceptionFilter outside production", () => {
 
     expect(captured[0].body).toMatchObject({
       message: "Internal server error",
+    });
+  });
+
+  it("keeps the code an exception carries, and the shape when it does not", () => {
+    const { host, captured } = makeHost();
+    const filter = makeFilter("production");
+
+    // `refusal()` raises exactly this body, and the client branches on the code.
+    filter.catch(
+      new BadRequestException({
+        statusCode: 400,
+        code: "LISTING_NOT_CLOSEABLE",
+        message: "Only open or filled listings can be closed",
+      }),
+      host,
+    );
+
+    expect(captured[0].body).toMatchObject({
+      statusCode: 400,
+      message: "Only open or filled listings can be closed",
+      code: "LISTING_NOT_CLOSEABLE",
+    });
+  });
+
+  it("answers with no code field when the exception carries none", () => {
+    const { host, captured } = makeHost();
+    const filter = makeFilter("production");
+
+    filter.catch(new HttpException("nope", HttpStatus.NOT_FOUND), host);
+
+    expect(captured[0].body).not.toHaveProperty("code");
+  });
+
+  it("keeps the code in development too, so the two agree", () => {
+    // Development delegates to the base filter, which writes the exception body
+    // as it is. A code present in one environment and absent in the other would
+    // make the client behave differently depending on where it ran.
+    const { host, captured } = makeHost();
+    const filter = makeFilter("development");
+
+    filter.catch(
+      new BadRequestException({
+        statusCode: 400,
+        code: "LISTING_NOT_CLOSEABLE",
+        message: "Only open or filled listings can be closed",
+      }),
+      host,
+    );
+
+    expect(captured[0].body).toMatchObject({
+      code: "LISTING_NOT_CLOSEABLE",
+    });
+  });
+
+  it("keeps a token out of a message that quotes the URL", () => {
+    // Nest's own "route not found" message is the URL, query string included, so
+    // stripping the request path was not enough on its own.
+    const { host, captured } = makeHost(
+      "/account/confirm-deletion?token=super-secret-token",
+    );
+    const filter = makeFilter("production");
+
+    filter.catch(
+      new HttpException(
+        "Cannot GET /account/confirm-deletion?token=super-secret-token",
+        HttpStatus.NOT_FOUND,
+      ),
+      host,
+    );
+
+    expect(JSON.stringify(captured[0].body)).not.toContain(
+      "super-secret-token",
+    );
+    // The sentence keeps its shape rather than losing its tail.
+    expect(captured[0].body).toMatchObject({
+      message: expect.stringContaining("Cannot GET /account/confirm-deletion"),
     });
   });
 

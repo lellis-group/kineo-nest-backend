@@ -1,5 +1,10 @@
 import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import {
+  paginationBoundsRefine,
+  paginationQueryShape,
+  paginationWithinBounds,
+} from "../../common/pagination";
 import { ProfileType, Specialty } from "../../generated/prisma/enums";
 
 export const FindProfilesSchema = z
@@ -19,26 +24,9 @@ export const FindProfilesSchema = z
       .max(100)
       .optional()
       .describe("Filter by city"),
-    page: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(10000)
-      .default(1)
-      .describe("Page number, starting at 1"),
-    limit: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(20)
-      .describe("Number of results per page, max 100"),
+    ...paginationQueryShape,
   })
   .strict()
-  .refine((data) => data.page * data.limit <= 10_000, {
-    message:
-      "page and limit combination is too large (no more than 10,000 results can be requested)",
-    path: ["page"],
-  });
+  .refine(paginationWithinBounds, paginationBoundsRefine);
 
 export class FindProfilesDto extends createZodDto(FindProfilesSchema) {}

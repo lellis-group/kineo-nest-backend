@@ -75,6 +75,30 @@ async function dropIfExists(): Promise<void> {
   await admin.end();
 }
 
+export interface CapturedEmail {
+  to?: string;
+  subject?: string;
+  html?: string;
+}
+
+/**
+ * Every email the application sent, in order.
+ *
+ * The application runs in this process, so injecting a transport at the mailer
+ * is enough to see what went out — which is the only way to assert *which*
+ * template a flow chose. It also removes SMTP from the picture: these suites used
+ * to reach a real server that CI does not have.
+ */
+export const sentEmails: CapturedEmail[] = [];
+
+export function clearSentEmails(): void {
+  sentEmails.length = 0;
+}
+
+export function emailsTo(address: string): CapturedEmail[] {
+  return sentEmails.filter((mail) => mail.to === address);
+}
+
 export interface E2EFixture {
   app: INestApplication;
   baseUrl: string;
@@ -119,6 +143,7 @@ export async function bootApp(): Promise<E2EFixture> {
   process.env.THROTTLE_LONG_LIMIT = "10000";
   process.env.RATE_LIMIT_MAX = "10000";
   process.env.CREDENTIAL_RATE_LIMIT_MAX = "10000";
+  process.env.CHANGE_EMAIL_RATE_LIMIT_MAX = "10000";
 
   // prisma.config.ts resolves the datasource through env("DATABASE_URL") and
   // dotenv/config only fills variables that are not already set, so the value
@@ -146,6 +171,16 @@ export async function bootApp(): Promise<E2EFixture> {
   const prisma = createPrismaClient();
 
   await ensureScaffold(prisma);
+
+  const { configureMailer } = await import("../../lib/email/mailer");
+  configureMailer({
+    transporter: {
+      sendMail: async (message: CapturedEmail) => {
+        sentEmails.push(message);
+        return { messageId: "captured" };
+      },
+    } as never,
+  });
 
   fixture = {
     app,

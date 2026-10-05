@@ -4,7 +4,7 @@ import { FindReplacementListingsSchema } from "./find-replacementlistings.dto";
 import { UpdateReplacementListingSchema } from "./update-replacementlisting.dto";
 
 const validListing = {
-  title: "Remplacement de novembre",
+  title: "November cover",
   practiceId: "clh8zq6w70000wqf4vlonix5a",
   startDate: "2026-09-10T08:00:00.000Z",
   endDate: "2026-09-12T08:00:00.000Z",
@@ -29,11 +29,11 @@ describe("ReplacementListing DTO security", () => {
     it("trims the title and rejects empty or invisible characters", () => {
       const trimmed = CreateReplacementListingSchema.safeParse({
         ...validListing,
-        title: "  Remplacement de novembre  ",
+        title: "  November cover  ",
       });
       expect(trimmed.success).toBe(true);
       if (trimmed.success) {
-        expect(trimmed.data.title).toBe("Remplacement de novembre");
+        expect(trimmed.data.title).toBe("November cover");
       }
 
       expect(
@@ -46,7 +46,7 @@ describe("ReplacementListing DTO security", () => {
       expect(
         CreateReplacementListingSchema.safeParse({
           ...validListing,
-          title: "Remplacement\u200Burgent",
+          title: "Urgent\u200Bcover",
         }).success,
       ).toBe(false);
     });
@@ -91,12 +91,12 @@ describe("ReplacementListing DTO security", () => {
     it("trims and bounds the description", () => {
       const result = CreateReplacementListingSchema.safeParse({
         ...validListing,
-        description: "  Remplacement du mois de septembre.  ",
+        description: "  Cover for the month of September.  ",
       });
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.description).toBe(
-          "Remplacement du mois de septembre.",
+          "Cover for the month of September.",
         );
       }
 
@@ -111,13 +111,13 @@ describe("ReplacementListing DTO security", () => {
     it("allows newlines but rejects invisible control characters in the description", () => {
       const withNewline = CreateReplacementListingSchema.safeParse({
         ...validListing,
-        description: "Remplacement\ndu mois de septembre.",
+        description: "Cover\nfor the month of September.",
       });
       expect(withNewline.success).toBe(true);
 
       const withZeroWidth = CreateReplacementListingSchema.safeParse({
         ...validListing,
-        description: "Remplacement\u200Bdu mois",
+        description: "Cover\u200Bfor the month",
       });
       expect(withZeroWidth.success).toBe(false);
     });

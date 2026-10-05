@@ -17,4 +17,4 @@ export const SYSTEM_SCAFFOLD = {
   email: "system@deleted.invalid",
 } as const;
 
-export const GHOST_LISTING_TITLE = "Annonce retirée à la demande de son auteur";
+export const GHOST_LISTING_TITLE = "Withdrawn at the request of its author";

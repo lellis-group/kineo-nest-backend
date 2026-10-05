@@ -7,7 +7,7 @@ export function verificationEmailTemplate({
   name?: string | null;
   url: string;
 }) {
-  const displayName = escapeHtml(name ?? "nouvel utilisateur");
+  const displayName = escapeHtml(name ?? "there");
   const href = safeUrl(url);
 
   return `
@@ -16,7 +16,7 @@ export function verificationEmailTemplate({
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vérification de votre email</title>
+  <title>Email verification</title>
   <!--[if (gte mso 9)|(IE)]>
   <style type="text/css">
     table { border-collapse: collapse; }
@@ -55,7 +55,7 @@ export function verificationEmailTemplate({
           <tr><td style="line-height:32px; font-size:0;" height="32">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px;">
-              <h1 style="font-size:24px; font-weight:600; color:#FFFFFF; margin:0; padding:0; line-height:1.4; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Bienvenue sur Kinéo !</h1>
+              <h1 style="font-size:24px; font-weight:600; color:#FFFFFF; margin:0; padding:0; line-height:1.4; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Welcome to Kinéo!</h1>
             </td>
           </tr>
           <tr><td style="line-height:28px; font-size:0;" height="28">&nbsp;</td></tr>
@@ -69,19 +69,19 @@ export function verificationEmailTemplate({
           <tr><td style="line-height:32px; font-size:0;" height="32">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Bonjour <strong style="color:#FFFFFF;">${displayName}</strong>,</p>
+              <p style="padding:0; margin:0;">Hello <strong style="color:#FFFFFF;">${displayName}</strong>,</p>
             </td>
           </tr>
           <tr><td style="line-height:18px; font-size:0;" height="18">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Merci d’avoir créé un compte. Pour profiter pleinement de nos services, nous devons confirmer que cette adresse email vous appartient bien.</p>
+              <p style="padding:0; margin:0;">Thank you for creating an account. To use the service we have to confirm that this email address really belongs to you.</p>
             </td>
           </tr>
           <tr><td style="line-height:18px; font-size:0;" height="18">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; color:#D9D6D0; font-size:16px; line-height:1.7; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Cliquez sur le bouton ci-dessous pour valider votre adresse :</p>
+              <p style="padding:0; margin:0;">Click the button below to validate your address:</p>
             </td>
           </tr>
           <tr><td style="line-height:34px; font-size:0;" height="34">&nbsp;</td></tr>
@@ -90,7 +90,7 @@ export function verificationEmailTemplate({
               <table align="center" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                 <tr>
                   <td align="center" style="background-color:#D7D1B0; padding:15px 34px; border-radius:999px;" bgcolor="#D7D1B0">
-                    <a href="${href}" style="color:#11100F; font-weight:600; font-size:16px; text-decoration:none; display:inline-block; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Vérifier mon email</a>
+                    <a href="${href}" style="color:#11100F; font-weight:600; font-size:16px; text-decoration:none; display:inline-block; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Verify my email</a>
                   </td>
                 </tr>
               </table>
@@ -99,19 +99,19 @@ export function verificationEmailTemplate({
           <tr><td style="line-height:34px; font-size:0;" height="34">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; font-size:14px; line-height:1.6; color:#8A8680; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Ce lien est valable 24 heures.</p>
+              <p style="padding:0; margin:0;">This link is valid for 24 hours.</p>
             </td>
           </tr>
           <tr><td style="line-height:10px; font-size:0;" height="10">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; font-size:14px; line-height:1.6; color:#8A8680; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Si vous n’avez pas créé de compte, ignorez cet email.</p>
+              <p style="padding:0; margin:0;">If you did not create an account, ignore this email.</p>
             </td>
           </tr>
           <tr><td style="line-height:10px; font-size:0;" height="10">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px; font-size:14px; line-height:1.6; color:#8A8680; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">
-              <p style="padding:0; margin:0;">Nous sommes ravis de vous compter parmi nous !</p>
+              <p style="padding:0; margin:0;">We are glad to have you with us!</p>
             </td>
           </tr>
           <tr><td style="line-height:40px; font-size:0;" height="40">&nbsp;</td></tr>
@@ -125,13 +125,13 @@ export function verificationEmailTemplate({
           <tr><td style="line-height:22px; font-size:0;" height="22">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px;">
-              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">© ${new Date().getFullYear()} Kinéo. Tous droits réservés.</p>
+              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">© ${new Date().getFullYear()} Kinéo. All rights reserved.</p>
             </td>
           </tr>
           <tr><td style="line-height:8px; font-size:0;" height="8">&nbsp;</td></tr>
           <tr>
             <td class="email-padding" style="padding:0 36px 40px 36px;">
-              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+              <p style="padding:0; margin:0; font-size:13px; color:#8A8680; text-align:center; font-family:'Space Grotesk', Arial, Helvetica, sans-serif;">This email was sent automatically, please do not reply.</p>
             </td>
           </tr>
         </table>

@@ -11,7 +11,9 @@ import {
   APPLICABLE_LISTING_STATUSES,
   deriveListingStatus,
   isTerminalListingStatus,
+  recalcListingStatus,
 } from "../common/listing-status";
+import { paginate, paginationMeta } from "../common/pagination";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
@@ -24,6 +26,12 @@ import type { FindApplicationsDto } from "./dto/find-applications.dto";
 import { RejectApplicationDto } from "./dto/reject-application.dto";
 import { UpdateApplicationDto } from "./dto/update-application.dto";
 import { WithdrawApplicationDto } from "./dto/withdraw-application.dto";
+import {
+  REJECTION_BUCKET_KEYS,
+  type RejectionBucket,
+  rejectionBucketWhere,
+  zeroBucketCounts,
+} from "./rejection-buckets";
 import { PLATFORM_REJECTION_REASONS } from "./rejection-reasons";
 
 // The mapper publishes name and image and nothing else, so a paginated list
@@ -39,46 +47,33 @@ export class ApplicationsService {
   ) {}
 
   /**
-   * Realigns a listing's status with the applications it actually holds.
-   *
-   * The rule lives in deriveListingStatus, which is also what the quota check
-   * in create() reads. This method used to redraw it inline, and the two copies
-   * agreed by coincidence.
-   */
-  private async recalcListingStatus(
-    tx: Prisma.TransactionClient,
-    listingId: string,
-  ) {
-    const listing = await tx.replacementListing.findUnique({
-      where: { id: listingId },
-    });
-
-    if (!listing) {
-      return;
-    }
-
-    const activeApplications = await tx.application.count({
-      where: { listingId, status: { in: ACTIVE_APPLICATION_STATUSES } },
-    });
-
-    const status = deriveListingStatus({
-      current: listing.status,
-      activeApplications,
-      maxApplications: listing.maxApplications,
-    });
-
-    if (status !== listing.status) {
-      await tx.replacementListing.update({
-        where: { id: listingId },
-        data: { status },
-      });
-    }
-  }
-
-  /**
    * Totals per status over the whole collection, so tab counters stay stable
    * across pages and filters.
    */
+  /**
+   * One count per situation, each its own query.
+   *
+   * Three cheap counts rather than one `groupBy` on `rejectionReason`, because
+   * that column holds free text: grouping by it returns a row per distinct sentence
+   * a practice ever typed, so its row count is bounded by the practices rather than
+   * by the applications. Three known predicates are bounded by three.
+   */
+  private async countApplicationsByBucket(
+    scope: Prisma.ApplicationWhereInput,
+  ): Promise<Record<RejectionBucket, number>> {
+    const counts = zeroBucketCounts();
+
+    await Promise.all(
+      REJECTION_BUCKET_KEYS.map(async (bucket) => {
+        counts[bucket] = await this.prisma.application.count({
+          where: { ...scope, ...rejectionBucketWhere(bucket) },
+        });
+      }),
+    );
+
+    return counts;
+  }
+
   private async countApplicationsByStatus(
     where: Prisma.ApplicationWhereInput,
   ): Promise<{ total: number } & Record<ApplicationStatus, number>> {
@@ -231,10 +226,7 @@ export class ApplicationsService {
       throw new ForbiddenException("You do not own this listing");
     }
 
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
-
+    const { page, limit, skip } = paginate(filters);
     const where = { listingId, status: filters.status };
 
     const [data, total, counts] = await Promise.all([
@@ -257,10 +249,7 @@ export class ApplicationsService {
     return {
       data: data.map(toApplicationDto),
       meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        ...paginationMeta(total, page, limit),
         counts,
       },
     };
@@ -269,17 +258,29 @@ export class ApplicationsService {
   async findMine(userId: string, filters: FindApplicationsDto) {
     const profile = await getOwnedProfile(this.prisma, userId);
 
-    const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = paginate(filters);
 
-    const where = {
+    // Combined rather than spread: `rejectionBucketWhere` carries its own `status`,
+    // and spreading it over this object silently overwrote the caller's. A client
+    // sending `bucket=REFUSED&status=PENDING` — which the two chip rows do exactly
+    // that — got the rejections back instead of nothing, and nothing looked broken.
+    const where: Prisma.ApplicationWhereInput = {
       applicantId: profile.id,
-      status: filters.status,
+      listingId: filters.listingId,
+      AND: [
+        ...(filters.status ? [{ status: filters.status }] : []),
+        ...(filters.bucket ? [rejectionBucketWhere(filters.bucket)] : []),
+      ],
+    };
+
+    // The counters answer over the whole collection, not the filtered slice — a chip
+    // that counted what it just filtered would always read as the page size.
+    const unfiltered = {
+      applicantId: profile.id,
       listingId: filters.listingId,
     };
 
-    const [data, total, counts] = await Promise.all([
+    const [data, total, counts, bucketCounts] = await Promise.all([
       this.prisma.application.findMany({
         where,
         skip,
@@ -291,20 +292,16 @@ export class ApplicationsService {
         include: { listing: { include: { practice: true } } },
       }),
       this.prisma.application.count({ where }),
-      this.countApplicationsByStatus({
-        applicantId: profile.id,
-        listingId: filters.listingId,
-      }),
+      this.countApplicationsByStatus(unfiltered),
+      this.countApplicationsByBucket(unfiltered),
     ]);
 
     return {
       data: data.map(toApplicationDto),
       meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        ...paginationMeta(total, page, limit),
         counts,
+        bucketCounts,
       },
     };
   }
@@ -409,23 +406,73 @@ export class ApplicationsService {
     return toApplicationDto(updated);
   }
 
+  /**
+   * Loads an application and settles who is allowed to decide on it, with one
+   * rule for the answer.
+   *
+   * Two statuses, because they answer different questions. A caller who is
+   * neither the applicant nor the listing's owner is told the application does
+   * not exist: they have no business knowing that it does. A caller who *is* one
+   * of the two, but is not the one whose turn it is, is told 403 — they already
+   * know the application exists, since it is theirs.
+   *
+   * The rule was written out in `reject` and `withdraw` and re-derived in
+   * `accept`, which folded the two cases together and answered 404 to an applicant
+   * asking to accept their own application — the one caller who plainly knew it
+   * was there. `REFUSAL_CODES.applicationNotListingOwner` was written for the
+   * answer and never used.
+   */
+  private async loadForDecision(
+    tx: Prisma.TransactionClient,
+    id: string,
+    userId: string,
+    required: "isOwner" | "isApplicant",
+  ) {
+    const application = await tx.application.findUnique({ where: { id } });
+    if (!application) {
+      throw new NotFoundException(`Application ${id} not found`);
+    }
+
+    const profileId = await getOwnedProfileId(tx, userId);
+
+    const listing = await tx.replacementListing.findUnique({
+      where: { id: application.listingId },
+    });
+
+    const isOwner = listing?.createdById === profileId;
+    const isApplicant = application.applicantId === profileId;
+
+    if (!isOwner && !isApplicant) {
+      throw new NotFoundException(`Application ${id} not found`);
+    }
+    if (required === "isOwner" && !isOwner) {
+      throw new ForbiddenException();
+    }
+    if (required === "isApplicant" && !isApplicant) {
+      throw new ForbiddenException();
+    }
+
+    return { application, listing, isOwner, isApplicant };
+  }
+
   async accept(id: string, userId: string) {
     const accepted = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const profileId = await getOwnedProfileId(tx, userId);
+        const { application, listing } = await this.loadForDecision(
+          tx,
+          id,
+          userId,
+          "isOwner",
+        );
 
-        const application = await tx.application.findUnique({ where: { id } });
-        if (!application) {
+        if (!listing) {
+          // Unreachable, and the compiler cannot see why: ownership was
+          // required above, and that is `listing?.createdById` compared to the
+          // caller, so a listing that does not exist cannot have produced it.
           throw new NotFoundException(`Application ${id} not found`);
         }
 
-        const listing = await tx.replacementListing.findUnique({
-          where: { id: application.listingId },
-        });
-        if (!listing || listing.createdById !== profileId) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw refusal(
             REFUSAL_CODES.applicationNotAcceptable,
@@ -478,26 +525,12 @@ export class ApplicationsService {
     const rejected = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const application = await tx.application.findUnique({ where: { id } });
-        if (!application) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-
-        const profileId = await getOwnedProfileId(tx, userId);
-
-        const listing = await tx.replacementListing.findUnique({
-          where: { id: application.listingId },
-        });
-
-        const isOwner = listing?.createdById === profileId;
-        const isApplicant = application.applicantId === profileId;
-
-        if (!isOwner && !isApplicant) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-        if (!isOwner) {
-          throw new ForbiddenException();
-        }
+        const { application } = await this.loadForDecision(
+          tx,
+          id,
+          userId,
+          "isOwner",
+        );
 
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw refusal(
@@ -516,7 +549,7 @@ export class ApplicationsService {
           },
         });
 
-        await this.recalcListingStatus(tx, application.listingId);
+        await recalcListingStatus(tx, application.listingId);
 
         return updated;
       },
@@ -529,26 +562,12 @@ export class ApplicationsService {
     const withdrawn = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const application = await tx.application.findUnique({ where: { id } });
-        if (!application) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-
-        const profileId = await getOwnedProfileId(tx, userId);
-
-        const listing = await tx.replacementListing.findUnique({
-          where: { id: application.listingId },
-        });
-
-        const isApplicant = application.applicantId === profileId;
-        const isOwner = listing?.createdById === profileId;
-
-        if (!isApplicant && !isOwner) {
-          throw new NotFoundException(`Application ${id} not found`);
-        }
-        if (!isApplicant) {
-          throw new ForbiddenException();
-        }
+        const { application } = await this.loadForDecision(
+          tx,
+          id,
+          userId,
+          "isApplicant",
+        );
 
         if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
           throw refusal(
@@ -566,7 +585,7 @@ export class ApplicationsService {
           },
         });
 
-        await this.recalcListingStatus(tx, application.listingId);
+        await recalcListingStatus(tx, application.listingId);
 
         return updated;
       },
