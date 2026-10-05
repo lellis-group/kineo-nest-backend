@@ -192,21 +192,39 @@ export class PracticesService {
     });
   }
 
+  /**
+   * Deletes a practice, unless a cascade would take somebody else's application.
+   *
+   * One serializable transaction, like the listing and profile deletes: read,
+   * count and delete on three connections let an application committed in the gap
+   * slip past the count and go with the cascade.
+   */
   async remove(id: string, userId: string) {
-    const practice = await this.findOne(id, userId);
-    const ownerId = await getOwnedProfileId(this.prisma, userId);
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const practice = await tx.practice.findUnique({ where: { id } });
+      if (!practice) {
+        throw new NotFoundException(`Practice ${id} not found`);
+      }
 
-    if (practice.ownerId !== ownerId) {
-      throw new ForbiddenException();
-    }
+      const ownerId = await getOwnedProfileId(tx, userId);
 
-    await assertNoThirdPartyApplications(
-      this.prisma,
-      ownerId,
-      { practice: { ownerId } },
-      PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      if (practice.ownerId !== ownerId) {
+        throw new ForbiddenException();
+      }
 
-    return this.prisma.practice.delete({ where: { id } });
+      // This practice only, not its owner's others. The filter used to be
+      // `{ practice: { ownerId } }`, so deleting one location was refused because a
+      // *different* row of the same owner carried somebody's application — and a
+      // practice with several locations could not lose any one of them until every
+      // one of them was empty.
+      await assertNoThirdPartyApplications(
+        tx,
+        ownerId,
+        { practiceId: id },
+        PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+      );
+
+      return tx.practice.delete({ where: { id } });
+    });
   }
 }

@@ -72,6 +72,10 @@ function listingsService(status: ListingStatus) {
       },
       findFirst: async () => null,
       count: async () => 0,
+      delete: async () => {
+        wrote = true;
+        return listing;
+      },
     },
     application: {
       count: async () => 0,
@@ -110,11 +114,18 @@ function listingsService(status: ListingStatus) {
     },
   };
 
+  // Whether this run went through `$transaction`, and therefore whether its reads
+  // and its writes shared a connection.
+  let transactions = 0;
+
   const prisma = {
     ...reads,
     $transaction: async (
       operation: (tx: typeof transactionClient) => unknown,
-    ) => operation(transactionClient),
+    ) => {
+      transactions += 1;
+      return operation(transactionClient);
+    },
   } as unknown as PrismaService;
 
   const config = { get: () => undefined } as unknown as ConfigService;
@@ -122,6 +133,7 @@ function listingsService(status: ListingStatus) {
   return {
     service: new ReplacementlistingsService(prisma, config),
     wroteSomething: () => wrote,
+    transactions: () => transactions,
   };
 }
 
@@ -207,4 +219,35 @@ describe("listing guards, over every status", () => {
       });
     }
   }
+});
+
+describe("deletes are atomic", () => {
+  /**
+   * The reason this file also records *how* each action runs.
+   *
+   * `remove` used to read the listing, count the third-party applications and
+   * delete, on three separate connections. An application committed in the gap was
+   * not seen by the count and went with the cascade — which is precisely the harm
+   * the guard exists to prevent, and nothing in the sequential test could see it.
+   *
+   * So: the delete and its guard have to share a transaction, and this is what
+   * says so.
+   */
+  it("remove runs its guard and its delete inside one transaction", async () => {
+    const { service, transactions } = listingsService(ListingStatus.OPEN);
+
+    await service.remove("listing-1", OWNER.userId);
+
+    expect(transactions()).toBe(1);
+  });
+
+  it("remove refuses without having deleted anything", async () => {
+    const { service, wroteSomething, transactions } = listingsService(
+      ListingStatus.FILLED,
+    );
+
+    await expect(service.remove("listing-1", OWNER.userId)).rejects.toThrow();
+    expect(wroteSomething()).toBe(false);
+    expect(transactions()).toBe(1);
+  });
 });

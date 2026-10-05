@@ -286,8 +286,20 @@ export class ReplacementlistingsService {
     return toReplacementListingDto(this.withCount(listing));
   }
 
-  private async assertOwnership(id: string, userId: string) {
-    const listing = await this.prisma.replacementListing.findUnique({
+  /**
+   * Loads a listing and settles who may act on it.
+   *
+   * Takes the client rather than reading through `this.prisma`, so a caller
+   * already inside a transaction keeps its read and its write in one: a guard that
+   * reads on another connection can be overtaken between the read and the write,
+   * which is the whole reason `remove` is transactional.
+   */
+  private async assertOwnershipWith(
+    client: PrismaService | Prisma.TransactionClient,
+    id: string,
+    userId: string,
+  ) {
+    const listing = await client.replacementListing.findUnique({
       where: { id },
     });
 
@@ -295,13 +307,18 @@ export class ReplacementlistingsService {
       throw new NotFoundException(`Replacement listing ${id} not found`);
     }
 
-    const profileId = await getOwnedProfileId(this.prisma, userId);
+    const profileId = await getOwnedProfileId(client, userId);
 
     if (listing.createdById !== profileId) {
       throw new ForbiddenException();
     }
 
     return listing;
+  }
+
+  /** The same, on the service's own client. */
+  private assertOwnership(id: string, userId: string) {
+    return this.assertOwnershipWith(this.prisma, id, userId);
   }
 
   async publish(id: string, userId: string) {
@@ -356,29 +373,42 @@ export class ReplacementlistingsService {
     return toReplacementListingDto(this.withCount(updated));
   }
 
+  /**
+   * Deletes a listing, unless a cascade would take somebody else's application.
+   *
+   * The whole body is one serializable transaction, and that is the point rather
+   * than tidiness. Reading the listing, counting the third-party applications and
+   * deleting were three statements on three connections: an application committed
+   * in the gap was not seen by the count and went with the cascade. The guard is
+   * there to protect another candidate's row, and outside a transaction it does
+   * not.
+   */
   async remove(id: string, userId: string) {
-    const listing = await this.assertOwnership(id, userId);
-
-    if (listing.status === "FILLED") {
-      throw refusal(
-        REFUSAL_CODES.listingFilledCannotBeDeleted,
-        "A filled listing cannot be deleted, close it instead",
-      );
-    }
-
-    await assertNoThirdPartyApplications(
+    const deleted = await runSerializableTransaction(
       this.prisma,
-      listing.createdById,
-      { id: listing.id },
-      LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
-    );
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    // Mapped like every other read: the route serializes with the listing DTO,
-    // which expects ISO dates and an application count, and a raw Prisma row
-    // satisfies neither.
-    const deleted = await this.prisma.replacementListing.delete({
-      where: { id },
-    });
+        if (listing.status === "FILLED") {
+          throw refusal(
+            REFUSAL_CODES.listingFilledCannotBeDeleted,
+            "A filled listing cannot be deleted, close it instead",
+          );
+        }
+
+        await assertNoThirdPartyApplications(
+          tx,
+          listing.createdById,
+          { id: listing.id },
+          LISTING_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
+        );
+
+        // Returned raw and mapped below: the route serializes with the listing
+        // DTO, which expects ISO dates and an application count, and a Prisma row
+        // satisfies neither.
+        return tx.replacementListing.delete({ where: { id } });
+      },
+    );
 
     return toReplacementListingDto({ ...deleted, applicationsCount: 0 });
   }
