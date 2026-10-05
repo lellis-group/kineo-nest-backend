@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from "@nestjs/common";
 import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
 import {
   GHOST_LISTING_TITLE,
@@ -138,11 +139,22 @@ export async function detachThirdPartyApplications(
   return { ghostListingIds, detachedApplications };
 }
 
-/** Raised when the deployment never ran the seed that creates the scaffold. */
-export class ServiceUnavailableScaffoldError extends Error {
+/**
+ * Raised when the scaffold rows the applications are parked on are absent.
+ *
+ * A 503, and deliberately not a plain `Error`. It used to be one, so Nest answered
+ * 500 — and in a hardened environment that is "Internal server error" in the body,
+ * which names neither the cause nor the fact that the endpoint is fine and its
+ * inputs are not. The controller already documents a 503 for the erasure route, on
+ * the pepper, so this is the same shape for the same kind of precondition.
+ *
+ * The message keeps telling whoever reads the log what to do, which is the only
+ * place it is visible: a hardened body does not carry it.
+ */
+export class ServiceUnavailableScaffoldError extends ServiceUnavailableException {
   constructor() {
     super(
-      "the system scaffold is missing: run `bun run db:seed` so third-party applications have somewhere to be parked",
+      "the system scaffold is missing, so third-party applications have nowhere to be parked. A migration creates it; a database restored from an older dump is repaired on startup.",
     );
     this.name = "ServiceUnavailableScaffoldError";
   }
