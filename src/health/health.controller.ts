@@ -19,7 +19,9 @@ export class HealthController {
       await this.prisma.$queryRaw`SELECT 1`;
     } catch (error) {
       // Anonymous callers get nothing but the status: a driver message can name
-      // the host, the schema and the failing statement.
+      // the host, the schema and the failing statement. The stack goes to this
+      // process's console, never to the response, and `errorMessage` redacts a
+      // connection string the driver may have quoted.
       logError("health.db_check_failed", error);
       throw new ServiceUnavailableException("Service unavailable");
     }
