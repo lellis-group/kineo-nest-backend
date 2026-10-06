@@ -42,6 +42,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx prisma validate
       - run: bun run db:generate
+      # Nothing before this applies the schema: `validate` reads schema.prisma and
+      # `db:generate` writes the client, neither touches the database, and the
+      # service hands over an empty `mydb`. Without it `db:seed` died on P2021,
+      # which the e2e suites hid — each of them migrates its own throwaway
+      # database, so they passed while the application database had no tables.
+      - run: bunx prisma migrate deploy
       - run: bun run build
       - run: bun run typecheck
       - run: bun run lint
@@ -50,4 +56,8 @@ jobs:
       # admin URL of the postgres instance rather than the application database.
       - run: bun run test:e2e
       - run: bun run db:seed
+      # Replays the whole migration history into SHADOW_DATABASE_URL and diffs the
+      # result against schema.prisma, so it gates the migrations themselves and
+      # reads neither `mydb` nor the rows the seed just wrote. Its position here is
+      # the order the gates are named in, not a dependency.
       - run: bun run db:check
