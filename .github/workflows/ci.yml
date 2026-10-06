@@ -54,7 +54,38 @@ jobs:
       - run: bun run test
       # Each suite creates and drops its own throwaway database, so it needs the
       # admin URL of the postgres instance rather than the application database.
-      - run: bun run test:e2e
+      #
+      # This is the only step that retries, and only for one failure. Bun races on
+      # `require()` of a module the same graph already reached by `import`:
+      # `@nestjs/throttler` is CommonJS and requires `@nestjs/common`, which is
+      # ESM-only since NestJS 12, so when the suite boots the real AppModule the
+      # two paths race and Bun sometimes reports an `Invalid ... invocation`
+      # TypeError for a module with no top-level await at all. It is Bun
+      # [#33180](https://github.com/oven-sh/bun/issues/33180), regressed in 1.3.14
+      # and unfixed — [#37185](https://github.com/oven-sh/bun/pull/37185) is still
+      # open, so no released version has it. Whether a run loses the race depends
+      # on module size and machine speed, not on the code under test.
+      #
+      # Two attempts, then a hard failure that names this. Not a blanket `|| true`:
+      # a genuine failure here is a broken suite or a broken application, and two
+      # runs is already more than the race is ever known to need. Delete this retry
+      # when Bun ships the fix.
+      - name: Run the e2e suites
+        run: |
+          for attempt in 1 2; do
+            echo "--- e2e attempt ${attempt} of 2 ---"
+            if bun run test:e2e; then
+              exit 0
+            fi
+            if [ "${attempt}" = "2" ]; then
+              echo "::error::The e2e suites failed twice. If the log shows" \
+                "'require() async module \"...@nestjs/common/index.js\" is unsupported'," \
+                "that is Bun issue #33180 and not a defect in this repository;" \
+                "the retry above is the workaround and can be dropped once it is fixed." \
+                "Anything else is a real failure."
+              exit 1
+            fi
+          done
       - run: bun run db:seed
       # `db:check` replays the history into the shadow database and Prisma wants
       # it to exist: the service image creates `mydb` and nothing else, so the
