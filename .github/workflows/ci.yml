@@ -56,8 +56,19 @@ jobs:
       # admin URL of the postgres instance rather than the application database.
       - run: bun run test:e2e
       - run: bun run db:seed
-      # Replays the whole migration history into SHADOW_DATABASE_URL and diffs the
-      # result against schema.prisma, so it gates the migrations themselves and
-      # reads neither `mydb` nor the rows the seed just wrote. Its position here is
-      # the order the gates are named in, not a dependency.
+      # `db:check` replays the history into the shadow database and Prisma wants
+      # it to exist: the service image creates `mydb` and nothing else, so the
+      # step died on P1003. It is emptied on every run, which is why it is created
+      # here rather than seeded.
+      - name: Create the shadow database
+        run: |
+          PGPASSWORD=randompassword psql \
+            --host localhost \
+            --username johndoe \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command 'CREATE DATABASE kineo_shadow'
+      # Diffs that replay against schema.prisma, so it gates the migrations
+      # themselves and reads neither `mydb` nor the rows the seed just wrote. Its
+      # position here is the order the gates are named in, not a dependency.
       - run: bun run db:check
