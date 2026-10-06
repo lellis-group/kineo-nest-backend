@@ -121,7 +121,7 @@ describe("errorMessage", () => {
       // `main.ts` logs through this on the way out of a failed boot, and a driver
       // is free to quote the connection string it failed on.
       const quoted = new Error(
-        'failed to connect to postgresql://johndoe:randompassword@localhost:5432',
+        "failed to connect to postgresql://johndoe:randompassword@localhost:5432",
       );
 
       const line = errorMessage(quoted);
@@ -132,7 +132,11 @@ describe("errorMessage", () => {
 
     it("redacts a credential nested under any matching key", () => {
       const nested = Object.assign(new Error("failed"), {
-        meta: { smtpPassword: "hunter2", apiToken: "abc", host: "mail.example" },
+        meta: {
+          smtpPassword: "hunter2",
+          apiToken: "abc",
+          host: "mail.example",
+        },
       });
 
       const line = errorMessage(nested);
