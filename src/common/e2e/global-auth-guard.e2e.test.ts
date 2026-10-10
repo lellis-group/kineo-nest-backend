@@ -43,7 +43,8 @@ describe("routes that opted out", () => {
     const practice = await request(fx.baseUrl).get("/practices/missing-id");
 
     expect(ping.status).toBe(200);
-    expect(health.status).toBe(200);
+    // Liveness only: no uptime, no database state, to anyone who asks.
+    expect(health.body).toEqual({ status: "ok" });
     expect(practice.status).toBe(404);
   });
 });

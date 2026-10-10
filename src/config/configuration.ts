@@ -340,6 +340,12 @@ function configuration() {
     // then allow N times the configured budget.
     redisUrl: (process.env.REDIS_URL ?? "").trim() || undefined,
 
+    // ---- Health ----
+    // Unset means there is no deep probe: `/health` answers liveness only.
+    health: {
+      deepToken: (process.env.HEALTH_DEEP_TOKEN ?? "").trim() || undefined,
+    },
+
     // ---- Auth ----
     // Unset means a verified address is required outside development and test.
     // better-auth gates the approval half of a change of address on the session's
@@ -544,6 +550,9 @@ export const envValidationSchema = z
 
     // Unset means the throttler counts in memory, per process.
     REDIS_URL: z.string().url().optional(),
+
+    // Unset means there is no deep health probe.
+    HEALTH_DEEP_TOKEN: z.string().min(16).optional(),
   })
   .superRefine((env, ctx) => {
     // SMTP auth is all-or-nothing: a user without password (or vice versa)
