@@ -299,6 +299,36 @@ describe("the auth reference plugin", () => {
   });
 });
 
+describe("the auth rate limit", () => {
+  /**
+   * A read of the rules `createAuth` was handed, rather than of the intent.
+   *
+   * `/api/auth/*` is mounted as Express middleware, so the Nest throttler never
+   * sees those routes: better-auth's own limiter is the only thing standing in
+   * front of them, and its global `max` does not reach them — only `customRules`
+   * do. Naming each one here is what keeps that dependency from being dropped.
+   */
+  function customRules(): Record<string, unknown> {
+    const prismaStub = {
+      $transaction: async () => [],
+      user: { findUnique: async () => null },
+    } as unknown as Parameters<typeof createAuth>[1];
+
+    return (
+      createAuth(readAuthEnv(REQUIRED_ENV), prismaStub).options.rateLimit
+        ?.customRules ?? {}
+    );
+  }
+
+  it("names the credential routes better-auth limits on its own", () => {
+    const rules = customRules();
+
+    expect(Object.keys(rules)).toContain("/sign-in/email");
+    expect(Object.keys(rules)).toContain("/sign-up/email");
+    expect(Object.keys(rules)).toContain("/change-email");
+  });
+});
+
 describe("the secure cookie flag", () => {
   function secureCookies(nodeEnv: string): boolean {
     const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];

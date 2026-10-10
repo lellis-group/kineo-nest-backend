@@ -1,5 +1,16 @@
-import { applyDecorators, SetMetadata } from "@nestjs/common";
-import { SkipThrottle } from "@nestjs/throttler";
+import { ThrottlerStorageRedisService } from "@nest-lab/throttler-storage-redis";
+import {
+  applyDecorators,
+  type ExecutionContext,
+  SetMetadata,
+} from "@nestjs/common";
+import type { ConfigService } from "@nestjs/config";
+import type { Reflector } from "@nestjs/core";
+import {
+  SkipThrottle,
+  type ThrottlerModuleOptions,
+  type ThrottlerOptions,
+} from "@nestjs/throttler";
 
 /**
  * The throttle tiers the global guard applies to every route.
@@ -75,4 +86,43 @@ export function ThrottleDeletion() {
       Object.fromEntries(THROTTLE_NAMES.map((name) => [name, true])),
     ),
   );
+}
+
+/**
+ * The tiers the module registers, and the storage they are counted in.
+ *
+ * The built-in storage is a Map inside the process, so with N replicas every
+ * limit is N times larger than it reads — which is the whole of what those
+ * numbers mean. `REDIS_URL` is what makes the buckets shared; without it the
+ * module falls back to the in-memory one, so development and CI need no Redis.
+ */
+export function throttlerModuleOptions(
+  config: ConfigService,
+  reflector: Reflector,
+): Extract<ThrottlerModuleOptions, { throttlers: ThrottlerOptions[] }> {
+  const redisUrl = config.get<string>("redisUrl");
+
+  return {
+    throttlers: [
+      ...THROTTLE_NAMES.map((name) => ({
+        name,
+        ttl: config.getOrThrow<number>(`throttle.${name}.ttl`),
+        limit: config.getOrThrow<number>(`throttle.${name}.limit`),
+      })),
+      {
+        name: "deletion" as ThrottleName,
+        ttl: config.getOrThrow<number>("throttle.deletion.ttl"),
+        limit: config.getOrThrow<number>("throttle.deletion.limit"),
+        // Applied only where a route opted in with ThrottleDeletion:
+        // registering it unconditionally would extend its budget to every
+        // endpoint in the API.
+        skipIf: (context: ExecutionContext) =>
+          reflector.getAllAndOverride(DELETION_THROTTLE_KEY, [
+            context.getHandler(),
+            context.getClass(),
+          ]) !== true,
+      },
+    ],
+    storage: redisUrl ? new ThrottlerStorageRedisService(redisUrl) : undefined,
+  };
 }

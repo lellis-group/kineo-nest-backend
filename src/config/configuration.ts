@@ -335,6 +335,11 @@ function configuration() {
       pass: process.env.SMTP_PASS || undefined,
     },
 
+    // ---- Shared throttle storage (optional) ----
+    // Unset means the throttler counts in memory, which is per process: N replicas
+    // then allow N times the configured budget.
+    redisUrl: (process.env.REDIS_URL ?? "").trim() || undefined,
+
     // ---- Auth ----
     // Unset means a verified address is required outside development and test.
     // better-auth gates the approval half of a change of address on the session's
@@ -536,6 +541,9 @@ export const envValidationSchema = z
     // No default: the factory decides between the environment and the hardened
     // one, and a default here would replace that with a flat "false".
     REQUIRE_EMAIL_VERIFICATION: BoolEnum.optional(),
+
+    // Unset means the throttler counts in memory, per process.
+    REDIS_URL: z.string().url().optional(),
   })
   .superRefine((env, ctx) => {
     // SMTP auth is all-or-nothing: a user without password (or vice versa)

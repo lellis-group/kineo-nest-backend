@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.3",
+    "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/common": "^12.0.0",
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^12.0.0",
@@ -48,6 +49,7 @@
     "compression": "^1.8.1",
     "dotenv": "^17.4.2",
     "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
     "jose": "^6.2.3",
     "nestjs-zod": "^5.5.0",
     "nodemailer": "^9.0.5",
