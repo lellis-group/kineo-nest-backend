@@ -10,6 +10,7 @@ import { cleanupOpenApiDoc } from "nestjs-zod";
 
 import { AppModule } from "./app.module";
 import { isHardenedEnv } from "./config/env";
+import { nestLogger } from "./lib/nest-logger";
 
 /**
  * The application as it is served in production, minus the listen call.
@@ -21,6 +22,7 @@ import { isHardenedEnv } from "./config/env";
 export async function createApp(): Promise<NestExpressApplication> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
+    logger: nestLogger,
   });
 
   app.use(compression());

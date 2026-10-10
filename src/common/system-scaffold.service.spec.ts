@@ -175,7 +175,7 @@ describe("SystemScaffoldService", () => {
     lines.restore();
 
     const entry = JSON.parse(lines.output());
-    expect(entry.event).toBe("system_scaffold.ensure_failed");
+    expect(entry.message).toBe("system_scaffold.ensure_failed");
     expect(entry.error).toContain("ECONNREFUSED");
     expect(entry.error).toContain("prisma.user.createMany()");
   });

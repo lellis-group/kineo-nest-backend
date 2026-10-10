@@ -171,7 +171,7 @@ describe("logError", () => {
 
     expect(entry).toMatchObject({
       level: "error",
-      event: "system_scaffold.ensure_failed",
+      message: "system_scaffold.ensure_failed",
     });
     expect(entry.error).toContain("ECONNREFUSED");
   });

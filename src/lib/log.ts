@@ -1,18 +1,23 @@
 /**
- * Minimal structured logging for domain events.
+ * Minimal structured logging for domain events, on Nest's own JSON schema.
  *
  * Domain events (audit, retention sweeps, lifecycle) are emitted as single-line
  * JSON so any log pipeline (CloudWatch, Loki, Datadog…) can index them without
- * parsing. Keep human text out of the payload: machine-readable event names in
- * `event`, contextual fields in `data`.
+ * parsing. The record carries the same fields as Nest's native `ConsoleLogger`
+ * with `json` and `flattenParams` on — `level`, `pid`, `timestamp`, `message`,
+ * then the contextual fields spread at the root — so one pipeline reads every
+ * line, Nest's and the app's, through one shape. Keep human text out of the
+ * payload: machine-readable event names in `message`, contextual fields in
+ * `data`.
  */
 
 export function logEvent(event: string, data?: Record<string, unknown>): void {
   console.log(
     JSON.stringify({
-      ts: new Date().toISOString(),
-      level: "info",
-      event,
+      level: "log",
+      pid: process.pid,
+      timestamp: Date.now(),
+      message: event,
       ...data,
     }),
   );
@@ -79,9 +84,10 @@ export function logError(
 ): void {
   console.error(
     JSON.stringify({
-      ts: new Date().toISOString(),
       level: "error",
-      event,
+      pid: process.pid,
+      timestamp: Date.now(),
+      message: event,
       ...data,
       error: errorMessage(error),
     }),
