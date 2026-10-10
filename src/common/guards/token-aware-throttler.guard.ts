@@ -36,10 +36,11 @@ export class TokenAwareThrottlerGuard extends ThrottlerGuard {
 /**
  * The address to attribute a request to.
  *
- * `req.ips[0]` is the left-most entry of `X-Forwarded-For` when the app runs
- * behind a proxy, which is the real client; `req.ip` is the proxy itself unless
- * `trust proxy` is on. Express fills `ips` in both cases, so it is preferred and
- * `req.ip` is the fallback.
+ * Express truncates `req.ips` at the first hop it does not trust, and this
+ * application sets `trust proxy` to a single hop (`src/app.ts`). `req.ips` can
+ * therefore only ever hold the address the trusted proxy observed, which is why
+ * entries an untrusted caller prefixed to `X-Forwarded-For` never reach this
+ * key, and why `req.ips[0]` and `req.ip` name the same address here.
  */
 export function clientAddress(req: Record<string, unknown>): string {
   const ips = req.ips;

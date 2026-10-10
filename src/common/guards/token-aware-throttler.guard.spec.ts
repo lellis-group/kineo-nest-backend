@@ -27,7 +27,7 @@ function tracker(req: Req): Promise<string> {
 const HASH_LENGTH = 64;
 
 describe("clientAddress", () => {
-  it("prefers the forwarded client over the proxy", () => {
+  it("takes the address the trusted proxy forwarded", () => {
     expect(clientAddress({ ip: "10.0.0.7", ips: ["203.0.113.9"] })).toBe(
       "203.0.113.9",
     );
@@ -124,7 +124,7 @@ describe("TokenAwareThrottlerGuard", () => {
     ).resolves.toBe("203.0.113.9");
   });
 
-  it("prefers the forwarded client on the erasure endpoint too", async () => {
+  it("keys the erasure endpoint on the address the trusted proxy forwarded", async () => {
     await expect(
       tracker({
         method: "POST",
