@@ -12,6 +12,26 @@ import { SystemScaffoldService } from "./system-scaffold.service";
  * a service built on it cannot say whether anything happened — and the whole value
  * of re-asserting on boot is knowing whether it was needed.
  */
+/**
+ * Captures what the service logs, so the assertions can be on the output rather
+ * than on the absence of a throw. The service writes to `console.error` only.
+ */
+function captureConsoleError() {
+  const original = console.error;
+  let output = "";
+
+  console.error = (...args: unknown[]) => {
+    output += `${args.join(" ")}\n`;
+  };
+
+  return {
+    output: () => output,
+    restore: () => {
+      console.error = original;
+    },
+  };
+}
+
 function makePrisma(existing: {
   user?: boolean;
   profile?: boolean;
@@ -131,5 +151,54 @@ describe("SystemScaffoldService", () => {
     await expect(
       new SystemScaffoldService(prisma).onApplicationBootstrap(),
     ).resolves.toBeUndefined();
+  });
+
+  it("logs the driver code when the failure carries an empty message", async () => {
+    // The shape Prisma actually throws on a refused connection, reproduced from a
+    // real boot: `message` is a bare `Invalid ... invocation` header and the
+    // diagnostic is in `code`. A mock raising a filled-in `Error` cannot catch a
+    // regression in what gets logged, because it never reproduces the case that
+    // produced a line naming nothing at all.
+    const lines = captureConsoleError();
+    const prisma = {
+      user: {
+        createMany: async () => {
+          throw Object.assign(
+            new Error("\nInvalid `prisma.user.createMany()` invocation:\n\n\n"),
+            { code: "ECONNREFUSED", meta: { modelName: "User" } },
+          );
+        },
+      },
+    } as unknown as PrismaService;
+
+    await new SystemScaffoldService(prisma).onApplicationBootstrap();
+    lines.restore();
+
+    const entry = JSON.parse(lines.output());
+    expect(entry.message).toBe("system_scaffold.ensure_failed");
+    expect(entry.error).toContain("ECONNREFUSED");
+    expect(entry.error).toContain("prisma.user.createMany()");
+  });
+
+  it("does not log a credential carried by the driver's meta", async () => {
+    const lines = captureConsoleError();
+    const prisma = {
+      user: {
+        createMany: async () => {
+          throw Object.assign(new Error("Can't reach database server"), {
+            code: "P1001",
+            meta: {
+              databaseUrl:
+                "postgresql://johndoe:randompassword@localhost:5432/mydb",
+            },
+          });
+        },
+      },
+    } as unknown as PrismaService;
+
+    await new SystemScaffoldService(prisma).onApplicationBootstrap();
+    lines.restore();
+
+    expect(lines.output()).not.toContain("randompassword");
   });
 });

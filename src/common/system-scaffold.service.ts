@@ -49,8 +49,13 @@ export class SystemScaffoldService implements OnApplicationBootstrap {
         logEvent("system_scaffold.restored", { rows: created });
       }
     } catch (error) {
+      // The stack is passed as Nest's second argument: without it the console line
+      // says only that the scaffold is unavailable, and the one line that says why
+      // is the structured one below. Prisma's `code` is what identifies a
+      // connection failure, and that is carried by `errorMessage`.
       this.logger.error(
         "The system scaffold is unavailable; account erasure will be refused",
+        error instanceof Error ? error.stack : undefined,
       );
       logError("system_scaffold.ensure_failed", error);
     }
