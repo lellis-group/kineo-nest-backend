@@ -251,6 +251,47 @@ describe("ReplacementlistingsService", () => {
     );
   });
 
+  it("closes a listing and rejects its candidates on the same client", async () => {
+    // `close` used to read the listing on the service's own client and then
+    // write, outside any transaction: a candidate who applied between the two
+    // landed on a posting that had just left circulation.
+    const tx = {
+      replacementListing: {
+        findUnique: async () => ({
+          ...openListing,
+          _count: { applications: 1 },
+        }),
+        update: async ({ data }: { data: { status: string } }) => ({
+          ...openListing,
+          status: data.status,
+          _count: { applications: 0 },
+        }),
+      },
+      profile: { findUnique: async () => profile },
+      application: {
+        updateMany: async () => ({ count: 1 }),
+      },
+    };
+    const reads = {
+      replacementListing: {
+        findUnique: async () => {
+          throw new Error("close must read inside its transaction");
+        },
+      },
+    };
+    const prisma = {
+      ...reads,
+      $transaction: async (operation: (client: typeof tx) => unknown) =>
+        operation(tx),
+    } as unknown as PrismaService;
+    const config = { get: () => undefined } as unknown as ConfigService;
+    const service = new ReplacementlistingsService(prisma, config);
+
+    const result = await service.close("listing-1", "user-1");
+
+    expect(result.status).toBe("CLOSED_NO_CANDIDATE");
+  });
+
   it("returns 404 when listing does not exist", async () => {
     const prisma = {
       replacementListing: { findUnique: async () => null },
