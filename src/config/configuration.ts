@@ -122,7 +122,31 @@ function timerMs(value: string | undefined, fallback: number, name: string) {
   return parsed;
 }
 
+/**
+ * Whether the proxy is trusted, and whether the environment decided that.
+ *
+ * Trusting it is the right default for an application designed to run behind one,
+ * so the value stays. What changes is that a deployment which is *not* behind one
+ * and forgot to say so can now be told: with the proxy trusted and none present,
+ * `req.ip` is whatever the caller put in `X-Forwarded-For`, and the throttler key
+ * with it.
+ */
+function readTrustProxy(env: NodeJS.ProcessEnv): {
+  enabled: boolean;
+  implied: boolean;
+} {
+  const raw = env.TRUST_PROXY?.trim();
+
+  if (raw === undefined || raw === "") {
+    return { enabled: isHardenedEnv(env.NODE_ENV), implied: true };
+  }
+
+  return { enabled: envBoolean(raw, false), implied: false };
+}
+
 function configuration() {
+  const trustProxy = readTrustProxy(process.env);
+
   return {
     // ---- Env ----
     nodeEnv: process.env.NODE_ENV || DEFAULT_NODE_ENV,
@@ -144,10 +168,8 @@ function configuration() {
     // default made `req.ip` the proxy for every caller, and the throttler and every
     // IP control then saw the whole platform as one client. Development has no
     // proxy to trust, and trusting one there hides real client addresses.
-    trustProxy:
-      process.env.TRUST_PROXY === undefined || process.env.TRUST_PROXY === ""
-        ? isHardenedEnv(process.env.NODE_ENV)
-        : process.env.TRUST_PROXY === "true",
+    trustProxy: trustProxy.enabled,
+    trustProxyImplied: trustProxy.implied,
 
     // ---- Account erasure ----
     // The delay between anonymizing an account and dropping its row for good.
