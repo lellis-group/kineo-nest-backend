@@ -244,3 +244,27 @@ describe("the auth reference plugin", () => {
     }
   });
 });
+
+describe("the secure cookie flag", () => {
+  function secureCookies(nodeEnv: string): boolean {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    return Boolean(
+      createAuth(
+        readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: nodeEnv }),
+        prismaStub,
+      ).options.advanced?.useSecureCookies,
+    );
+  }
+
+  it("is asked for once the environment is hardened", () => {
+    expect(secureCookies("production")).toBe(true);
+    expect(secureCookies("staging")).toBe(true);
+    expect(secureCookies(DEFAULT_NODE_ENV)).toBe(true);
+  });
+
+  it("is not asked for in development and test, where there is no TLS", () => {
+    expect(secureCookies("development")).toBe(false);
+    expect(secureCookies("test")).toBe(false);
+  });
+});
