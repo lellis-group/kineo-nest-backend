@@ -26,7 +26,10 @@ import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import type { ListingStatus } from "../generated/prisma/enums";
-import { ListingStatus as LISTING_STATUSES } from "../generated/prisma/enums";
+import {
+  ListingStatus as LISTING_STATUSES,
+  Specialty,
+} from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
 import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
@@ -70,6 +73,34 @@ const APPLICATIONS_COUNT_INCLUDE = {
       applications: { where: { status: { in: ACTIVE_APPLICATION_STATUSES } } },
     },
   },
+};
+
+/**
+ * The practice, reduced to what the listing DTO publishes.
+ *
+ * `isPublic` is not selected because it is enforced in the `where` clause
+ * instead: a practice that went private has no business being readable through a
+ * listing, and the feed is anonymous. Filtering rather than blanking the field
+ * is deliberate — hiding the name but still listing the posting would still say
+ * "there is a replacement posting in this town", which is the disclosure
+ * `isPublic` exists to prevent. This matches what `GET /practices` already does.
+ */
+const PRACTICE_INCLUDE = {
+  practice: {
+    select: {
+      id: true,
+      name: true,
+      city: true,
+      latitude: true,
+      longitude: true,
+    },
+  },
+};
+
+/** Every include a listing read needs, in one place. */
+const LISTING_INCLUDE = {
+  ...APPLICATIONS_COUNT_INCLUDE,
+  ...PRACTICE_INCLUDE,
 };
 
 @Injectable()
@@ -138,7 +169,26 @@ export class ReplacementlistingsService {
     return toReplacementListingDto({ ...listing, applicationsCount: 0 });
   }
 
-  private buildListingsWhere(filters: FindReplacementListingsDto) {
+  /**
+   * The predicate every listing read shares.
+   *
+   * `publicOnly` narrows to practices that are publicly listed. It merges into
+   * the same `practice` key the `city` filter uses rather than sitting beside
+   * it: two keys named `practice` in one object would have the second silently
+   * replace the first, and the feed would quietly stop filtering by city — or
+   * stop hiding private practices, depending on the order.
+   */
+  private buildListingsWhere(
+    filters: FindReplacementListingsDto,
+    options: { publicOnly?: boolean } = {},
+  ) {
+    const practice: Prisma.PracticeWhereInput = {
+      ...(filters.city
+        ? { city: { contains: filters.city, mode: "insensitive" } }
+        : {}),
+      ...(options.publicOnly ? { isPublic: true } : {}),
+    };
+
     return {
       status: filters.status,
       specialty: filters.specialty,
@@ -154,9 +204,10 @@ export class ReplacementlistingsService {
                 : undefined,
             }
           : undefined,
-      practice: filters.city
-        ? { city: { contains: filters.city, mode: "insensitive" as const } }
-        : undefined,
+      // Left out entirely rather than set to `{}`, which Prisma reads as "match
+      // every practice" and which would make the unfiltered reads scan the
+      // relation instead of skipping it.
+      ...(Object.keys(practice).length > 0 ? { practice } : {}),
     };
   }
 
@@ -167,7 +218,7 @@ export class ReplacementlistingsService {
     // statuses of postings still in circulation.
     const { status: _statusFilter, ...publicFilters } = filters;
     const where: Prisma.ReplacementListingWhereInput = {
-      ...this.buildListingsWhere(publicFilters),
+      ...this.buildListingsWhere(publicFilters, { publicOnly: true }),
       status: "OPEN",
     };
 
@@ -180,7 +231,7 @@ export class ReplacementlistingsService {
         // return two rows in either order between two pages: offset pagination then
         // repeats one and skips the other. The id breaks the tie.
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        include: APPLICATIONS_COUNT_INCLUDE,
+        include: LISTING_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
     ]);
@@ -191,6 +242,60 @@ export class ReplacementlistingsService {
       ),
       meta: paginationMeta(total, page, limit),
     };
+  }
+
+  /**
+   * Counts for the browse screen's summary panels, over the whole matching
+   * collection and never over the rows of one page.
+   *
+   * The feed reports `meta.total` for the active filter, which is enough to say
+   * "42 results" and nothing more. These three numbers are what the panels need,
+   * and a client that wanted them had no honest way to get them: aggregating the
+   * rows it happened to receive produces a figure that changes as the reader
+   * pages and is simply wrong past the first hundred.
+   *
+   * `specialty` is dropped from the predicate on purpose. A panel reading
+   * « Médecine générale — 12 » while the reader has just filtered to
+   * Dermatologie is answering a question nobody asked; the distribution is meant
+   * to show what else is available. Every other filter (city, dates, urgent) is
+   * kept, because those genuinely narrow what the reader can still pick from.
+   *
+   * The urgent count is a second aggregate rather than a derived subtraction,
+   * so that adding a specialty filter later cannot quietly change what "urgent"
+   * is counting.
+   */
+  async findFacets(filters: FindReplacementListingsDto) {
+    const { specialty: _specialty, status: _status, ...scope } = filters;
+
+    const where: Prisma.ReplacementListingWhereInput = {
+      ...this.buildListingsWhere(scope, { publicOnly: true }),
+      status: "OPEN",
+    };
+
+    const [grouped, urgent] = await Promise.all([
+      this.prisma.replacementListing.groupBy({
+        by: ["specialty"],
+        where,
+        _count: true,
+      }),
+      this.prisma.replacementListing.count({
+        where: { ...where, urgent: true },
+      }),
+    ]);
+
+    // Seeded with the whole enum so a specialty with no listing reads as a zero
+    // the panel draws, not as a row that vanished.
+    const bySpecialty = Object.fromEntries(
+      Object.values(Specialty).map((specialty) => [specialty, 0]),
+    ) as Record<Specialty, number>;
+
+    let total = 0;
+    for (const row of grouped) {
+      bySpecialty[row.specialty] = row._count;
+      total += row._count;
+    }
+
+    return { total, urgent, bySpecialty };
   }
 
   async findMine(userId: string, filters: FindReplacementListingsDto) {
@@ -220,7 +325,7 @@ export class ReplacementlistingsService {
         // return two rows in either order between two pages: offset pagination then
         // repeats one and skips the other. The id breaks the tie.
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        include: APPLICATIONS_COUNT_INCLUDE,
+        include: LISTING_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
       this.countListingsByStatus(countsWhere),
@@ -262,7 +367,7 @@ export class ReplacementlistingsService {
   async findOne(id: string, requesterUserId?: string) {
     const listing = await this.prisma.replacementListing.findUnique({
       where: { id },
-      include: APPLICATIONS_COUNT_INCLUDE,
+      include: LISTING_INCLUDE,
     });
 
     if (!listing) {

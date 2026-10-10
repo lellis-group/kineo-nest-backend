@@ -23,6 +23,7 @@ import type { CreateReplacementListingDto } from "./dto/create-replacementlistin
 import { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import {
+  ListingFacets,
   PaginatedReplacementListings,
   ReplacementListing,
 } from "./entities/replacementlisting.entity";
@@ -63,6 +64,21 @@ export class ReplacementlistingsController {
   @ZodSerializerDto(PaginatedReplacementListings)
   findAll(@Query() query: FindReplacementListingsDto) {
     return this.replacementlistingsService.findAll(query);
+  }
+
+  // Declared before `:id` on purpose: Nest matches the routes in the order they
+  // appear in the file, so a `facets` handler declared after `:id` would never be
+  // reached — the `:id` route would answer to the literal string "facets" and
+  // look for a listing with that id.
+  @Get("facets")
+  @AllowAnonymous()
+  @ApiOperation({
+    summary:
+      "Counts for the browse screen: total, urgent, and the distribution per specialty",
+  })
+  @ZodSerializerDto(ListingFacets)
+  findFacets(@Query() query: FindReplacementListingsDto) {
+    return this.replacementlistingsService.findFacets(query);
   }
 
   @Get("mine")
