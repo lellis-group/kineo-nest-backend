@@ -160,6 +160,25 @@ describe("readAuthEnv", () => {
     ).toBe(true);
   });
 
+  it("leaves the session cookie cache off unless it is asked for, on both paths", () => {
+    // On, better-auth bakes the session and the user row into a signed cookie
+    // that only a `version` function invalidates, and none is registered — so an
+    // anonymized row keeps being served from the cookie. The two env readers
+    // disagreed about the default, and the standalone one armed that trap for
+    // every script and every importer of `{ auth }`.
+    expect(readAuthEnv({ ...REQUIRED_ENV }).cookieCacheEnabled).toBe(false);
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, COOKIE_CACHE_ENABLED: "true" })
+        .cookieCacheEnabled,
+    ).toBe(true);
+    expect(readAuthEnvFromConfig(configWith()).cookieCacheEnabled).toBe(false);
+    expect(
+      readAuthEnvFromConfig(
+        configWith({ session: { cookieCache: { enabled: true } } }),
+      ).cookieCacheEnabled,
+    ).toBe(true);
+  });
+
   it("treats any NODE_ENV but development and test as hardened", () => {
     expect(readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "test" }).nodeEnv).toBe(
       "test",
