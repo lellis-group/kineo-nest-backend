@@ -9,6 +9,7 @@ import helmet from "helmet";
 import { cleanupOpenApiDoc } from "nestjs-zod";
 
 import { AppModule } from "./app.module";
+import { compressionFilter } from "./common/compression-filter";
 import { isHardenedEnv } from "./config/env";
 import { nestLogger } from "./lib/nest-logger";
 
@@ -25,7 +26,7 @@ export async function createApp(): Promise<NestExpressApplication> {
     logger: nestLogger,
   });
 
-  app.use(compression());
+  app.use(compression({ filter: compressionFilter }));
 
   app.use(
     helmet({
