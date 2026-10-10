@@ -35,6 +35,9 @@ import { PrismaModule } from "./prisma.module";
 import { ProfileModule } from "./profile/profile.module";
 import { ReplacementlistingsModule } from "./replacementlistings/replacementlistings.module";
 
+/** The request body ceiling, shared by the JSON and the form parser. */
+const BODY_LIMIT = "100kb";
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -80,6 +83,13 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
         auth: createAuth(
           readAuthEnvFromConfig(config as unknown as ConfigGetter),
         ),
+        // Nest's own body parser is off, so this module mounts the parsers. It
+        // defaults to 100kb; stating it here makes the ceiling belong to the
+        // repository rather than to the library's default.
+        bodyParser: {
+          json: { limit: BODY_LIMIT },
+          urlencoded: { limit: BODY_LIMIT, extended: true },
+        },
       }),
     }),
     AccountDeletionModule,
