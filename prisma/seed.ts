@@ -1,5 +1,6 @@
 import { hashPassword } from "better-auth/crypto";
 import { SYSTEM_SCAFFOLD } from "../src/common/system-scaffold";
+import { isHardenedEnv } from "../src/config/env";
 import { Prisma } from "../src/generated/prisma/client";
 import {
   ApplicationStatus,
@@ -293,6 +294,20 @@ async function ensureSystemScaffold() {
 }
 
 async function main() {
+  if (
+    isHardenedEnv(process.env.NODE_ENV) &&
+    process.env.ALLOW_DESTRUCTIVE_SEED !== "true"
+  ) {
+    // Every table is wiped below, and the accounts it recreates all share one
+    // password that is in this repository. Run against a hardened database that
+    // is total data loss plus 40 accounts anyone with the source can sign in to,
+    // which is why the override has to be spelled out rather than implied.
+    throw new Error(
+      "db:seed wipes every table and refuses to run outside development/test: " +
+        "set ALLOW_DESTRUCTIVE_SEED=true to override",
+    );
+  }
+
   // Before the wipe, and never fatal: a trail row that cannot be repaired must
   // not stop the rest of the seed.
   try {

@@ -322,7 +322,7 @@ go through it too. Nothing in the chain spawns node.
 | `bun run test` | Unit suites, excluding `**/e2e/**` |
 | `bun run test:e2e` | The four e2e suites, each on its own throwaway database |
 | `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
-| `bun run db:seed` | **Wipe and repopulate.** Creates the system scaffold (§9) |
+| `bun run db:seed` | **Wipe and repopulate.** Development fixtures only: it refuses to run outside development and test |
 | `bun run db:check` | Replay the migration history and diff it against the schema |
 
 `tsconfig.json` is the base every tool reads and covers `src/` and `prisma/` with
@@ -336,9 +336,11 @@ import would not fix it: `moduleResolution: Bundler` is a bundler-style ESM
 configuration, so `tsc` emits bare specifiers, and the generated Prisma client
 emits its own bare specifiers too. Bun resolves both.
 
-`bun run db:seed` **is a deploy step**, not a convenience: the account erasure
-parks other candidates' applications on rows the seed creates, and a deployment
-that skipped it would refuse every erasure with a message saying so.
+`bun run db:seed` **wipes every table** and recreates 40 accounts that share one
+password which is in this repository, so it refuses to run outside development
+and test unless `ALLOW_DESTRUCTIVE_SEED=true` is set. It is not a deploy step:
+the rows an account erasure parks other candidates' applications on come from a
+migration, and `SystemScaffoldService` repairs them at boot if they are missing.
 
 ## 9. The account erasure
 
