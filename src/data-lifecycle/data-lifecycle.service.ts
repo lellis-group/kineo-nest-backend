@@ -2,6 +2,7 @@ import { Inject, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
+import type { Prisma } from "../generated/prisma/client";
 import { logError, logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 
@@ -93,7 +94,7 @@ export class DataLifecycleService {
 
   @Cron(CronExpression.EVERY_HOUR)
   async purgeExpired() {
-    await this.withAdvisoryLock(ACCOUNT_SWEEP_LOCK, () => this.runSweep());
+    await this.withAdvisoryLock(ACCOUNT_SWEEP_LOCK, (tx) => this.runSweep(tx));
   }
 
   /**
@@ -101,9 +102,9 @@ export class DataLifecycleService {
    * error on the cascade used to skip the collection entirely, leaving orphans
    * accumulating silently for a day.
    */
-  private async runSweep() {
-    await this.sweepRetention();
-    await this.collectOrphanGhostListings();
+  private async runSweep(tx: Prisma.TransactionClient) {
+    await this.sweepRetention(tx);
+    await this.collectOrphanGhostListings(tx);
   }
 
   /**
@@ -114,13 +115,13 @@ export class DataLifecycleService {
    * most sensitive rows behind for another hour — silently, since the sweep
    * logged one line.
    */
-  private async sweepRetention() {
+  private async sweepRetention(tx: Prisma.TransactionClient) {
     const now = new Date();
     const purged: Record<string, number> = {};
 
     await this.step("session", async () => {
       purged.sessions = await this.deleteInBatches("session", (limit) =>
-        this.prisma.session.deleteMany({
+        tx.session.deleteMany({
           where: { expiresAt: { lt: now } },
           limit,
         }),
@@ -131,7 +132,7 @@ export class DataLifecycleService {
       purged.verifications = await this.deleteInBatches(
         "verification",
         (limit) =>
-          this.prisma.verification.deleteMany({
+          tx.verification.deleteMany({
             where: { expiresAt: { lt: now } },
             limit,
           }),
@@ -142,7 +143,7 @@ export class DataLifecycleService {
       purged.anonymizedAccounts = await this.deleteInBatches(
         "anonymized account",
         (limit) =>
-          this.prisma.user.deleteMany({
+          tx.user.deleteMany({
             where: {
               deletedAt: {
                 lte: new Date(
@@ -175,7 +176,7 @@ export class DataLifecycleService {
       purged.deletionRequests += await this.deleteInBatches(
         "deletion request never confirmed",
         (limit) =>
-          this.prisma.dataDeletionRequest.deleteMany({
+          tx.dataDeletionRequest.deleteMany({
             where: {
               status: { in: ["PENDING", "SUPERSEDED"] },
               updatedAt: { lt: abandonedCutoff },
@@ -192,7 +193,7 @@ export class DataLifecycleService {
       purged.deletionRequests += await this.deleteInBatches(
         "deletion request executed",
         (limit) =>
-          this.prisma.dataDeletionRequest.deleteMany({
+          tx.dataDeletionRequest.deleteMany({
             where: {
               status: "ANONYMIZED",
               updatedAt: { lt: executedCutoff },
@@ -247,8 +248,10 @@ export class DataLifecycleService {
    * rejected, the row is a placeholder nobody looks at and the collections keep
    * pointing at a practice that does not exist.
    */
-  async collectOrphanGhostListings() {
-    const orphans = await this.prisma.$queryRaw<{ id: string }[]>`
+  async collectOrphanGhostListings(
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    const orphans = await client.$queryRaw<{ id: string }[]>`
       SELECT rl."id"
       FROM "replacement_listing" rl
       WHERE rl."createdById" = ${GHOST_PROFILE_ID}
@@ -260,7 +263,7 @@ export class DataLifecycleService {
       return 0;
     }
 
-    await this.prisma.replacementListing.deleteMany({
+    await client.replacementListing.deleteMany({
       where: { id: { in: orphans.map((orphan) => orphan.id) } },
     });
 
@@ -272,28 +275,42 @@ export class DataLifecycleService {
   }
 
   /**
-   * Runs `work` under a session-level advisory lock, or returns immediately when
-   * another replica holds it.
+   * Runs `work` under a transaction-scoped advisory lock, or returns immediately
+   * when another replica holds it.
    *
    * Every replica runs the same crons, so with two of them an hourly sweep ran
    * twice and the second one waited on the first one's locks for no reason.
+   *
+   * The lock used to be a session-level one, taken by one statement and released
+   * by another, both routed through the driver's pool: nothing kept them on the
+   * same connection. When they landed on two, the release did nothing, the lock
+   * stayed held until its connection closed, and every sweep after that took the
+   * skip branch — expired sessions, unread `verification` rows holding a raw
+   * email and the erasure trail then kept their retention window indefinitely.
+   * A transaction-scoped lock is released by PostgreSQL itself, on the connection
+   * that took it, so the pair cannot come apart.
    */
   private async withAdvisoryLock(
     lockId: number,
-    work: () => Promise<void>,
+    work: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<void> {
-    const [locked] = await this.prisma.$queryRaw<{ locked: boolean }[]>`
-      SELECT pg_try_advisory_lock(${lockId}) AS locked`;
+    await this.prisma.$transaction(
+      async (tx) => {
+        const [locked] = await tx.$queryRaw<{ locked: boolean }[]>`
+          SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
 
-    if (!locked?.locked) {
-      logEvent("data_lifecycle.sweep_skipped", { lockId });
-      return;
-    }
+        if (!locked?.locked) {
+          logEvent("data_lifecycle.sweep_skipped", { lockId });
+          return;
+        }
 
-    try {
-      await work();
-    } finally {
-      await this.prisma.$executeRaw`SELECT pg_advisory_unlock(${lockId})`;
-    }
+        await work(tx);
+      },
+      {
+        maxWait: 5_000,
+        timeout: 600_000,
+        isolationLevel: "ReadCommitted",
+      },
+    );
   }
 }
