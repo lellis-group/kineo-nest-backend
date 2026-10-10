@@ -4,7 +4,7 @@ import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
-import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
+import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "../../config/env";
 import {
   sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
@@ -119,7 +119,10 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     jwtRotationInterval: env.JWT_ROTATION_INTERVAL
       ? positiveInt(env.JWT_ROTATION_INTERVAL, 0, "JWT_ROTATION_INTERVAL")
       : undefined,
-    requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
+    requireEmailVerification: envBoolean(
+      env.REQUIRE_EMAIL_VERIFICATION,
+      isHardenedEnv(env.NODE_ENV),
+    ),
     accountPurgeGraceDays: positiveInt(
       env.ACCOUNT_PURGE_GRACE_DAYS,
       30,

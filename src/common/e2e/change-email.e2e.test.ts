@@ -9,10 +9,9 @@
  *
  * The flow has two shapes, and better-auth's own rules decide which one runs:
  * a *verified* current address has to approve the change before anything is sent
- * to the new address, while an unverified one — the state every account is in
- * when `REQUIRE_EMAIL_VERIFICATION` is off, which is the shipped default —
- * goes straight to the new address, because an address that was never verified
- * is no proof of anything to gate on.
+ * to the new address, while an unverified one — the state of an account that
+ * never clicked its verification link — goes straight to the new address,
+ * because an address that was never verified is no proof of anything to gate on.
  */
 
 import {

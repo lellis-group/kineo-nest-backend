@@ -125,6 +125,41 @@ describe("readAuthEnv", () => {
     });
   });
 
+  it("requires a verified address by default outside development and test", () => {
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "production" })
+        .requireEmailVerification,
+    ).toBe(true);
+    expect(readAuthEnv({ ...REQUIRED_ENV }).requireEmailVerification).toBe(
+      true,
+    );
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "development" })
+        .requireEmailVerification,
+    ).toBe(false);
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "test" })
+        .requireEmailVerification,
+    ).toBe(false);
+  });
+
+  it("still obeys an explicit REQUIRE_EMAIL_VERIFICATION", () => {
+    expect(
+      readAuthEnv({
+        ...REQUIRED_ENV,
+        NODE_ENV: "production",
+        REQUIRE_EMAIL_VERIFICATION: "false",
+      }).requireEmailVerification,
+    ).toBe(false);
+    expect(
+      readAuthEnv({
+        ...REQUIRED_ENV,
+        NODE_ENV: "development",
+        REQUIRE_EMAIL_VERIFICATION: "true",
+      }).requireEmailVerification,
+    ).toBe(true);
+  });
+
   it("treats any NODE_ENV but development and test as hardened", () => {
     expect(readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "test" }).nodeEnv).toBe(
       "test",

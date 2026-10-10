@@ -25,3 +25,22 @@ export function isHardenedEnv(nodeEnv?: string | null): boolean {
   const normalized = nodeEnv?.trim().toLowerCase() || "production";
   return !NON_PROD_ENVS.has(normalized);
 }
+
+/**
+ * A boolean flag from the environment, and the value to use when it is absent.
+ *
+ * The configuration schema writes a default back into `process.env`, so a flat
+ * `.default("false")` there would erase the difference between "never set" and
+ * "set to false". Keeping such a flag optional in the schema and resolving it
+ * here preserves it, which is what lets a gate close by default.
+ */
+export function envBoolean(
+  raw: string | undefined,
+  whenUnset: boolean,
+): boolean {
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized === undefined || normalized === "") {
+    return whenUnset;
+  }
+  return normalized === "true";
+}

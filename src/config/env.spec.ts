@@ -177,6 +177,47 @@ describe("gates close by default", () => {
   });
 });
 
+describe("the verified address requirement", () => {
+  it("is required by default outside development and test", () => {
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: "production" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(true);
+      },
+    );
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: undefined },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(true);
+      },
+    );
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: "development" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(false);
+      },
+    );
+    withEnv({ REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: "test" }, () => {
+      expect(configuration().requireEmailVerification).toBe(false);
+    });
+  });
+
+  it("still obeys an explicit value", () => {
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: "false", NODE_ENV: "production" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(false);
+      },
+    );
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: "true", NODE_ENV: "development" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(true);
+      },
+    );
+  });
+});
+
 describe("the pending erasure horizon has a floor", () => {
   /**
    * The confirmation link lives 24 hours. A shorter horizon sweeps the pending row

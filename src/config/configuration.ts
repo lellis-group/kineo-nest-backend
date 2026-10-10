@@ -3,7 +3,7 @@ import {
   MIN_PENDING_RETENTION_DAYS,
   PENDING_DELETION_REQUEST_RETENTION_DAYS,
 } from "../data-lifecycle/data-lifecycle.service";
-import { DEFAULT_NODE_ENV, isHardenedEnv } from "./env";
+import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "./env";
 
 function positiveInteger(
   value: string | undefined,
@@ -314,7 +314,14 @@ function configuration() {
     },
 
     // ---- Auth ----
-    requireEmailVerification: process.env.REQUIRE_EMAIL_VERIFICATION === "true",
+    // Unset means a verified address is required outside development and test.
+    // better-auth gates the approval half of a change of address on the session's
+    // address already being verified, so with this off nothing ever reaches that
+    // gate and the new address is emailed directly.
+    requireEmailVerification: envBoolean(
+      process.env.REQUIRE_EMAIL_VERIFICATION,
+      isHardenedEnv(process.env.NODE_ENV),
+    ),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:3001",
     betterAuthUrl: process.env.BETTER_AUTH_URL || "http://localhost:3000",
     auth: {
@@ -504,7 +511,9 @@ export const envValidationSchema = z
       .optional(),
 
     // ---- Auth ----
-    REQUIRE_EMAIL_VERIFICATION: BoolEnum.default("false"),
+    // No default: the factory decides between the environment and the hardened
+    // one, and a default here would replace that with a flat "false".
+    REQUIRE_EMAIL_VERIFICATION: BoolEnum.optional(),
   })
   .superRefine((env, ctx) => {
     // SMTP auth is all-or-nothing: a user without password (or vice versa)
