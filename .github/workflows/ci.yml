@@ -30,7 +30,7 @@ jobs:
       DATABASE_URL: postgresql://johndoe:randompassword@localhost:5432/mydb?schema=public
       SHADOW_DATABASE_URL: postgresql://johndoe:randompassword@localhost:5432/kineo_shadow?schema=public
       TEST_DATABASE_ADMIN_URL: postgresql://johndoe:randompassword@localhost:5432/postgres
-      BETTER_AUTH_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_ci_secret
+      BETTER_AUTH_SECRET: ${{ secrets.CI_BETTER_AUTH_SECRET }}
       BETTER_AUTH_URL: http://localhost:3000
       NODE_ENV: test
 

@@ -25,9 +25,20 @@ const TEST_DB =
   process.env.TEST_DATABASE_NAME ??
   `kineo_e2e_${process.env.KINEO_E2E_SUITE ?? "default"}`;
 
-const ADMIN_URL =
-  process.env.TEST_DATABASE_ADMIN_URL ??
-  "postgresql://johndoe:randompassword@localhost:5432/postgres";
+/**
+ * The admin URL of the postgres instance the suites create their throwaway
+ * databases on. Required rather than defaulted: a default pointed every local
+ * run at `postgres` on the developer's own machine.
+ */
+function adminUrl(): string {
+  const url = process.env.TEST_DATABASE_ADMIN_URL;
+
+  if (!url) {
+    throw new Error("TEST_DATABASE_ADMIN_URL is required to run an e2e suite");
+  }
+
+  return url;
+}
 
 /**
  * Credentials of the developer's own database, so the throwaway one accepts the
@@ -62,7 +73,7 @@ async function runAs(url: string, sql: string): Promise<void> {
 }
 
 async function dropIfExists(): Promise<void> {
-  const admin = new Client({ connectionString: ADMIN_URL });
+  const admin = new Client({ connectionString: adminUrl() });
   await admin.connect();
   // A run killed mid-suite leaves live connections, and DROP DATABASE would
   // then block or fail.
@@ -122,7 +133,7 @@ export async function bootApp(): Promise<E2EFixture> {
   process.env.KINEO_E2E = "1";
 
   await dropIfExists();
-  await runAs(ADMIN_URL, `CREATE DATABASE "${TEST_DB}"`);
+  await runAs(adminUrl(), `CREATE DATABASE "${TEST_DB}"`);
 
   process.env.DATABASE_URL = TEST_DATABASE_URL;
   process.env.NODE_ENV = "test";
