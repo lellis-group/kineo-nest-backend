@@ -803,7 +803,19 @@ async function main() {
     }
   }
 
-  await prisma.application.createMany({ data: applicationRows });
+  // Batched, and awaited one batch at a time.
+  //
+  // `createMany` splits a large `data` array into several INSERTs, and past a
+  // few thousand rows the adapter overlaps them on one connection — which `pg`
+  // reports as "Calling client.query() when the client is already executing a
+  // query", deprecated now and an error in pg 9. Slicing the array ourselves
+  // hands each statement its own turn, and 5 986 rows stop being a warning.
+  const APPLICATION_BATCH = 500;
+  for (let i = 0; i < applicationRows.length; i += APPLICATION_BATCH) {
+    await prisma.application.createMany({
+      data: applicationRows.slice(i, i + APPLICATION_BATCH),
+    });
+  }
   const applicationsCreated = applicationRows.length;
 
   console.log("--- Seed completed successfully ---");
