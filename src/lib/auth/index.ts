@@ -4,7 +4,7 @@ import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
-import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
+import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "../../config/env";
 import {
   sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
@@ -108,7 +108,7 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     ),
     sessionExpiresIn: durationSeconds(env.SESSION_EXPIRES_IN, 60 * 60 * 24 * 7),
     sessionUpdateAge: durationSeconds(env.SESSION_UPDATE_AGE, 60 * 60 * 24),
-    cookieCacheEnabled: env.COOKIE_CACHE_ENABLED !== "false",
+    cookieCacheEnabled: envBoolean(env.COOKIE_CACHE_ENABLED, false),
     cookieCacheMaxAge: positiveInt(
       env.COOKIE_CACHE_MAX_AGE,
       60 * 5,
@@ -119,7 +119,10 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
     jwtRotationInterval: env.JWT_ROTATION_INTERVAL
       ? positiveInt(env.JWT_ROTATION_INTERVAL, 0, "JWT_ROTATION_INTERVAL")
       : undefined,
-    requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
+    requireEmailVerification: envBoolean(
+      env.REQUIRE_EMAIL_VERIFICATION,
+      isHardenedEnv(env.NODE_ENV),
+    ),
     accountPurgeGraceDays: positiveInt(
       env.ACCOUNT_PURGE_GRACE_DAYS,
       30,
@@ -177,7 +180,7 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     sessionUpdateAge:
       config.get<number>("session.updateAge", 60 * 60 * 24) ?? 60 * 60 * 24,
     cookieCacheEnabled:
-      config.get<boolean>("session.cookieCache.enabled", true) ?? true,
+      config.get<boolean>("session.cookieCache.enabled", false) ?? false,
     cookieCacheMaxAge:
       config.get<number>("session.cookieCache.maxAge", 300) ?? 300,
     jwtEnabled: config.get<boolean>("jwt.enabled", false) ?? false,

@@ -3,7 +3,7 @@ import {
   MIN_PENDING_RETENTION_DAYS,
   PENDING_DELETION_REQUEST_RETENTION_DAYS,
 } from "../data-lifecycle/data-lifecycle.service";
-import { DEFAULT_NODE_ENV, isHardenedEnv } from "./env";
+import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "./env";
 
 function positiveInteger(
   value: string | undefined,
@@ -122,7 +122,31 @@ function timerMs(value: string | undefined, fallback: number, name: string) {
   return parsed;
 }
 
+/**
+ * Whether the proxy is trusted, and whether the environment decided that.
+ *
+ * Trusting it is the right default for an application designed to run behind one,
+ * so the value stays. What changes is that a deployment which is *not* behind one
+ * and forgot to say so can now be told: with the proxy trusted and none present,
+ * `req.ip` is whatever the caller put in `X-Forwarded-For`, and the throttler key
+ * with it.
+ */
+function readTrustProxy(env: NodeJS.ProcessEnv): {
+  enabled: boolean;
+  implied: boolean;
+} {
+  const raw = env.TRUST_PROXY?.trim();
+
+  if (raw === undefined || raw === "") {
+    return { enabled: isHardenedEnv(env.NODE_ENV), implied: true };
+  }
+
+  return { enabled: envBoolean(raw, false), implied: false };
+}
+
 function configuration() {
+  const trustProxy = readTrustProxy(process.env);
+
   return {
     // ---- Env ----
     nodeEnv: process.env.NODE_ENV || DEFAULT_NODE_ENV,
@@ -144,10 +168,8 @@ function configuration() {
     // default made `req.ip` the proxy for every caller, and the throttler and every
     // IP control then saw the whole platform as one client. Development has no
     // proxy to trust, and trusting one there hides real client addresses.
-    trustProxy:
-      process.env.TRUST_PROXY === undefined || process.env.TRUST_PROXY === ""
-        ? isHardenedEnv(process.env.NODE_ENV)
-        : process.env.TRUST_PROXY === "true",
+    trustProxy: trustProxy.enabled,
+    trustProxyImplied: trustProxy.implied,
 
     // ---- Account erasure ----
     // The delay between anonymizing an account and dropping its row for good.
@@ -313,8 +335,26 @@ function configuration() {
       pass: process.env.SMTP_PASS || undefined,
     },
 
+    // ---- Shared throttle storage (optional) ----
+    // Unset means the throttler counts in memory, which is per process: N replicas
+    // then allow N times the configured budget.
+    redisUrl: (process.env.REDIS_URL ?? "").trim() || undefined,
+
+    // ---- Health ----
+    // Unset means there is no deep probe: `/health` answers liveness only.
+    health: {
+      deepToken: (process.env.HEALTH_DEEP_TOKEN ?? "").trim() || undefined,
+    },
+
     // ---- Auth ----
-    requireEmailVerification: process.env.REQUIRE_EMAIL_VERIFICATION === "true",
+    // Unset means a verified address is required outside development and test.
+    // better-auth gates the approval half of a change of address on the session's
+    // address already being verified, so with this off nothing ever reaches that
+    // gate and the new address is emailed directly.
+    requireEmailVerification: envBoolean(
+      process.env.REQUIRE_EMAIL_VERIFICATION,
+      isHardenedEnv(process.env.NODE_ENV),
+    ),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:3001",
     betterAuthUrl: process.env.BETTER_AUTH_URL || "http://localhost:3000",
     auth: {
@@ -504,7 +544,15 @@ export const envValidationSchema = z
       .optional(),
 
     // ---- Auth ----
-    REQUIRE_EMAIL_VERIFICATION: BoolEnum.default("false"),
+    // No default: the factory decides between the environment and the hardened
+    // one, and a default here would replace that with a flat "false".
+    REQUIRE_EMAIL_VERIFICATION: BoolEnum.optional(),
+
+    // Unset means the throttler counts in memory, per process.
+    REDIS_URL: z.string().url().optional(),
+
+    // Unset means there is no deep health probe.
+    HEALTH_DEEP_TOKEN: z.string().min(16).optional(),
   })
   .superRefine((env, ctx) => {
     // SMTP auth is all-or-nothing: a user without password (or vice versa)

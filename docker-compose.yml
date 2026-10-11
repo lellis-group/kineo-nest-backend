@@ -20,5 +20,14 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  # Optional: point REDIS_URL at this to share the throttle buckets between
+  # replicas. Without it the throttler counts in memory, per process.
+  redis:
+    image: redis:8-alpine
+    container_name: my-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
 volumes:
   postgres_data:

@@ -9,6 +9,8 @@ import helmet from "helmet";
 import { cleanupOpenApiDoc } from "nestjs-zod";
 
 import { AppModule } from "./app.module";
+import { compressionFilter } from "./common/compression-filter";
+import { contentSecurityPolicy } from "./common/security-headers";
 import { isHardenedEnv } from "./config/env";
 import { nestLogger } from "./lib/nest-logger";
 
@@ -25,29 +27,17 @@ export async function createApp(): Promise<NestExpressApplication> {
     logger: nestLogger,
   });
 
-  app.use(compression());
+  app.use(compression({ filter: compressionFilter }));
+
+  const configService = app.get(ConfigService);
 
   app.use(
     helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: [`'self'`],
-          scriptSrc: [`'self'`, `'unsafe-inline'`, "cdn.jsdelivr.net"],
-          styleSrc: [
-            `'self'`,
-            `'unsafe-inline'`,
-            "cdn.jsdelivr.net",
-            "fonts.googleapis.com",
-          ],
-          imgSrc: [`'self'`, "data:", "cdn.jsdelivr.net"],
-          fontSrc: [`'self'`, "fonts.gstatic.com", "cdn.jsdelivr.net", "data:"],
-          connectSrc: [`'self'`, "api.scalar.com"],
-        },
-      },
+      contentSecurityPolicy: contentSecurityPolicy(
+        configService.get<string>("nodeEnv"),
+      ),
     }),
   );
-
-  const configService = app.get(ConfigService);
 
   if (configService.get<boolean>("trustProxy", false)) {
     app.set("trust proxy", 1);

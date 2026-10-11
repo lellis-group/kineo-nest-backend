@@ -112,9 +112,26 @@ describe("gates close by default", () => {
   it("still obeys TRUST_PROXY when it is set", () => {
     withEnv({ TRUST_PROXY: "false", NODE_ENV: "production" }, () => {
       expect(configuration().trustProxy).toBe(false);
+      expect(configuration().trustProxyImplied).toBe(false);
     });
     withEnv({ TRUST_PROXY: "true", NODE_ENV: "development" }, () => {
       expect(configuration().trustProxy).toBe(true);
+      expect(configuration().trustProxyImplied).toBe(false);
+    });
+  });
+
+  it("says when trusting the proxy was its own decision", () => {
+    // A deployment that is not behind a proxy and never set TRUST_PROXY then has
+    // a client-controlled `req.ip`, and the throttler key with it. The boot log
+    // is what separates that from a deliberate choice.
+    withEnv({ TRUST_PROXY: undefined, NODE_ENV: "production" }, () => {
+      expect(configuration().trustProxyImplied).toBe(true);
+    });
+    withEnv({ TRUST_PROXY: "", NODE_ENV: "production" }, () => {
+      expect(configuration().trustProxyImplied).toBe(true);
+    });
+    withEnv({ TRUST_PROXY: "false", NODE_ENV: "production" }, () => {
+      expect(configuration().trustProxyImplied).toBe(false);
     });
   });
 
@@ -174,6 +191,47 @@ describe("gates close by default", () => {
       THROTTLE_LONG_TTL: String(2_147_483_648),
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("the verified address requirement", () => {
+  it("is required by default outside development and test", () => {
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: "production" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(true);
+      },
+    );
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: undefined },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(true);
+      },
+    );
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: "development" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(false);
+      },
+    );
+    withEnv({ REQUIRE_EMAIL_VERIFICATION: undefined, NODE_ENV: "test" }, () => {
+      expect(configuration().requireEmailVerification).toBe(false);
+    });
+  });
+
+  it("still obeys an explicit value", () => {
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: "false", NODE_ENV: "production" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(false);
+      },
+    );
+    withEnv(
+      { REQUIRE_EMAIL_VERIFICATION: "true", NODE_ENV: "development" },
+      () => {
+        expect(configuration().requireEmailVerification).toBe(true);
+      },
+    );
   });
 });
 

@@ -1,4 +1,3 @@
-import type { ExecutionContext } from "@nestjs/common";
 import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import {
@@ -17,11 +16,7 @@ import { AppController } from "./app.controller";
 import { ApplicationsModule } from "./applications/applications.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception/http-exception.filter";
 import { TokenAwareThrottlerGuard } from "./common/guards/token-aware-throttler.guard";
-import {
-  DELETION_THROTTLE_KEY,
-  THROTTLE_NAMES,
-  type ThrottleName,
-} from "./common/throttle";
+import { throttlerModuleOptions } from "./common/throttle";
 import configuration, { envValidationSchema } from "./config/configuration";
 import { DataLifecycleModule } from "./data-lifecycle/data-lifecycle.module";
 import { HealthModule } from "./health/health.module";
@@ -35,6 +30,9 @@ import { PrismaModule } from "./prisma.module";
 import { ProfileModule } from "./profile/profile.module";
 import { ReplacementlistingsModule } from "./replacementlistings/replacementlistings.module";
 
+/** The request body ceiling, shared by the JSON and the form parser. */
+const BODY_LIMIT = "100kb";
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -47,31 +45,7 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService, Reflector],
-      useFactory: (config: ConfigService, reflector: Reflector) => ({
-        // No fallback literals here: configuration() is the only place the
-        // limits are declared, and the numbers it used to repeat were a second
-        // source that could drift from it.
-        throttlers: [
-          ...THROTTLE_NAMES.map((name) => ({
-            name,
-            ttl: config.getOrThrow<number>(`throttle.${name}.ttl`),
-            limit: config.getOrThrow<number>(`throttle.${name}.limit`),
-          })),
-          {
-            name: "deletion" as ThrottleName,
-            ttl: config.getOrThrow<number>("throttle.deletion.ttl"),
-            limit: config.getOrThrow<number>("throttle.deletion.limit"),
-            // Applied only where a route opted in with ThrottleDeletion:
-            // registering it unconditionally would extend its budget to every
-            // endpoint in the API.
-            skipIf: (context: ExecutionContext) =>
-              reflector.getAllAndOverride(DELETION_THROTTLE_KEY, [
-                context.getHandler(),
-                context.getClass(),
-              ]) !== true,
-          },
-        ],
-      }),
+      useFactory: throttlerModuleOptions,
     }),
     AuthModule.forRootAsync({
       imports: [ConfigModule],
@@ -80,6 +54,13 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
         auth: createAuth(
           readAuthEnvFromConfig(config as unknown as ConfigGetter),
         ),
+        // Nest's own body parser is off, so this module mounts the parsers. It
+        // defaults to 100kb; stating it here makes the ceiling belong to the
+        // repository rather than to the library's default.
+        bodyParser: {
+          json: { limit: BODY_LIMIT },
+          urlencoded: { limit: BODY_LIMIT, extended: true },
+        },
       }),
     }),
     AccountDeletionModule,

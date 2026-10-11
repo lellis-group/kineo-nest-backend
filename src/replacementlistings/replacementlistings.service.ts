@@ -317,25 +317,25 @@ export class ReplacementlistingsService {
     return listing;
   }
 
-  /** The same, on the service's own client. */
-  private assertOwnership(id: string, userId: string) {
-    return this.assertOwnershipWith(this.prisma, id, userId);
-  }
-
   async publish(id: string, userId: string) {
-    const listing = await this.assertOwnership(id, userId);
+    const updated = await runSerializableTransaction(
+      this.prisma,
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
-    if (listing.status !== "DRAFT") {
-      throw refusal(
-        REFUSAL_CODES.listingNotDraft,
-        "Only draft listings can be published",
-      );
-    }
+        if (listing.status !== "DRAFT") {
+          throw refusal(
+            REFUSAL_CODES.listingNotDraft,
+            "Only draft listings can be published",
+          );
+        }
 
-    const updated = await this.prisma.replacementListing.update({
-      where: { id },
-      data: { status: "OPEN" },
-    });
+        return tx.replacementListing.update({
+          where: { id },
+          data: { status: "OPEN" },
+        });
+      },
+    );
 
     return toReplacementListingDto({ ...updated, applicationsCount: 0 });
   }
@@ -445,44 +445,57 @@ export class ReplacementlistingsService {
   }
 
   async close(id: string, userId: string) {
-    const listing = await this.assertOwnership(id, userId);
-
-    // Closing is for a posting still in circulation, so a DRAFT or an
-    // already-terminal listing is refused.
-    //
-    // `IN_DISCUSSION` and `FULL` are *not* refused, and that is the fix. They are
-    // what a listing with candidates on it becomes, so the previous guard — which
-    // accepted only `OPEN` and `FILLED` — made it impossible to close a posting
-    // that had shortlisted candidates. `cancel` was the only way out, and cancel
-    // tells every one of those candidates the posting was abandoned rather than
-    // closed, which is a different sentence about the same event.
-    if (
-      MANUAL_LISTING_STATUSES.includes(listing.status) ||
-      (isTerminalListingStatus(listing.status) && listing.status !== "FILLED")
-    ) {
-      throw refusal(
-        REFUSAL_CODES.listingNotCloseable,
-        "Only a listing still in circulation can be closed",
-      );
-    }
-
-    // A FILLED listing closed out with a placement on it; any other was closed
-    // with nobody retained, candidates or not. Both leave circulation, and a
-    // candidate who was shortlisted has to be able to tell the two apart — which
-    // the reason below also does.
-    const updated = await this.prisma.replacementListing.update({
-      where: { id },
-      data: {
-        status: listing.status === "FILLED" ? "CLOSED" : "CLOSED_NO_CANDIDATE",
-      },
-      include: APPLICATIONS_COUNT_INCLUDE,
-    });
-
-    await rejectActiveApplicationsOnListing(
+    const updated = await runSerializableTransaction(
       this.prisma,
-      id,
-      PLATFORM_REJECTION_REASONS.listingWithdrawn,
-      new Date(),
+      async (tx) => {
+        const listing = await this.assertOwnershipWith(tx, id, userId);
+
+        // Closing is for a posting still in circulation, so a DRAFT or an
+        // already-terminal listing is refused.
+        //
+        // `IN_DISCUSSION` and `FULL` are *not* refused, and that is the fix. They
+        // are what a listing with candidates on it becomes, so the previous guard
+        // — which accepted only `OPEN` and `FILLED` — made it impossible to close
+        // a posting that had shortlisted candidates. `cancel` was the only way
+        // out, and cancel tells every one of those candidates the posting was
+        // abandoned rather than closed, which is a different sentence about the
+        // same event.
+        if (
+          MANUAL_LISTING_STATUSES.includes(listing.status) ||
+          (isTerminalListingStatus(listing.status) &&
+            listing.status !== "FILLED")
+        ) {
+          throw refusal(
+            REFUSAL_CODES.listingNotCloseable,
+            "Only a listing still in circulation can be closed",
+          );
+        }
+
+        // A FILLED listing closed out with a placement on it; any other was
+        // closed with nobody retained, candidates or not. Both leave circulation,
+        // and a candidate who was shortlisted has to be able to tell the two
+        // apart — which the reason below also does.
+        const closed = await tx.replacementListing.update({
+          where: { id },
+          data: {
+            status:
+              listing.status === "FILLED" ? "CLOSED" : "CLOSED_NO_CANDIDATE",
+          },
+          include: APPLICATIONS_COUNT_INCLUDE,
+        });
+
+        // Inside the transaction, like in `cancel`: a candidate who applies
+        // between the read and the write used to land on a listing that had just
+        // left circulation.
+        await rejectActiveApplicationsOnListing(
+          tx,
+          id,
+          PLATFORM_REJECTION_REASONS.listingWithdrawn,
+          new Date(),
+        );
+
+        return closed;
+      },
     );
 
     return toReplacementListingDto(this.withCount(updated));

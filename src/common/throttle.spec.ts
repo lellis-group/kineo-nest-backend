@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { ThrottlerStorageRedisService } from "@nest-lab/throttler-storage-redis";
+import type { ConfigService } from "@nestjs/config";
 import { Reflector } from "@nestjs/core";
 import {
   THROTTLER_LIMIT,
@@ -10,6 +12,7 @@ import {
   THROTTLE_NAMES,
   ThrottleDeletion,
   ThrottleWithConfig,
+  throttlerModuleOptions,
 } from "./throttle";
 
 /**
@@ -93,5 +96,56 @@ describe("throttle decorators", () => {
     for (const name of THROTTLE_NAMES) {
       expect(metadata[`skip:${name}`]).toBe(true);
     }
+  });
+});
+
+describe("throttlerModuleOptions", () => {
+  /**
+   * A ConfigService over the keys `configuration()` publishes, which is what the
+   * module factory reads: `throttle.short.ttl`, not `THROTTLE_SHORT_TTL`.
+   */
+  function configWith(values: Record<string, unknown> = {}): ConfigService {
+    return {
+      get: <T>(key: string, fallback?: T) =>
+        (key in values ? values[key] : fallback) as T,
+      getOrThrow: <T>(key: string) => {
+        if (!(key in values)) {
+          throw new Error(`${key} is not configured`);
+        }
+        return values[key] as T;
+      },
+    } as unknown as ConfigService;
+  }
+
+  const LIMITS = {
+    "throttle.short.ttl": 1000,
+    "throttle.short.limit": 5,
+    "throttle.medium.ttl": 10_000,
+    "throttle.medium.limit": 30,
+    "throttle.long.ttl": 60_000,
+    "throttle.long.limit": 150,
+    "throttle.deletion.ttl": 900_000,
+    "throttle.deletion.limit": 5,
+  };
+
+  it("counts in memory when no Redis is configured", () => {
+    // Development and CI have no Redis, and the built-in storage is the fallback.
+    const options = throttlerModuleOptions(
+      configWith({ ...LIMITS, redisUrl: undefined }),
+      new Reflector(),
+    );
+
+    expect(options.storage).toBeUndefined();
+  });
+
+  it("shares the buckets once a Redis URL is configured", () => {
+    // In memory the buckets are per process: N replicas allow N times the
+    // configured budget, which is the whole of what those numbers mean.
+    const options = throttlerModuleOptions(
+      configWith({ ...LIMITS, redisUrl: "redis://localhost:6379" }),
+      new Reflector(),
+    );
+
+    expect(options.storage).toBeInstanceOf(ThrottlerStorageRedisService);
   });
 });

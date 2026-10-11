@@ -17,17 +17,22 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
     "db:check": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
-    "test:e2e": "bun run test:e2e:cascade && bun run test:e2e:erasure && bun run test:e2e:guard && bun run test:e2e:geo && bun run test:e2e:change-email && bun run test:e2e:applications",
+    "test:e2e": "bun run test:e2e:cascade && bun run test:e2e:erasure && bun run test:e2e:guard && bun run test:e2e:geo && bun run test:e2e:change-email && bun run test:e2e:applications && bun run test:e2e:authguard && bun run test:e2e:sessioncookie && bun run test:e2e:bodylimit && bun run test:e2e:sweeplock",
     "test:all": "bun run test && bun run test:e2e",
     "test:e2e:cascade": "KINEO_E2E_SUITE=cascade bun test src/common/e2e/third-party-cascade.e2e.test.ts",
     "test:e2e:erasure": "KINEO_E2E_SUITE=erasure bun test src/common/e2e/erasure-bypass.e2e.test.ts",
     "test:e2e:guard": "KINEO_E2E_SUITE=guard bun test src/common/e2e/email-verified-guard.e2e.test.ts",
     "test:e2e:geo": "KINEO_E2E_SUITE=geo bun test src/practices/e2e/geo-search.e2e.test.ts",
     "test:e2e:change-email": "KINEO_E2E_SUITE=change-email bun test src/common/e2e/change-email.e2e.test.ts",
-    "test:e2e:applications": "KINEO_E2E_SUITE=applications bun test src/common/e2e/applications-filters.e2e.test.ts"
+    "test:e2e:applications": "KINEO_E2E_SUITE=applications bun test src/common/e2e/applications-filters.e2e.test.ts",
+    "test:e2e:authguard": "KINEO_E2E_SUITE=authguard bun test src/common/e2e/global-auth-guard.e2e.test.ts",
+    "test:e2e:sessioncookie": "KINEO_E2E_SUITE=sessioncookie bun test src/common/e2e/session-cookie.e2e.test.ts",
+    "test:e2e:bodylimit": "KINEO_E2E_SUITE=bodylimit bun test src/common/e2e/body-limit.e2e.test.ts",
+    "test:e2e:sweeplock": "KINEO_E2E_SUITE=sweeplock bun test src/data-lifecycle/e2e/sweep-lock.e2e.test.ts"
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "1.7.3",
+    "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/common": "^12.0.0",
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^12.0.0",
@@ -44,12 +49,13 @@
     "compression": "^1.8.1",
     "dotenv": "^17.4.2",
     "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
     "jose": "^6.2.3",
     "nestjs-zod": "^5.5.0",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^10.0.6",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.8",
@@ -61,5 +67,8 @@
     "prisma": "^7.9.1",
     "supertest": "^7.3.1",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "multer": "^2.4.0"
   }
 }

@@ -277,8 +277,9 @@ reflected below rather than claimed:
 - **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`.
 - **Email**: no more plaintext token logging; real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction. Every HTML template escapes its interpolations and refuses a call to action whose target is not http(s).
 - **Indexes**: composite and partial indexes aligned with actual query patterns (`status`-filtered lookups on listings/applications, bounding-box geo search on practices).
+- **Sensitive zones** (accepted, not fixed): `verification` holds the password-reset and account-deletion tokens in clear text — better-auth stores the email-verification ones as signed JWTs instead, so they are not there. Whoever can read that table can reset a password and confirm a deletion, which is a database-read capability rather than an application defect: the response is encryption at rest and access restrictions on the role, and nothing this repository can change. The hourly sweep (`data-lifecycle.service.ts`, under an advisory lock) is what bounds the window, so a token that is never read still expires. `Session.token` is the same class of exposure and is bounded the same way. The `account` table holds better-auth password hashes and is reachable by the same database role; scrypt cost and `minPasswordLength: 8` are the mitigation on that side.
 
-Automated tests are wired into CI and are not optional any more: 201 unit tests over `bun test`, and two e2e suites (`bun run test:e2e`) that boot the real `AppModule` through `createApp()`, replay the migration history into a throwaway database and drive it over HTTP. Every pull request runs `prisma validate`, `generate`, `build`, `typecheck` (which covers the specs and the seed, unlike the build), `lint`, the unit suites, the e2e suites, the seed, and a migration drift gate that replays the history and diffs it against `schema.prisma`.
+Automated tests are wired into CI and are not optional any more: 201 unit tests over `bun test`, and two e2e suites (`bun run test:e2e`) that boot the real `AppModule` through `createApp()`, replay the migration history into a throwaway database and drive it over HTTP. Every pull request runs `prisma validate`, `generate`, `build`, `typecheck` (which covers the specs and the seed, unlike the build), `lint`, the unit suites, the e2e suites, the seed, `bun audit --production`, and a migration drift gate that replays the history and diffs it against `schema.prisma`.
 
 Still open: email notifications on status changes are written (templates + mailer) but not wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`.
 
@@ -322,7 +323,7 @@ go through it too. Nothing in the chain spawns node.
 | `bun run test` | Unit suites, excluding `**/e2e/**` |
 | `bun run test:e2e` | The four e2e suites, each on its own throwaway database |
 | `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
-| `bun run db:seed` | **Wipe and repopulate.** Creates the system scaffold (§9) |
+| `bun run db:seed` | **Wipe and repopulate.** Development fixtures only: it refuses to run outside development and test |
 | `bun run db:check` | Replay the migration history and diff it against the schema |
 
 `tsconfig.json` is the base every tool reads and covers `src/` and `prisma/` with
@@ -336,9 +337,11 @@ import would not fix it: `moduleResolution: Bundler` is a bundler-style ESM
 configuration, so `tsc` emits bare specifiers, and the generated Prisma client
 emits its own bare specifiers too. Bun resolves both.
 
-`bun run db:seed` **is a deploy step**, not a convenience: the account erasure
-parks other candidates' applications on rows the seed creates, and a deployment
-that skipped it would refuse every erasure with a message saying so.
+`bun run db:seed` **wipes every table** and recreates 40 accounts that share one
+password which is in this repository, so it refuses to run outside development
+and test unless `ALLOW_DESTRUCTIVE_SEED=true` is set. It is not a deploy step:
+the rows an account erasure parks other candidates' applications on come from a
+migration, and `SystemScaffoldService` repairs them at boot if they are missing.
 
 ## 9. The account erasure
 

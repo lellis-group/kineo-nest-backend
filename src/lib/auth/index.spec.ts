@@ -125,6 +125,60 @@ describe("readAuthEnv", () => {
     });
   });
 
+  it("requires a verified address by default outside development and test", () => {
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "production" })
+        .requireEmailVerification,
+    ).toBe(true);
+    expect(readAuthEnv({ ...REQUIRED_ENV }).requireEmailVerification).toBe(
+      true,
+    );
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "development" })
+        .requireEmailVerification,
+    ).toBe(false);
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "test" })
+        .requireEmailVerification,
+    ).toBe(false);
+  });
+
+  it("still obeys an explicit REQUIRE_EMAIL_VERIFICATION", () => {
+    expect(
+      readAuthEnv({
+        ...REQUIRED_ENV,
+        NODE_ENV: "production",
+        REQUIRE_EMAIL_VERIFICATION: "false",
+      }).requireEmailVerification,
+    ).toBe(false);
+    expect(
+      readAuthEnv({
+        ...REQUIRED_ENV,
+        NODE_ENV: "development",
+        REQUIRE_EMAIL_VERIFICATION: "true",
+      }).requireEmailVerification,
+    ).toBe(true);
+  });
+
+  it("leaves the session cookie cache off unless it is asked for, on both paths", () => {
+    // On, better-auth bakes the session and the user row into a signed cookie
+    // that only a `version` function invalidates, and none is registered — so an
+    // anonymized row keeps being served from the cookie. The two env readers
+    // disagreed about the default, and the standalone one armed that trap for
+    // every script and every importer of `{ auth }`.
+    expect(readAuthEnv({ ...REQUIRED_ENV }).cookieCacheEnabled).toBe(false);
+    expect(
+      readAuthEnv({ ...REQUIRED_ENV, COOKIE_CACHE_ENABLED: "true" })
+        .cookieCacheEnabled,
+    ).toBe(true);
+    expect(readAuthEnvFromConfig(configWith()).cookieCacheEnabled).toBe(false);
+    expect(
+      readAuthEnvFromConfig(
+        configWith({ session: { cookieCache: { enabled: true } } }),
+      ).cookieCacheEnabled,
+    ).toBe(true);
+  });
+
   it("treats any NODE_ENV but development and test as hardened", () => {
     expect(readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: "test" }).nodeEnv).toBe(
       "test",
@@ -242,5 +296,59 @@ describe("the auth reference plugin", () => {
       expect(ids).toContain("next-cookies");
       expect(ids).toContain("email-verification-status");
     }
+  });
+});
+
+describe("the auth rate limit", () => {
+  /**
+   * A read of the rules `createAuth` was handed, rather than of the intent.
+   *
+   * `/api/auth/*` is mounted as Express middleware, so the Nest throttler never
+   * sees those routes: better-auth's own limiter is the only thing standing in
+   * front of them, and its global `max` does not reach them — only `customRules`
+   * do. Naming each one here is what keeps that dependency from being dropped.
+   */
+  function customRules(): Record<string, unknown> {
+    const prismaStub = {
+      $transaction: async () => [],
+      user: { findUnique: async () => null },
+    } as unknown as Parameters<typeof createAuth>[1];
+
+    return (
+      createAuth(readAuthEnv(REQUIRED_ENV), prismaStub).options.rateLimit
+        ?.customRules ?? {}
+    );
+  }
+
+  it("names the credential routes better-auth limits on its own", () => {
+    const rules = customRules();
+
+    expect(Object.keys(rules)).toContain("/sign-in/email");
+    expect(Object.keys(rules)).toContain("/sign-up/email");
+    expect(Object.keys(rules)).toContain("/change-email");
+  });
+});
+
+describe("the secure cookie flag", () => {
+  function secureCookies(nodeEnv: string): boolean {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    return Boolean(
+      createAuth(
+        readAuthEnv({ ...REQUIRED_ENV, NODE_ENV: nodeEnv }),
+        prismaStub,
+      ).options.advanced?.useSecureCookies,
+    );
+  }
+
+  it("is asked for once the environment is hardened", () => {
+    expect(secureCookies("production")).toBe(true);
+    expect(secureCookies("staging")).toBe(true);
+    expect(secureCookies(DEFAULT_NODE_ENV)).toBe(true);
+  });
+
+  it("is not asked for in development and test, where there is no TLS", () => {
+    expect(secureCookies("development")).toBe(false);
+    expect(secureCookies("test")).toBe(false);
   });
 });

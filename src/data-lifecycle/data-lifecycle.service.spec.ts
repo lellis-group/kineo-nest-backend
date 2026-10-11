@@ -21,9 +21,20 @@ function makePrisma(
   const deletedLists: string[][] = [];
 
   const client = {
+    // A function rather than an arrow, so `this` is whatever client the service
+    // was handed: a test that overrides one model by spreading still reaches its
+    // own copy inside the transaction.
+    $transaction: async function (
+      this: unknown,
+      operation: (tx: unknown) => Promise<unknown>,
+      // The service passes its own options; the fake has no pool to wait on.
+      _options?: unknown,
+    ) {
+      return operation(this);
+    },
     $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join("?");
-      if (sql.includes("pg_try_advisory_lock")) {
+      if (sql.includes("pg_try_advisory_xact_lock")) {
         return [{ locked: !options.lockHeld }];
       }
       return options.orphans ?? [];
