@@ -149,7 +149,16 @@ export const ListingPlacesSchema = z.object({
   /** Matching postings whose practice was never geocoded. */
   unlocated: z.number(),
 
-  /** True when places or `listingIds` were cut at their ceiling. */
+  /** How many places the filters actually matched, before the ceiling. */
+  totalPlaces: z.number(),
+
+  /**
+   * True when `places` was cut at the ceiling.
+   *
+   * Paired with `totalPlaces` so the client can say how many are missing rather
+   * than only that some are. A flag with no count is a flag nothing can render:
+   * "there are more" invites the reader to look for what.
+   */
   truncated: z.boolean(),
 });
 

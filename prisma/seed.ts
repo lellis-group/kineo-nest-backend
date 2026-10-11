@@ -16,9 +16,29 @@ import { createPrismaClient } from "../src/lib/prisma";
 const prisma = createPrismaClient();
 
 const PASSWORD = "Password123!";
-const USER_COUNT = 40;
-const LISTINGS_PER_PRACTICE = 3;
+/**
+ * How much the seed builds, overridable per machine.
+ *
+ * The defaults are set past the interesting thresholds rather than merely
+ * "bigger". The browse map caps at `browse.mapPlaces` practices and a popup
+ * previews four postings per practice: a corpus under both has never drawn the
+ * ceiling, never drawn the "+N others" line, and never drawn a place it could
+ * not place.
+ */
+const USER_COUNT = Number(process.env.SEED_USERS ?? 260);
+const PRACTICE_COUNT = Number(process.env.SEED_PRACTICES ?? 620);
 const MAX_APPLICATIONS_PER_LISTING = 5;
+
+/**
+ * How many postings a practice publishes: one to six.
+ *
+ * Six, because four of them are all a popup shows. A corpus where no practice
+ * exceeds that has never once drawn the line saying there are more.
+ */
+const LISTINGS_PER_PRACTICE = { min: 1, max: 6 };
+
+/** One practice in `N` is left without coordinates. */
+const UNMAPPED_EVERY = 24;
 
 const MONTHS = [
   "January",
@@ -35,8 +55,14 @@ const MONTHS = [
   "December",
 ];
 
-// Rough city centers so geo searches spread across France instead of
-// clustering around Paris
+/**
+ * Rough city centres, so a geo search spreads across France instead of
+ * clustering around Paris.
+ *
+ * Fifty-one of them, and the spread is the point: the browse map clusters by
+ * viewport, so a corpus held to a dozen cities shows one cluster and proves
+ * nothing about a count spread over a country.
+ */
 const cityCoordinates: Record<string, { latitude: number; longitude: number }> =
   {
     Paris: { latitude: 48.8566, longitude: 2.3522 },
@@ -51,6 +77,48 @@ const cityCoordinates: Record<string, { latitude: number; longitude: number }> =
     Lille: { latitude: 50.6292, longitude: 3.0573 },
     Rennes: { latitude: 48.1173, longitude: -1.6778 },
     Grenoble: { latitude: 45.1885, longitude: 5.7245 },
+    Rouen: { latitude: 49.4432, longitude: 1.0999 },
+    Toulon: { latitude: 43.1242, longitude: 5.928 },
+    "Saint-Étienne": { latitude: 45.4397, longitude: 4.3872 },
+    "Le Havre": { latitude: 49.4944, longitude: 0.1079 },
+    Reims: { latitude: 49.2583, longitude: 4.0317 },
+    Dijon: { latitude: 47.322, longitude: 5.0415 },
+    Angers: { latitude: 47.4784, longitude: -0.5632 },
+    Brest: { latitude: 48.3904, longitude: -4.4861 },
+    Nîmes: { latitude: 43.8367, longitude: 4.3601 },
+    "Clermont-Ferrand": { latitude: 45.7772, longitude: 3.087 },
+    "Le Mans": { latitude: 48.0061, longitude: 0.1996 },
+    "Aix-en-Provence": { latitude: 43.5297, longitude: 5.4474 },
+    Amiens: { latitude: 49.8941, longitude: 2.2958 },
+    Tours: { latitude: 47.3941, longitude: 0.6848 },
+    Limoges: { latitude: 45.8336, longitude: 1.2611 },
+    Villeurbanne: { latitude: 45.7719, longitude: 4.8905 },
+    Besançon: { latitude: 47.2378, longitude: 6.0241 },
+    Orléans: { latitude: 47.9029, longitude: 1.9093 },
+    Mulhouse: { latitude: 47.7508, longitude: 7.3359 },
+    Metz: { latitude: 49.1193, longitude: 6.1757 },
+    Caen: { latitude: 49.1829, longitude: -0.3707 },
+    "Boulogne-Billancourt": { latitude: 48.8352, longitude: 2.2409 },
+    Roubaix: { latitude: 50.6942, longitude: 3.1746 },
+    Perpignan: { latitude: 42.6887, longitude: 2.8948 },
+    Nancy: { latitude: 48.6921, longitude: 6.1844 },
+    Argenteuil: { latitude: 48.9472, longitude: 2.2467 },
+    Tourcoing: { latitude: 50.7239, longitude: 3.1612 },
+    Valence: { latitude: 44.9334, longitude: 4.8924 },
+    Pau: { latitude: 43.2951, longitude: -0.3708 },
+    Calais: { latitude: 50.9513, longitude: 1.8585 },
+    Avignon: { latitude: 43.9493, longitude: 4.8055 },
+    "La Rochelle": { latitude: 46.1603, longitude: -1.1511 },
+    Annecy: { latitude: 45.8992, longitude: 6.1294 },
+    Antibes: { latitude: 43.5804, longitude: 7.1239 },
+    Cannes: { latitude: 43.5528, longitude: 7.0174 },
+    Colmar: { latitude: 48.0793, longitude: 7.3585 },
+    Cherbourg: { latitude: 49.6337, longitude: -1.6222 },
+    "Saint-Nazaire": { latitude: 47.2734, longitude: -2.2138 },
+    Bourges: { latitude: 47.081, longitude: 2.3988 },
+    Quimper: { latitude: 47.996, longitude: -4.1024 },
+    Vannes: { latitude: 47.6582, longitude: -2.7608 },
+    Bayonne: { latitude: 43.4929, longitude: -1.4748 },
   };
 
 const specialtyLabels: Record<Specialty, string> = {
@@ -148,12 +216,33 @@ function buildListingTitle(
   );
 }
 
+/**
+ * A deterministic random, so two seeds of the same corpus agree.
+ *
+ * `Math.random()` made every run differ: the count of open listings moved, a
+ * geo assertion on a distance could pass and then fail after a re-seed of
+ * nothing, and the map was never the same map twice. A fixed seed means
+ * "re-seed" means something.
+ */
+function makeRandom(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const random = makeRandom(0x5eed);
+
 function getRandomItem<T>(array: T[]): T {
-  return array[Math.floor(Math.random() * array.length)];
+  return array[Math.floor(random() * array.length)];
 }
 
 function getRandomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return Math.floor(random() * (max - min + 1)) + min;
 }
 
 function addDays(date: Date, days: number): Date {
@@ -173,7 +262,7 @@ function getPastDate(daysAgo: number): Date {
 function shuffle<T>(array: T[]): T[] {
   const copy = [...array];
   for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(random() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
@@ -422,8 +511,8 @@ async function main() {
             city: city,
             verified: i % 3 !== 0,
             isPublic: true,
-            latitude: coordinates.latitude + (Math.random() - 0.5) * 0.2,
-            longitude: coordinates.longitude + (Math.random() - 0.5) * 0.2,
+            latitude: coordinates.latitude + (random() - 0.5) * 0.2,
+            longitude: coordinates.longitude + (random() - 0.5) * 0.2,
           },
         },
       },
@@ -492,30 +581,49 @@ async function main() {
 
   const createdPractices = [];
 
-  for (let i = 0; i < practiceOwners.length; i++) {
-    const owner = practiceOwners[i];
+  /**
+   * More practices than there are owners to run them.
+   *
+   * Every other one runs a second practice, which is how a corpus crosses the
+   * map's ceiling without inventing owners that do nothing but own.
+   */
+  const totalPractices = Math.max(
+    PRACTICE_COUNT,
+    Math.ceil(practiceOwners.length * 1.5),
+  );
+
+  for (let i = 0; i < totalPractices; i++) {
+    // Owners cycle, so a practice is never orphaned and no owner carries
+    // an unbounded number of them.
+    const owner = practiceOwners[i % practiceOwners.length];
     const cityValue = owner.city ?? "Paris";
     const coordinates = cityCoordinates[cityValue] ?? {
       latitude: owner.latitude,
       longitude: owner.longitude,
     };
 
-    // Most owners run a single practice, every fourth one runs a second one
-    const practiceCount = i % 4 === 0 ? 2 : 1;
+    {
+      // One in `UNMAPPED_EVERY` is never geocoded. Not an error the seed is
+      // papering over — a state the map has to render honestly: the posting is
+      // in the list, the pin cannot be drawn, and `unlocated` reports how many.
+      const unmapped = i % UNMAPPED_EVERY === UNMAPPED_EVERY - 1;
 
-    for (let k = 0; k < practiceCount; k++) {
       const practice = await prisma.practice.create({
         data: {
           ownerId: owner.id,
-          name: `${practicePrefixes[(i * 2 + k) % practicePrefixes.length]} ${
-            practiceQualifiers[(i * 5 + k) % practiceQualifiers.length]
+          name: `${practicePrefixes[i % practicePrefixes.length]} ${
+            practiceQualifiers[(i * 5) % practiceQualifiers.length]
           }`,
-          address: `${3 + ((i * 7 + k * 3) % 70)} ${
-            streetTypes[(i + k) % streetTypes.length]
-          } ${streetNames[(i * 3 + k) % streetNames.length]}`,
+          address: `${3 + ((i * 7) % 70)} ${
+            streetTypes[i % streetTypes.length]
+          } ${streetNames[(i * 3) % streetNames.length]}`,
           city: cityValue,
-          latitude: coordinates.latitude + (Math.random() - 0.5) * 0.08,
-          longitude: coordinates.longitude + (Math.random() - 0.5) * 0.08,
+          latitude: unmapped
+            ? null
+            : coordinates.latitude + (random() - 0.5) * 0.08,
+          longitude: unmapped
+            ? null
+            : coordinates.longitude + (random() - 0.5) * 0.08,
           isPublic: true,
         },
       });
@@ -548,8 +656,13 @@ async function main() {
     const { practice, owner } = createdPractices[i];
     const cityValue = practice.city;
 
-    for (let j = 0; j < LISTINGS_PER_PRACTICE; j++) {
-      const startDays = 3 + ((i * LISTINGS_PER_PRACTICE + j) % 30) * 2;
+    const listingCount = getRandomInt(
+      LISTINGS_PER_PRACTICE.min,
+      LISTINGS_PER_PRACTICE.max,
+    );
+
+    for (let j = 0; j < listingCount; j++) {
+      const startDays = 3 + ((i * 3 + j) % 30) * 2;
       const durationDays = 4 + ((i + j * 2) % 6) * 3;
       const isUrgent = (i + j) % 4 === 0;
       const startDate = getFutureDate(startDays);
@@ -672,7 +785,7 @@ async function main() {
           listing.endDate.toLocaleDateString("fr-FR"),
         ),
         rejectionReason:
-          status === ApplicationStatus.REJECTED && Math.random() < 0.7
+          status === ApplicationStatus.REJECTED && random() < 0.7
             ? getRandomItem(rejectionReasons)
             : null,
         withdrawnReason:
@@ -680,7 +793,7 @@ async function main() {
             ? getRandomItem(withdrawnReasons)
             : null,
         viewedAt:
-          status !== ApplicationStatus.PENDING || Math.random() < 0.4
+          status !== ApplicationStatus.PENDING || random() < 0.4
             ? addDays(createdAt, 1)
             : null,
         respondedAt: isResponded ? addDays(createdAt, 3) : null,

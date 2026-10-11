@@ -466,6 +466,7 @@ export class ReplacementlistingsService {
       places: assemblePlaces(practices, places, previews),
       listingIds: listingIds.map((listing) => listing.id),
       unlocated,
+      totalPlaces: mappable.length,
       truncated: places.length < mappable.length,
     };
   }
