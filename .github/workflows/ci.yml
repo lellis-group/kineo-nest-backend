@@ -40,6 +40,12 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      # Scoped to what ships. `bun audit` over the whole tree also reads the
+      # prisma CLI's own transitive dependencies — mysql2, deepmerge-ts — which
+      # never reach an image; those advisories are still listed by the command and
+      # are not what this gate is about. Anything in the production tree fails the
+      # build here, which is the part a deployment is exposed to.
+      - run: bun audit --production
       - run: bunx prisma validate
       - run: bun run db:generate
       # Nothing before this applies the schema: `validate` reads schema.prisma and
