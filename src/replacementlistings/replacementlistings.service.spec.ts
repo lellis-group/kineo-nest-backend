@@ -3,7 +3,10 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 import { PrismaService } from "../prisma.service";
-import { ReplacementlistingsService } from "./replacementlistings.service";
+import {
+  orderByFor,
+  ReplacementlistingsService,
+} from "./replacementlistings.service";
 
 const profile = { id: "profile-1", userId: "user-1" };
 const listing = {
@@ -302,5 +305,38 @@ describe("ReplacementlistingsService", () => {
     await expect(service.findOne("nonexistent-id")).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  describe("orderByFor", () => {
+    it("orders by the newest first, with a tiebreaker the paginator can rely on", () => {
+      expect(orderByFor(undefined)).toEqual([
+        { createdAt: "desc" },
+        { id: "desc" },
+      ]);
+      expect(orderByFor("recent")).toEqual([
+        { createdAt: "desc" },
+        { id: "desc" },
+      ]);
+    });
+
+    it("orders by start date ascending", () => {
+      expect(orderByFor("startDate")).toEqual([
+        { startDate: "asc" },
+        { id: "desc" },
+      ]);
+    });
+
+    /**
+     * Urgent alone is not a total order, and the paginator needs one: two
+     * rows sharing `urgent` could land in either order between two pages,
+     * which repeats one and skips the other.
+     */
+    it("breaks the urgent tie on start date, then on id", () => {
+      expect(orderByFor("urgent")).toEqual([
+        { urgent: "desc" },
+        { startDate: "asc" },
+        { id: "desc" },
+      ]);
+    });
   });
 });

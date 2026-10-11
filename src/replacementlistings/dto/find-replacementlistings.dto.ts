@@ -16,6 +16,9 @@ const BooleanQueryParam = z
   .union([z.boolean(), z.literal("true"), z.literal("false")])
   .transform((value) => value === true || value === "true");
 
+/** How the reader wants the postings ordered. */
+export const ListingSort = z.enum(["recent", "urgent", "startDate"]);
+
 export const FindReplacementListingsSchema = z
   .object({
     specialty: z
@@ -46,6 +49,7 @@ export const FindReplacementListingsSchema = z
       .datetime()
       .optional()
       .describe("Only listings starting on or before this date (ISO 8601)"),
+    sort: ListingSort.optional().describe("Ordering of the results"),
     ...paginationQueryShape,
   })
   .strict()

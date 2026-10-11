@@ -103,6 +103,29 @@ const LISTING_INCLUDE = {
   ...PRACTICE_INCLUDE,
 };
 
+/**
+ * The ordering of a read, as a total one.
+ *
+ * `id` last, always. `createdAt` is not unique, so ordering by it alone leaves
+ * Postgres free to return two rows in either order between two pages: offset
+ * pagination then repeats one and skips the other.
+ */
+export function orderByFor(
+  sort?: FindReplacementListingsDto["sort"],
+): Prisma.ReplacementListingOrderByWithRelationInput[] {
+  const id: Prisma.ReplacementListingOrderByWithRelationInput = {
+    id: "desc",
+  };
+
+  if (sort === "startDate") {
+    return [{ startDate: "asc" }, id];
+  }
+  if (sort === "urgent") {
+    return [{ urgent: "desc" }, { startDate: "asc" }, id];
+  }
+  return [{ createdAt: "desc" }, id];
+}
+
 @Injectable()
 export class ReplacementlistingsService {
   constructor(
@@ -227,10 +250,7 @@ export class ReplacementlistingsService {
         where,
         skip,
         take: limit,
-        // createdAt is not unique, so ordering by it alone leaves Postgres free to
-        // return two rows in either order between two pages: offset pagination then
-        // repeats one and skips the other. The id breaks the tie.
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        orderBy: orderByFor(filters.sort),
         include: LISTING_INCLUDE,
       }),
       this.prisma.replacementListing.count({ where }),
