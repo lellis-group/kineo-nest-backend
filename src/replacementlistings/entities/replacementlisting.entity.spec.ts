@@ -62,8 +62,8 @@ describe("ReplacementListingSchema", () => {
       updatedAt: "2026-08-20T08:00:00.000Z",
     });
 
-    expect(parsed.practice.city).toBe("Lyon");
-    expect(parsed.practice.latitude).toBe(45.764);
+    expect(parsed.practice?.city).toBe("Lyon");
+    expect(parsed.practice?.latitude).toBe(45.764);
   });
 
   /**
@@ -96,7 +96,36 @@ describe("ReplacementListingSchema", () => {
       updatedAt: "2026-08-20T08:00:00.000Z",
     });
 
-    expect(parsed.practice.latitude).toBeNull();
+    expect(parsed.practice?.latitude).toBeNull();
+  });
+
+  /**
+   * A mutation answers with no practice, and that is not a defect.
+   *
+   * The reads the browse feed uses include the practice, so the map can place a
+   * row. A write does not: `remove` returns the row it just deleted, and there
+   * is nothing left to read a relation from. Requiring `practice` here is what
+   * made every write endpoint answer 500 with a ZodSerializationException —
+   * delete, update, publish, close and cancel all of them.
+   */
+  it("accepts a listing read without its practice", () => {
+    const parsed = ReplacementListingSchema.parse({
+      id: "listing-1",
+      practiceId: "practice-1",
+      title: "General practitioner",
+      startDate: "2026-09-10T08:00:00.000Z",
+      endDate: "2026-09-12T08:00:00.000Z",
+      specialty: "GENERALIST",
+      status: "OPEN",
+      urgent: false,
+      description: null,
+      maxApplications: null,
+      applicationsCount: 0,
+      createdAt: "2026-08-20T08:00:00.000Z",
+      updatedAt: "2026-08-20T08:00:00.000Z",
+    });
+
+    expect(parsed.practice).toBeUndefined();
   });
 
   /**

@@ -28,7 +28,15 @@ export const PracticeSummarySchema = z.object({
 export const ReplacementListingSchema = z.object({
   id: z.string(),
   practiceId: z.string(),
-  practice: PracticeSummarySchema,
+  /**
+   * Absent on the reads that did not ask for it.
+   *
+   * The feed and the owner's list include the practice, because the browse map
+   * needs to place a row. A mutation does not: `remove` returns a row it has
+   * just deleted, and there is nothing left to read a relation from. Making
+   * this required is how every write endpoint answered 500.
+   */
+  practice: PracticeSummarySchema.optional(),
   title: z.string(),
   startDate: z.iso.datetime(),
   endDate: z.iso.datetime(),
