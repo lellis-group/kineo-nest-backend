@@ -31,9 +31,14 @@ import {
   Specialty,
 } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
+import { PLACE_PREVIEW_LIMIT } from "./browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
-import type { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
+import {
+  type FindPlacesDto,
+  type FindReplacementListingsDto,
+} from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
+import type { ListingPlace } from "./entities/replacementlisting.entity";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
 
 /**
@@ -96,6 +101,73 @@ const PRACTICE_INCLUDE = {
     },
   },
 };
+
+/** What a place read needs of a practice — position and nothing else. */
+const PRACTICE_PLACES_SELECT = {
+  id: true,
+  name: true,
+  city: true,
+  latitude: true,
+  longitude: true,
+} as const;
+
+/** What a place's preview needs of a posting. */
+type PreviewListing = {
+  id: string;
+  practiceId: string;
+  title: string;
+  startDate: Date;
+  endDate: Date;
+};
+
+const PLACE_LISTING_SELECT = {
+  id: true,
+  practiceId: true,
+  title: true,
+  startDate: true,
+  endDate: true,
+} as const;
+
+/**
+ * Pairs each place with its previews, capped.
+ *
+ * The cap is on the preview, never on `count`: the population comes from the
+ * aggregate and is what the consumer reports. Taking four of a place with
+ * nine is a rendering choice, and the aggregation already knows the nine.
+ */
+function assemblePlaces(
+  practices: Array<{
+    id: string;
+    name: string;
+    city: string;
+    latitude: number | null;
+    longitude: number | null;
+  }>,
+  ranked: Array<{ practiceId: string; count: number }>,
+  previews: PreviewListing[],
+): ListingPlace[] {
+  const byPractice = new Map(practices.map((p) => [p.id, p]));
+
+  return ranked.map((place) => {
+    const practice = byPractice.get(place.practiceId);
+    const own = previews.filter((p) => p.practiceId === place.practiceId);
+
+    return {
+      practiceId: place.practiceId,
+      name: practice?.name ?? "",
+      city: practice?.city ?? "",
+      latitude: practice?.latitude ?? null,
+      longitude: practice?.longitude ?? null,
+      count: place.count,
+      listings: own.slice(0, PLACE_PREVIEW_LIMIT).map((listing) => ({
+        id: listing.id,
+        title: listing.title,
+        startDate: listing.startDate.toISOString(),
+        endDate: listing.endDate.toISOString(),
+      })),
+    };
+  });
+}
 
 /** Every include a listing read needs, in one place. */
 const LISTING_INCLUDE = {
@@ -202,7 +274,15 @@ export class ReplacementlistingsService {
    * stop hiding private practices, depending on the order.
    */
   private buildListingsWhere(
-    filters: FindReplacementListingsDto,
+    filters: Pick<
+      FindReplacementListingsDto,
+      | "status"
+      | "specialty"
+      | "city"
+      | "urgent"
+      | "startDateFrom"
+      | "startDateTo"
+    >,
     options: { publicOnly?: boolean } = {},
   ) {
     const practice: Prisma.PracticeWhereInput = {
@@ -316,6 +396,78 @@ export class ReplacementlistingsService {
     }
 
     return { total, urgent, bySpecialty };
+  }
+
+  /**
+   * The places the browse map draws, over the whole matching collection.
+   *
+   * Not the page, and not a hundred postings: the map shows the collection a
+   * filter selects, and feeding it a page meant it redrew whenever the reader
+   * paged. Feeding it a capped slice of postings instead was no better — at
+   * five openings a practice, a hundred postings cover twenty practices of N,
+   * and the rest of the country left the map without a word saying so. Places
+   * are the unit the map draws, so places are the unit this reads.
+   *
+   * Three reads, and no raw SQL: `groupBy` for the population, one `findMany`
+   * for the coordinates of every practice involved, one for the previews. The
+   * alternative — a window function over the postings — would need the filters
+   * written a second time in SQL, and the two definitions would drift.
+   */
+  async findPlaces(filters: FindPlacesDto, maxPlaces: number) {
+    const where: Prisma.ReplacementListingWhereInput = {
+      ...this.buildListingsWhere(filters, { publicOnly: true }),
+      status: "OPEN",
+    };
+
+    const grouped = await this.prisma.replacementListing.groupBy({
+      by: ["practiceId"],
+      where,
+      _count: true,
+    });
+
+    const ranked = grouped
+      .map((group) => ({ practiceId: group.practiceId, count: group._count }))
+      .sort((a, b) => b.count - a.count);
+
+    // Every practice involved, not only the busiest ones: which of them has no
+    // coordinates decides both the map and the "N could not be placed" line,
+    // and that is a fact about the whole collection.
+    const practices = await this.prisma.practice.findMany({
+      where: { id: { in: ranked.map((place) => place.practiceId) } },
+      select: PRACTICE_PLACES_SELECT,
+    });
+
+    const mappable = ranked.filter((place) => {
+      const practice = practices.find((p) => p.id === place.practiceId);
+      return practice?.latitude != null && practice?.longitude != null;
+    });
+    const unlocated = ranked
+      .filter((place) => !mappable.includes(place))
+      .reduce((sum, place) => sum + place.count, 0);
+
+    const places = mappable.slice(0, maxPlaces);
+    const placeIds = places.map((place) => place.practiceId);
+
+    const [previews, listingIds] = await Promise.all([
+      this.prisma.replacementListing.findMany({
+        where: { ...where, practiceId: { in: placeIds } },
+        select: PLACE_LISTING_SELECT,
+      }),
+      this.prisma.replacementListing.findMany({
+        where,
+        select: { id: true },
+        // The reader's ordering, so the position of a posting in this list is
+        // the page it is on.
+        orderBy: orderByFor(filters.sort),
+      }),
+    ]);
+
+    return {
+      places: assemblePlaces(practices, places, previews),
+      listingIds: listingIds.map((listing) => listing.id),
+      unlocated,
+      truncated: places.length < mappable.length,
+    };
   }
 
   async findMine(userId: string, filters: FindReplacementListingsDto) {

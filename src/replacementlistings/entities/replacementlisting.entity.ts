@@ -97,3 +97,60 @@ export const ListingFacetsSchema = z.object({
 });
 
 export class ListingFacets extends createZodDto(ListingFacetsSchema) {}
+
+/**
+ * A place the map draws, with the postings that sit on it.
+ *
+ * A place, not a posting. The map feeds from the collection a filter selects,
+ * and the endpoint paginates; a client reading the page to draw the map showed
+ * a hundred postings' worth of practices and silently dropped the rest, with no
+ * way to see the gap.
+ *
+ * `listings` is a preview, capped. `count` is the population and is what the
+ * badge, the accessible label and the "+N others" line read — never the length
+ * of the preview, which is a rendering convenience and not a fact.
+ */
+export type ListingPlace = z.infer<typeof ListingPlaceSchema>;
+
+export const ListingPlaceSchema = z.object({
+  practiceId: z.string(),
+  name: z.string(),
+  city: z.string(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  count: z.number(),
+  listings: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      // ISO, and formatted by the client: it already knows the reader's locale,
+      // and a second French sentence written server-side would be a second
+      // place for them to disagree.
+      startDate: z.iso.datetime(),
+      endDate: z.iso.datetime(),
+    }),
+  ),
+});
+
+export const ListingPlacesSchema = z.object({
+  places: z.array(ListingPlaceSchema),
+
+  /**
+   * Every matching posting's id, in the ordering the reader asked for.
+   *
+   * The reader can pick a posting from any popup, including one the list is not
+   * currently showing, and the list has to turn to the page that holds it. That
+   * needs the position of the posting in the filtered collection, which the
+   * previews cannot answer: the places are ordered by population and each holds
+   * four of its own.
+   */
+  listingIds: z.array(z.string()),
+
+  /** Matching postings whose practice was never geocoded. */
+  unlocated: z.number(),
+
+  /** True when places or `listingIds` were cut at their ceiling. */
+  truncated: z.boolean(),
+});
+
+export class ListingPlaces extends createZodDto(ListingPlacesSchema) {}

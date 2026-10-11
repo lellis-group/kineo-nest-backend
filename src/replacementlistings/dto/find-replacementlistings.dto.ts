@@ -19,39 +19,47 @@ const BooleanQueryParam = z
 /** How the reader wants the postings ordered. */
 export const ListingSort = z.enum(["recent", "urgent", "startDate"]);
 
-export const FindReplacementListingsSchema = z
-  .object({
-    specialty: z
-      .enum(Specialty)
-      .optional()
-      .describe("Filter by medical specialty"),
-    city: z
-      .string()
-      .trim()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe("Filter by practice city"),
-    urgent: BooleanQueryParam.optional().describe(
-      "Filter urgent listings only",
+/**
+ * The fields that select postings, without the ones that describe a page.
+ *
+ * A shape rather than a schema, because the two DTOs built on it carry
+ * different refinements — the paginated one has the `page × limit` bound, the
+ * map's one has no paging at all — and `z.object.omit()` refuses to run on a
+ * schema that has any. Field-by-field instead, which is what keeps a filter
+ * from existing on one path and being absent on the other.
+ */
+const listingFilterShape = {
+  specialty: z
+    .enum(Specialty)
+    .optional()
+    .describe("Filter by medical specialty"),
+  city: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Filter by practice city"),
+  urgent: BooleanQueryParam.optional().describe("Filter urgent listings only"),
+  status: z
+    .enum(ListingStatus)
+    .optional()
+    .describe(
+      "Filter by status. Only meaningful on the caller's own listings: the public feed is always OPEN.",
     ),
-    status: z
-      .enum(ListingStatus)
-      .optional()
-      .describe(
-        "Filter by status. Only meaningful on the caller's own listings: the public feed is always OPEN.",
-      ),
-    startDateFrom: z.iso
-      .datetime()
-      .optional()
-      .describe("Only listings starting on or after this date (ISO 8601)"),
-    startDateTo: z.iso
-      .datetime()
-      .optional()
-      .describe("Only listings starting on or before this date (ISO 8601)"),
-    sort: ListingSort.optional().describe("Ordering of the results"),
-    ...paginationQueryShape,
-  })
+  startDateFrom: z.iso
+    .datetime()
+    .optional()
+    .describe("Only listings starting on or after this date (ISO 8601)"),
+  startDateTo: z.iso
+    .datetime()
+    .optional()
+    .describe("Only listings starting on or before this date (ISO 8601)"),
+  sort: ListingSort.optional().describe("Ordering of the results"),
+};
+
+export const FindReplacementListingsSchema = z
+  .object({ ...listingFilterShape, ...paginationQueryShape })
   .strict()
   .superRefine((data, ctx) => {
     if (
@@ -71,3 +79,31 @@ export const FindReplacementListingsSchema = z
 export class FindReplacementListingsDto extends createZodDto(
   FindReplacementListingsSchema,
 ) {}
+
+/**
+ * The map's read: the filters without the paging, which the map has no use for.
+ *
+ * The same fields as the paginated one, and notably **not** the same as
+ * `/facets`: `specialty` is honoured here. The distribution panel drops it on
+ * purpose — a panel reading « Médecine générale — 12 » under a Dermatologie
+ * filter answers a question nobody asked — but a map showing postings of
+ * another specialty than the list is simply wrong.
+ */
+export const FindPlacesSchema = z
+  .object(listingFilterShape)
+  .strict()
+  .superRefine((data, ctx) => {
+    if (
+      data.startDateFrom &&
+      data.startDateTo &&
+      new Date(data.startDateFrom) > new Date(data.startDateTo)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "startDateFrom must be on or before startDateTo",
+        path: ["startDateTo"],
+      });
+    }
+  });
+
+export class FindPlacesDto extends createZodDto(FindPlacesSchema) {}

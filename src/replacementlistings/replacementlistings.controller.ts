@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import {
@@ -19,11 +20,16 @@ import {
 import { ZodSerializerDto } from "nestjs-zod";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
+import { MAX_BROWSE_MAP_PLACES } from "../replacementlistings/browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
-import { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
+import {
+  FindPlacesDto,
+  FindReplacementListingsDto,
+} from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import {
   ListingFacets,
+  ListingPlaces,
   PaginatedReplacementListings,
   ReplacementListing,
 } from "./entities/replacementlisting.entity";
@@ -35,6 +41,7 @@ import { ReplacementlistingsService } from "./replacementlistings.service";
 export class ReplacementlistingsController {
   constructor(
     private readonly replacementlistingsService: ReplacementlistingsService,
+    private readonly config: ConfigService,
   ) {}
 
   @Post()
@@ -79,6 +86,24 @@ export class ReplacementlistingsController {
   @ZodSerializerDto(ListingFacets)
   findFacets(@Query() query: FindReplacementListingsDto) {
     return this.replacementlistingsService.findFacets(query);
+  }
+
+  // Declared before `:id`, like `facets` above: Nest matches routes in the order
+  // they appear, so a handler declared after `:id` would never be reached — the
+  // `:id` route would answer to the literal string "places" and look for a
+  // listing with that id.
+  @Get("places")
+  @AllowAnonymous()
+  @ApiOperation({
+    summary:
+      "The places the browse map is drawn from, over the whole matching collection",
+  })
+  @ZodSerializerDto(ListingPlaces)
+  findPlaces(@Query() query: FindPlacesDto) {
+    return this.replacementlistingsService.findPlaces(
+      query,
+      this.config.get<number>("browse.mapPlaces") ?? MAX_BROWSE_MAP_PLACES,
+    );
   }
 
   @Get("mine")

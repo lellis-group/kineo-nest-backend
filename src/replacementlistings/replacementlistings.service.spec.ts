@@ -3,6 +3,7 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 import { PrismaService } from "../prisma.service";
+import { PLACE_PREVIEW_LIMIT } from "./browse";
 import {
   orderByFor,
   ReplacementlistingsService,
@@ -305,6 +306,179 @@ describe("ReplacementlistingsService", () => {
     await expect(service.findOne("nonexistent-id")).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  describe("findPlaces", () => {
+    const at = (id: string, latitude: number | null = 50.6) => ({
+      id,
+      name: `P ${id}`,
+      city: "Lille",
+      latitude,
+      longitude: 3.05,
+    });
+
+    type Preview = {
+      id: string;
+      practiceId: string;
+      title: string;
+      startDate: Date;
+      endDate: Date;
+    };
+
+    /**
+     * A prisma that answers the three reads `findPlaces` makes. The previews and
+     * the id list are told apart by what they select, because the two reads are
+     * otherwise the same query.
+     */
+    function prismaFor(
+      groups: Array<{ practiceId: string; _count: number }>,
+      practices: Array<ReturnType<typeof at>>,
+      previews: Preview[] = [],
+      ids: string[] = [],
+    ) {
+      return {
+        replacementListing: {
+          groupBy: async () => groups,
+          findMany: async (args: { select?: Record<string, boolean> }) =>
+            args.select && "title" in args.select
+              ? previews
+              : ids.map((id) => ({ id })),
+        },
+        practice: { findMany: async () => practices },
+      } as unknown as PrismaService;
+    }
+
+    const service = (prisma: unknown) =>
+      new ReplacementlistingsService(
+        prisma as PrismaService,
+        {
+          get: () => undefined,
+        } as unknown as ConfigService,
+      );
+
+    const posting = (id: string, practiceId: string): Preview => ({
+      id,
+      practiceId,
+      title: `cover ${id}`,
+      startDate: new Date("2026-11-01T08:00:00.000Z"),
+      endDate: new Date("2026-11-02T08:00:00.000Z"),
+    });
+
+    it("counts a ungeocoded practice as unlocated, not as a place", async () => {
+      const result = await service(
+        prismaFor(
+          [
+            { practiceId: "p1", _count: 3 },
+            { practiceId: "p2", _count: 1 },
+          ],
+          [at("p1"), at("p2", null)],
+        ),
+      ).findPlaces({}, 200);
+
+      expect(result.places.map((place) => place.practiceId)).toEqual(["p1"]);
+      expect(result.unlocated).toBe(1);
+    });
+
+    /**
+     * The population and the preview are different numbers, on purpose.
+     *
+     * The preview is capped so a popup does not need a scrollbar. Reading the
+     * population from the preview would report "4" for a place holding nine,
+     * which is exactly what the badge and the "+N others" line say.
+     */
+    it("reports the population in `count` while previewing only four", async () => {
+      const nine = Array.from({ length: 9 }, (_, i) => posting(`l${i}`, "p1"));
+
+      const result = await service(
+        prismaFor(
+          [{ practiceId: "p1", _count: 9 }],
+          [at("p1")],
+          nine,
+          nine.map((l) => l.id),
+        ),
+      ).findPlaces({}, 200);
+
+      const [place] = result.places;
+      expect(place.count).toBe(9);
+      expect(place.listings).toHaveLength(PLACE_PREVIEW_LIMIT);
+    });
+
+    it("truncates, and says so, past the ceiling", async () => {
+      const groups = Array.from({ length: 8 }, (_, i) => ({
+        practiceId: `b${i}`,
+        _count: 1,
+      }));
+      const practices = groups.map((g) => at(g.practiceId));
+
+      const result = await service(prismaFor(groups, practices)).findPlaces(
+        {},
+        3,
+      );
+
+      expect(result.places).toHaveLength(3);
+      expect(result.truncated).toBe(true);
+    });
+
+    it("does not truncate when the ceiling holds", async () => {
+      const result = await service(
+        prismaFor(
+          [
+            { practiceId: "p1", _count: 1 },
+            { practiceId: "p2", _count: 1 },
+          ],
+          [at("p1"), at("p2")],
+        ),
+      ).findPlaces({}, 200);
+
+      expect(result.truncated).toBe(false);
+    });
+
+    /**
+     * `specialty` is honoured here and dropped in `/facets`, deliberately.
+     *
+     * The distribution panel shows what else is on offer, so it ignores the
+     * specialty the reader just filtered on. The map has no such excuse: a pin
+     * for a posting of another specialty is a pin the list does not show.
+     */
+    it("passes the filters through, unlike the facets aggregate", async () => {
+      let askedWhere: unknown;
+      const svc = service({
+        replacementListing: {
+          groupBy: async (args: { where: unknown }) => {
+            askedWhere = args.where;
+            return [];
+          },
+          findMany: async () => [],
+        },
+        practice: { findMany: async () => [] },
+      });
+
+      await svc.findPlaces({ specialty: "DENTIST" }, 200);
+
+      expect(askedWhere).toMatchObject({ specialty: "DENTIST" });
+    });
+
+    it("orders the ids the reader asked for, not the server's default", async () => {
+      let askedOrderBy: unknown;
+      const svc = service({
+        replacementListing: {
+          groupBy: async () => [],
+          findMany: async (args: {
+            orderBy?: unknown;
+            select?: Record<string, boolean>;
+          }) => {
+            if (args.select && "title" in args.select) return [];
+            askedOrderBy = args.orderBy;
+            return [];
+          },
+        },
+        practice: { findMany: async () => [] },
+      });
+
+      await svc.findPlaces({ sort: "startDate" }, 200);
+
+      expect(askedOrderBy).toEqual([{ startDate: "asc" }, { id: "desc" }]);
+    });
   });
 
   describe("orderByFor", () => {

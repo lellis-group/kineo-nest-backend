@@ -3,6 +3,7 @@ import {
   MIN_PENDING_RETENTION_DAYS,
   PENDING_DELETION_REQUEST_RETENTION_DAYS,
 } from "../data-lifecycle/data-lifecycle.service";
+import { MAX_BROWSE_MAP_PLACES } from "../replacementlistings/browse";
 import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "./env";
 
 function positiveInteger(
@@ -379,6 +380,21 @@ function configuration() {
       ),
     },
 
+    // ---- Browse feed ----
+    // How many distinct practices the /listings map is drawn from. A guard on
+    // the payload, not a product quota, which is why it does not live in
+    // `limits.*`: that block is documented as "undefined = unlimited", and an
+    // unbounded map is the one outcome this endpoint exists to prevent. It is
+    // tunable because the collection grows; `truncated` in the response is
+    // what lets the client adapt to whatever it is set to.
+    browse: {
+      mapPlaces: positiveInteger(
+        process.env.MAX_BROWSE_MAP_PLACES,
+        MAX_BROWSE_MAP_PLACES,
+        "MAX_BROWSE_MAP_PLACES",
+      ),
+    },
+
     // ---- Database (mirrors validated DATABASE_URL for DI consumers) ----
     databaseUrl: (process.env.DATABASE_URL ?? "").trim(),
 
@@ -535,6 +551,7 @@ export const envValidationSchema = z
       .int()
       .positive()
       .optional(),
+    MAX_BROWSE_MAP_PLACES: z.coerce.number().int().positive().optional(),
 
     // ---- Data lifecycle ----
     DATA_DELETION_REQUEST_RETENTION_DAYS: z.coerce
