@@ -134,6 +134,11 @@ const PLACE_LISTING_SELECT = {
  * The cap is on the preview, never on `count`: the population comes from the
  * aggregate and is what the consumer reports. Taking four of a place with
  * nine is a rendering choice, and the aggregation already knows the nine.
+ *
+ * The previews are grouped once, by practice, before the map over the places.
+ * Filtering them per place — the obvious shape — is quadratic in the two
+ * collections, and `ranked` here is whatever survived the cap, so the cost grew
+ * with the response rather than staying bounded by it.
  */
 function assemblePlaces(
   practices: Array<{
@@ -148,9 +153,19 @@ function assemblePlaces(
 ): ListingPlace[] {
   const byPractice = new Map(practices.map((p) => [p.id, p]));
 
+  const previewsByPractice = new Map<string, PreviewListing[]>();
+  for (const preview of previews) {
+    const own = previewsByPractice.get(preview.practiceId);
+    if (own) {
+      own.push(preview);
+    } else {
+      previewsByPractice.set(preview.practiceId, [preview]);
+    }
+  }
+
   return ranked.map((place) => {
     const practice = byPractice.get(place.practiceId);
-    const own = previews.filter((p) => p.practiceId === place.practiceId);
+    const own = previewsByPractice.get(place.practiceId) ?? [];
 
     return {
       practiceId: place.practiceId,
@@ -437,13 +452,23 @@ export class ReplacementlistingsService {
       select: PRACTICE_PLACES_SELECT,
     });
 
-    const mappable = ranked.filter((place) => {
-      const practice = practices.find((p) => p.id === place.practiceId);
-      return practice?.latitude != null && practice?.longitude != null;
-    });
-    const unlocated = ranked
-      .filter((place) => !mappable.includes(place))
-      .reduce((sum, place) => sum + place.count, 0);
+    // One pass, two tallies, a lookup table. The shape this replaces looked up
+    // the practice with `practices.find` and then re-walked `ranked` a second
+    // time to count the ones `mappable` did not hold — both quadratic in the
+    // whole collection, and the cap below bounds the response rather than any of
+    // the work leading to it.
+    const practiceById = new Map(practices.map((p) => [p.id, p]));
+    const mappable: typeof ranked = [];
+    let unlocated = 0;
+
+    for (const place of ranked) {
+      const practice = practiceById.get(place.practiceId);
+      if (practice?.latitude != null && practice?.longitude != null) {
+        mappable.push(place);
+      } else {
+        unlocated += place.count;
+      }
+    }
 
     const places = mappable.slice(0, maxPlaces);
     const placeIds = places.map((place) => place.practiceId);
