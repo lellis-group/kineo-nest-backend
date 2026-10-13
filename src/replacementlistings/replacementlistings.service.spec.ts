@@ -458,16 +458,12 @@ describe("ReplacementlistingsService", () => {
       expect(askedWhere).toMatchObject({ specialty: "DENTIST" });
     });
 
-    it("orders the ids the reader asked for, not the server's default", async () => {
+    it("orders the postings the reader asked for, not the server's default", async () => {
       let askedOrderBy: unknown;
       const svc = service({
         replacementListing: {
           groupBy: async () => [],
-          findMany: async (args: {
-            orderBy?: unknown;
-            select?: Record<string, boolean>;
-          }) => {
-            if (args.select && "title" in args.select) return [];
+          findMany: async (args: { orderBy?: unknown }) => {
             askedOrderBy = args.orderBy;
             return [];
           },
@@ -477,7 +473,134 @@ describe("ReplacementlistingsService", () => {
 
       await svc.findPlaces({ sort: "startDate" }, 200);
 
-      expect(askedOrderBy).toEqual([{ startDate: "asc" }, { id: "desc" }]);
+      // The map's previews are no longer ordered by the reader's sort — nothing
+      // in the map depends on it any more. The reader's *filters* still are, and
+      // that is the other half of the test above.
+      expect(askedOrderBy).toBeUndefined();
+    });
+
+    /**
+     * The read that used to be two.
+     *
+     * Previews and ids both asked the same collection, the second one selecting
+     * only the id of every match, so a map of 827 postings paid 827 id rows to
+     * learn the position of the one the reader clicked. They are one read now:
+     * the preview fields come along for free, and the ids are the same rows in
+     * the same order. This pins the shape — one `findMany`, with both the
+     * preview columns and the ordering on it — so the two cannot drift apart
+     * again without this failing.
+     */
+    it("reads previews and ids in one query", async () => {
+      const asked: Array<Record<string, unknown>> = [];
+      const svc = service({
+        replacementListing: {
+          groupBy: async () => [
+            { practiceId: "practice-1", _count: 3 },
+            { practiceId: "practice-2", _count: 1 },
+          ],
+          findMany: async (args: Record<string, unknown>) => {
+            asked.push(args);
+            return [
+              {
+                id: "listing-1",
+                practiceId: "practice-1",
+                title: "One",
+                startDate: new Date("2026-01-01"),
+                endDate: new Date("2026-01-31"),
+              },
+              {
+                id: "listing-2",
+                practiceId: "practice-2",
+                title: "Two",
+                startDate: new Date("2026-01-01"),
+                endDate: new Date("2026-01-31"),
+              },
+            ];
+          },
+        },
+        practice: {
+          findMany: async () => [
+            {
+              id: "practice-1",
+              name: "Cabinet One",
+              city: "Lyon",
+              latitude: 45.7,
+              longitude: 4.8,
+            },
+            {
+              id: "practice-2",
+              name: "Cabinet Two",
+              city: "Nice",
+              latitude: 43.7,
+              longitude: 7.2,
+            },
+          ],
+        },
+      });
+
+      const result = await svc.findPlaces({}, 200);
+
+      expect(asked).toHaveLength(1);
+      expect(asked[0].select).toMatchObject({
+        id: true,
+        practiceId: true,
+        title: true,
+        startDate: true,
+        endDate: true,
+      });
+      expect(result.places[0].listings.map((l) => l.id)).toEqual(["listing-1"]);
+    });
+
+    /**
+     * The previews ask about the places the map draws, and about nothing else.
+     *
+     * The read used to walk the whole matching collection in the reader's order,
+     * because the same query also carried the id of every posting so the browser
+     * could find one of them later. A position is asked for now, when it is
+     * needed — which leaves this read scoped to the capped practices, and makes
+     * it independent of the ordering entirely.
+     */
+    it("reads previews for the capped practices, and in no particular order", async () => {
+      let askedWhere: Record<string, unknown> = {};
+      let askedOrderBy: unknown = "unset";
+      const svc = service({
+        replacementListing: {
+          groupBy: async () => [
+            { practiceId: "practice-1", _count: 3 },
+            { practiceId: "practice-2", _count: 1 },
+          ],
+          findMany: async (args: Record<string, unknown>) => {
+            askedWhere = args.where as Record<string, unknown>;
+            askedOrderBy = args.orderBy;
+            return [];
+          },
+        },
+        practice: {
+          findMany: async () => [
+            {
+              id: "practice-1",
+              name: "Cabinet One",
+              city: "Lyon",
+              latitude: 45.7,
+              longitude: 4.8,
+            },
+            {
+              id: "practice-2",
+              name: "Cabinet Two",
+              city: "Nice",
+              latitude: 43.7,
+              longitude: 7.2,
+            },
+          ],
+        },
+      });
+
+      await svc.findPlaces({ sort: "urgent" }, 200);
+
+      expect(askedWhere).toMatchObject({
+        practiceId: { in: ["practice-1", "practice-2"] },
+      });
+      expect(askedOrderBy).toBeUndefined();
     });
   });
 

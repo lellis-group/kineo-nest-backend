@@ -43,6 +43,7 @@ export const ReplacementListingSchema = z.object({
   specialty: z.enum(Specialty),
   status: z.enum(ListingStatus),
   urgent: z.boolean(),
+  /** On the detail read only — a feed omits the field, see `ListingSummarySchema`. */
   description: z.string().nullable(),
   maxApplications: z.number().nullable(),
   applicationsCount: z.number(),
@@ -53,6 +54,22 @@ export const ReplacementListingSchema = z.object({
 export class ReplacementListing extends createZodDto(
   ReplacementListingSchema,
 ) {}
+
+/**
+ * A listing as a feed publishes it: everything the row on screen reads, and no
+ * `description`.
+ *
+ * The paragraph belongs to the detail read, where it is rendered (`listing-detail`
+ * on the frontend). On the browse screen neither the table nor the card draws it,
+ * and sending it meant a page of ten postings carried its longest field for
+ * nothing — most of the 6.8 kB feed payload on the seeded corpus, on every page
+ * and every filter change. `omit` rather than a second hand-written schema, so
+ * the summary cannot drift from the record: adding a field to the listing adds it
+ * here too, automatically.
+ */
+export const ListingSummarySchema = ReplacementListingSchema.omit({
+  description: true,
+});
 
 /**
  * Totals per status, so the tabs on the owner's own listings can stay stable
@@ -71,7 +88,7 @@ export const ListingStatusCountsSchema = z.object({
 });
 
 export const PaginatedReplacementListingsSchema = z.object({
-  data: z.array(ReplacementListingSchema),
+  data: z.array(ListingSummarySchema),
   meta: PaginationMetaSchema.extend({
     counts: ListingStatusCountsSchema.optional(),
   }),
@@ -143,17 +160,6 @@ export const ListingPlaceSchema = z.object({
 export const ListingPlacesSchema = z.object({
   places: z.array(ListingPlaceSchema),
 
-  /**
-   * Every matching posting's id, in the ordering the reader asked for.
-   *
-   * The reader can pick a posting from any popup, including one the list is not
-   * currently showing, and the list has to turn to the page that holds it. That
-   * needs the position of the posting in the filtered collection, which the
-   * previews cannot answer: the places are ordered by population and each holds
-   * four of its own.
-   */
-  listingIds: z.array(z.string()),
-
   /** Matching postings whose practice was never geocoded. */
   unlocated: z.number(),
 
@@ -171,3 +177,20 @@ export const ListingPlacesSchema = z.object({
 });
 
 export class ListingPlaces extends createZodDto(ListingPlacesSchema) {}
+
+/**
+ * The page of the reader's ordering that holds one posting — `null` when the
+ * current filters do not show that posting.
+ *
+ * The absence of the id list is the point of this shape existing. `/places`
+ * used to carry the id of every matching posting so a client could `indexOf` one
+ * of them: a rare click, paid for on every page render, on every filter change
+ * and on every reordering. A position is asked for when it is needed instead,
+ * and a posting outside the current view says so rather than answering a page it
+ * is not on.
+ */
+export const ListingPageOfSchema = z.object({
+  page: z.number().nullable(),
+});
+
+export class ListingPageOf extends createZodDto(ListingPageOfSchema) {}

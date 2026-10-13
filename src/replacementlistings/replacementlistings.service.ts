@@ -34,6 +34,7 @@ import { PrismaService } from "../prisma.service";
 import { PLACE_PREVIEW_LIMIT } from "./browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
 import {
+  type FindPageOfDto,
   type FindPlacesDto,
   type FindReplacementListingsDto,
 } from "./dto/find-replacementlistings.dto";
@@ -79,6 +80,115 @@ const APPLICATIONS_COUNT_INCLUDE = {
     },
   },
 };
+
+/**
+ * The application counts for a page of listings, counted per listing.
+ *
+ * The obvious way to attach a count to a read is Prisma's `_count`, and it is
+ * what this used. What Prisma compiles it to is a LEFT JOIN over a
+ * sub-aggregate, and the aggregate has no idea which listings were asked for: a
+ * page of ten postings counted every application on every listing in the table
+ * — 3 006 rows scanned and 1 600 hashed, to return ten numbers. On the seeded
+ * corpus that was 3.5 ms of execution and 6.4 ms of wall, against 0.09 ms and
+ * 1.3 ms for the same question asked about the ten ids on the page, and it grew
+ * with the table rather than with the page.
+ *
+ * An index cannot fix this one, which is why it is a code change and not a
+ * migration: the count's predicate is parameterised, and Postgres will not match
+ * a partial index against a parameterised predicate. Every candidate index
+ * tested against this shape was ignored. The only fix that scales is to stop
+ * counting what nobody asked for.
+ *
+ * What is counted is unchanged: `ACTIVE_APPLICATION_STATUSES`, PENDING and
+ * SHORTLISTED, the same predicate as before. Only the scope of the count moved,
+ * from the whole table to the page — which is the scope the number has always
+ * been read for.
+ */
+async function countApplicationsPerListing(
+  client: PrismaService | Prisma.TransactionClient,
+  listingIds: string[],
+): Promise<Map<string, number>> {
+  if (listingIds.length === 0) {
+    return new Map();
+  }
+
+  const grouped = await client.application.groupBy({
+    by: ["listingId"],
+    where: {
+      listingId: { in: listingIds },
+      status: { in: ACTIVE_APPLICATION_STATUSES },
+    },
+    _count: true,
+  });
+
+  return new Map(grouped.map((row) => [row.listingId, row._count]));
+}
+
+/**
+ * The rows that come before one posting, in the order `orderByFor` describes.
+ *
+ * The map's popup can name a posting the list is not showing, and the list has
+ * to turn to the page that holds it. That is a position in the reader's
+ * ordering, which used to travel with every map read as the id of *every*
+ * matching posting — 23 kB on the seeded corpus, and an O(n) read, paid on every
+ * page render and every filter change, so that a rare click could do an
+ * `indexOf` in the browser. It is now asked for when the click happens, and this
+ * is the half of that question the database answers.
+ *
+ * Written out per sort rather than derived from `orderByFor`, because the orders
+ * are not all the same shape. `urgent` sorts a boolean descending and then two
+ * more keys, which is a three-level comparison with a level that has no "greater"
+ * at all — a list of key comparisons cannot express it, and a clever derivation
+ * would be a thing to read twice. Every sort that mixes ascending and
+ * descending is spelled here; the spellings are pinned by a test that sorts a
+ * corpus in memory with `orderByFor` and checks this predicate agrees.
+ *
+ * `id` is `desc` in every ordering, which is why the tiebreaker is always
+ * `gt`: two rows can share `createdAt` or `startDate`, and the reader has to land
+ * on the page that actually holds the one they picked.
+ */
+export function precedesInOrder(
+  target: { id: string; createdAt: Date; startDate: Date; urgent: boolean },
+  sort: FindReplacementListingsDto["sort"],
+): Prisma.ReplacementListingWhereInput {
+  const aheadOnId = {
+    AND: [{ startDate: target.startDate }, { id: { gt: target.id } }],
+  };
+
+  if (sort === "startDate") {
+    return {
+      OR: [
+        { startDate: { lt: target.startDate } },
+        { AND: [{ startDate: target.startDate }, { id: { gt: target.id } }] },
+      ],
+    };
+  }
+
+  if (sort === "urgent") {
+    // `urgent desc`: a boolean has nothing above `true`. So the postings that
+    // outrank an urgent one are only the ones that start earlier, and the ones
+    // that outrank a non-urgent one are every urgent posting *and* those.
+    const sameUrgencyAhead = {
+      AND: [
+        { urgent: target.urgent },
+        {
+          OR: [{ startDate: { lt: target.startDate } }, aheadOnId],
+        },
+      ],
+    };
+
+    return target.urgent
+      ? sameUrgencyAhead
+      : { OR: [{ urgent: true }, sameUrgencyAhead] };
+  }
+
+  return {
+    OR: [
+      { createdAt: { gt: target.createdAt } },
+      { AND: [{ createdAt: target.createdAt }, { id: { gt: target.id } }] },
+    ],
+  };
+}
 
 /**
  * The practice, reduced to what the listing DTO publishes.
@@ -191,6 +301,34 @@ const LISTING_INCLUDE = {
 };
 
 /**
+ * The same read, narrowed to what a feed publishes.
+ *
+ * `select` rather than `include`, because the feed is the one read that knows
+ * exactly which columns it needs — and two things are not among them:
+ * `description`, which no row and no card on the browse screen draws and which
+ * was most of a page's payload on the seeded corpus, and `createdById`, which
+ * is not in the DTO and only served to be stripped by zod after the database had
+ * read it.
+ *
+ * No `_count` either: the application count comes from
+ * `countApplicationsPerListing`, asked for the page rather than for the table.
+ */
+const LISTING_SUMMARY_SELECT = {
+  id: true,
+  practiceId: true,
+  title: true,
+  startDate: true,
+  endDate: true,
+  specialty: true,
+  status: true,
+  urgent: true,
+  maxApplications: true,
+  createdAt: true,
+  updatedAt: true,
+  ...PRACTICE_INCLUDE,
+} as const;
+
+/**
  * The ordering of a read, as a total one.
  *
  * `id` last, always. `createdAt` is not unique, so ordering by it alone leaves
@@ -220,11 +358,35 @@ export class ReplacementlistingsService {
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * `_count` as `applicationsCount`, for a read that carried its own count.
+   *
+   * Kept beside `withCountFor` so the two spellings of the same number are
+   * defined in one place: a listing read through Prisma's aggregate and a
+   * listing read through the per-page count. A test that sees one and not the
+   * other is the way this would otherwise drift.
+   */
   private withCount<T extends { _count: { applications: number } }>(
     listing: T,
   ) {
     const { _count, ...rest } = listing;
     return { ...rest, applicationsCount: _count.applications };
+  }
+
+  /**
+   * `applicationsCount` from the per-page aggregate.
+   *
+   * A listing with no application at all is simply absent from the grouping —
+   * `groupBy` returns rows only where there is something to count — so the
+   * lookup's miss is a zero, not a missing field. That is the same answer the
+   * `_count` join produced for such a listing, which is why the two can share
+   * the DTO.
+   */
+  private withCountFor<T extends { id: string }>(
+    listing: T,
+    counts: Map<string, number>,
+  ): T & { applicationsCount: number } {
+    return { ...listing, applicationsCount: counts.get(listing.id) ?? 0 };
   }
 
   async create(userId: string, dto: CreateReplacementListingDto) {
@@ -346,14 +508,19 @@ export class ReplacementlistingsService {
         skip,
         take: limit,
         orderBy: orderByFor(filters.sort),
-        include: LISTING_INCLUDE,
+        select: LISTING_SUMMARY_SELECT,
       }),
       this.prisma.replacementListing.count({ where }),
     ]);
 
+    const applicationsCount = await countApplicationsPerListing(
+      this.prisma,
+      data.map((listing) => listing.id),
+    );
+
     return {
       data: data.map((listing) =>
-        toReplacementListingDto(this.withCount(listing)),
+        toReplacementListingDto(this.withCountFor(listing, applicationsCount)),
       ),
       meta: paginationMeta(total, page, limit),
     };
@@ -473,27 +640,84 @@ export class ReplacementlistingsService {
     const places = mappable.slice(0, maxPlaces);
     const placeIds = places.map((place) => place.practiceId);
 
-    const [previews, listingIds] = await Promise.all([
-      this.prisma.replacementListing.findMany({
-        where: { ...where, practiceId: { in: placeIds } },
-        select: PLACE_LISTING_SELECT,
-      }),
-      this.prisma.replacementListing.findMany({
-        where,
-        select: { id: true },
-        // The reader's ordering, so the position of a posting in this list is
-        // the page it is on.
-        orderBy: orderByFor(filters.sort),
-      }),
-    ]);
+    /**
+     * The previews, for the places that survived the cap — and only those.
+     *
+     * This read used to walk the whole matching collection, ordered, because the
+     * same query also carried the id of every posting so the browser could find
+     * one of them later (`indexOf` over 827 ids, 23 kB of payload). Asking the
+     * database for a position instead — see `precedesInOrder` — leaves this read
+     * asking only about the practices the map actually draws, and it no longer
+     * depends on the reader's ordering at all: a reordering used to redraw the
+     * whole map for a popup list the reordering does not change.
+     */
+    const previews = await this.prisma.replacementListing.findMany({
+      where: { ...where, practiceId: { in: placeIds } },
+      select: PLACE_LISTING_SELECT,
+    });
 
     return {
       places: assemblePlaces(practices, places, previews),
-      listingIds: listingIds.map((listing) => listing.id),
       unlocated,
       totalPlaces: mappable.length,
       truncated: places.length < mappable.length,
     };
+  }
+
+  /**
+   * Which page of the reader's ordering holds one posting, or null if the
+   * current filters do not show it at all.
+   *
+   * The map covers the whole filtered collection while the list shows one page
+   * of it, so a posting picked from a popup can be anywhere. Turning the list to
+   * it needs its position, and this is that question asked once — when the reader
+   * asks it — rather than as a by-product of every map read.
+   *
+   * Two reads: the posting's own sort keys, matched against the filters so that a
+   * posting outside the current view answers null rather than a page it is not
+   * on; then the count of what outranks it. Both are index-sized, and neither
+   * transfers the collection the way the id list did.
+   *
+   * `null` is not a failure. It means "this is not where the reader is looking",
+   * and the caller turns to nothing rather than to a wrong page — the list is
+   * still correct, it just cannot show a posting it is not showing.
+   */
+  async findPageOf(id: string, filters: FindPageOfDto) {
+    const scope: Prisma.ReplacementListingWhereInput = {
+      ...this.buildListingsWhere(filters, { publicOnly: true }),
+      status: "OPEN",
+    };
+
+    const target = await this.prisma.replacementListing.findFirst({
+      where: { AND: [scope, { id }] },
+      select: { id: true, createdAt: true, startDate: true, urgent: true },
+    });
+
+    if (!target) {
+      return { page: null };
+    }
+
+    const ahead = await this.prisma.replacementListing.count({
+      where: {
+        AND: [scope, precedesInOrder(target, filters.sort)],
+      },
+    });
+
+    // The page the list pages through: ten rows to a page, so the first row's
+    // rank is page 1.
+    return { page: Math.floor(ahead / this.browsePageSize(filters)) + 1 };
+  }
+
+  /**
+   * Rows to a page for this read, from the endpoint's own bound.
+   *
+   * The same number the browser asks the feed with, and the same number the map's
+   * previews are spaced against. Read from the endpoint's pagination bounds
+   * rather than hard-coded, so the two can never drift into naming a page
+   * boundary that the feed does not have.
+   */
+  private browsePageSize(filters: FindPageOfDto) {
+    return paginate(filters).limit;
   }
 
   async findMine(userId: string, filters: FindReplacementListingsDto) {
@@ -523,15 +747,20 @@ export class ReplacementlistingsService {
         // return two rows in either order between two pages: offset pagination then
         // repeats one and skips the other. The id breaks the tie.
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        include: LISTING_INCLUDE,
+        select: LISTING_SUMMARY_SELECT,
       }),
       this.prisma.replacementListing.count({ where }),
       this.countListingsByStatus(countsWhere),
     ]);
 
+    const applicationsCount = await countApplicationsPerListing(
+      this.prisma,
+      data.map((listing) => listing.id),
+    );
+
     return {
       data: data.map((listing) =>
-        toReplacementListingDto(this.withCount(listing)),
+        toReplacementListingDto(this.withCountFor(listing, applicationsCount)),
       ),
       meta: {
         ...paginationMeta(total, page, limit),

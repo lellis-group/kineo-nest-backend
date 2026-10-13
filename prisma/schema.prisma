@@ -177,6 +177,7 @@ model Practice {
 
   @@index([ownerId])
   @@index([latitude, longitude])
+  @@index([city(ops: raw("gin_trgm_ops"))], type: Gin, map: "practice_city_trgm_idx")
   @@map("practice")
 }
 
@@ -198,8 +199,14 @@ model ReplacementListing {
   updatedAt       DateTime      @updatedAt
   applications    Application[]
 
-  @@index([createdAt(sort: Desc)], where: { status: "OPEN" }, map: "rl_open_createdAt_idx")
-  @@index([createdAt(sort: Desc)], where: { status: "IN_DISCUSSION" }, map: "rl_indisc_createdAt_idx")
+  // Not partial, unlike the two they replace. `status` is always sent as a
+  // parameter, and a partial index whose predicate is a literal is invisible to
+  // a query that compares a parameter — so a `WHERE status = 'OPEN'` index costs
+  // writes and answers nothing. The sort orders carry `id` because that is the
+  // tiebreaker `orderByFor` always appends.
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "rl_created_id_desc_idx")
+  @@index([startDate(sort: Asc), id(sort: Desc)], map: "rl_startDate_id_desc_idx")
+  @@index([urgent(sort: Desc), startDate(sort: Asc), id(sort: Desc)], map: "rl_urgent_startDate_id_idx")
   @@index([practiceId])
   @@index([createdById, status])
   @@map("replacement_listing")
@@ -223,11 +230,13 @@ model Application {
 
   @@unique([listingId, applicantId])
   @@index([applicantId])
+  // Neither this nor the plain `applicantId` index above is partial, and that is
+  // the point: `status` always arrives as a parameter, so a partial index whose
+  // predicate is a literal is invisible to the query that wants it. The two
+  // partial pairs this replaces were never chosen for any read that reaches them
+  // through Prisma — `EXPLAIN` on the statements it sends, which is how they were
+  // found and how the plain index was confirmed to answer the same reads.
   @@index([applicantId, status])
-  @@index([listingId, createdAt(sort: Desc)], where: { status: "PENDING" }, map: "app_listing_pending_idx")
-  @@index([listingId, createdAt(sort: Desc)], where: { status: "SHORTLISTED" }, map: "app_listing_shortlisted_idx")
-  @@index([applicantId, createdAt(sort: Desc)], where: { status: "PENDING" }, map: "app_applicant_pending_idx")
-  @@index([applicantId, createdAt(sort: Desc)], where: { status: "SHORTLISTED" }, map: "app_applicant_shortlisted_idx")
   @@map("application")
 }
 

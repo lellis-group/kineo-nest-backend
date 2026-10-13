@@ -107,3 +107,38 @@ export const FindPlacesSchema = z
   });
 
 export class FindPlacesDto extends createZodDto(FindPlacesSchema) {}
+
+/**
+ * The map's other question: not "where are they" but "where does this one sit".
+ *
+ * The filters of the map's own read plus the posting to place, and the page size
+ * the reader is paging the list with — because the answer is a page number, and a
+ * page number means nothing without the size it was computed against. A client
+ * that asks with a different `limit` than the one it pages with gets a different
+ * page, which is not a different answer but a wrong one; sending it here makes
+ * the two one value on both sides.
+ */
+export const FindPageOfSchema = z
+  .object({
+    ...listingFilterShape,
+    /** The posting whose page is being asked for. */
+    id: z.string().trim().min(1).describe("The posting to place"),
+    limit: paginationQueryShape.limit,
+  })
+  .strict()
+  .superRefine((data, ctx) => {
+    if (
+      data.startDateFrom &&
+      data.startDateTo &&
+      new Date(data.startDateFrom) > new Date(data.startDateTo)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "startDateFrom must be on or before startDateTo",
+        path: ["startDateTo"],
+      });
+    }
+  })
+  .refine(paginationWithinBounds, paginationBoundsRefine);
+
+export class FindPageOfDto extends createZodDto(FindPageOfSchema) {}
