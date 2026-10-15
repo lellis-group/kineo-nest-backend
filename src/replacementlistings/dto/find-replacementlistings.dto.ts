@@ -40,6 +40,15 @@ const listingFilterShape = {
     .max(100)
     .optional()
     .describe("Filter by practice city"),
+  q: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "Free-text match on the posting's title and description, case-insensitive",
+    ),
   urgent: BooleanQueryParam.optional().describe("Filter urgent listings only"),
   status: z
     .enum(ListingStatus)

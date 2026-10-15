@@ -458,6 +458,41 @@ describe("ReplacementlistingsService", () => {
       expect(askedWhere).toMatchObject({ specialty: "DENTIST" });
     });
 
+    /**
+     * Free text reaches the map's read as an `OR` over the posting's own words.
+     *
+     * The map honours every filter the list does — a pin showing postings the
+     * search excluded would be the lie the whole split exists to avoid. The `OR`
+     * is the shape a term that can sit in the title *or* the description needs,
+     * and it is omitted when there is no term, because an empty `OR` matches
+     * nothing and would blank the map on an unfiltered view.
+     */
+    it("matches free text on title or description, and omits it when unset", async () => {
+      let askedWhere: unknown;
+      const svc = service({
+        replacementListing: {
+          groupBy: async (args: { where: unknown }) => {
+            askedWhere = args.where;
+            return [];
+          },
+          findMany: async () => [],
+        },
+        practice: { findMany: async () => [] },
+      });
+
+      await svc.findPlaces({ q: "dermatologue" }, 200);
+
+      expect(askedWhere).toMatchObject({
+        OR: [
+          { title: { contains: "dermatologue", mode: "insensitive" } },
+          { description: { contains: "dermatologue", mode: "insensitive" } },
+        ],
+      });
+
+      await svc.findPlaces({}, 200);
+      expect(askedWhere).not.toHaveProperty("OR");
+    });
+
     it("orders the postings the reader asked for, not the server's default", async () => {
       let askedOrderBy: unknown;
       const svc = service({

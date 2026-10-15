@@ -200,6 +200,28 @@ describe("ReplacementListing DTO security", () => {
       }
     });
 
+    /**
+     * Free text is a first-class filter: accepted, trimmed, and bounded like the
+     * city — a blank term is « no filter » and would otherwise become a search
+     * for a posting whose title is literally nothing.
+     */
+    it("accepts, trims and bounds the free-text term", () => {
+      const trimmed = FindReplacementListingsSchema.safeParse({
+        q: "  dermatologue  ",
+      });
+      expect(trimmed.success).toBe(true);
+      if (trimmed.success) {
+        expect(trimmed.data.q).toBe("dermatologue");
+      }
+
+      expect(
+        FindReplacementListingsSchema.safeParse({ q: "   " }).success,
+      ).toBe(false);
+      expect(
+        FindReplacementListingsSchema.safeParse({ q: "x".repeat(201) }).success,
+      ).toBe(false);
+    });
+
     it("correctly parses urgent=false instead of inverting the filter", () => {
       const notUrgent = FindReplacementListingsSchema.safeParse({
         urgent: "false",

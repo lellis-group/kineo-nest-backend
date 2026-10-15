@@ -459,6 +459,7 @@ export class ReplacementlistingsService {
       | "urgent"
       | "startDateFrom"
       | "startDateTo"
+      | "q"
     >,
     options: { publicOnly?: boolean } = {},
   ) {
@@ -473,6 +474,24 @@ export class ReplacementlistingsService {
       status: filters.status,
       specialty: filters.specialty,
       urgent: filters.urgent,
+      // Free-text, matched against the posting's own words rather than the
+      // practice's city: a reader typing « dermatologue » or « mi-temps » is
+      // naming the work, not a place. An `OR` over title and description, each
+      // a case-insensitive `contains`, so a term in either field matches — and
+      // omitted entirely when unset, since an empty `OR` would match nothing.
+      ...(filters.q
+        ? {
+            OR: [
+              { title: { contains: filters.q, mode: "insensitive" as const } },
+              {
+                description: {
+                  contains: filters.q,
+                  mode: "insensitive" as const,
+                },
+              },
+            ],
+          }
+        : {}),
       startDate:
         filters.startDateFrom || filters.startDateTo
           ? {
