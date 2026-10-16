@@ -14,6 +14,23 @@ import { z } from "zod";
  */
 export const MAX_RESULTS = 10_000;
 
+/**
+ * Ceiling on one page, per request.
+ *
+ * Not a defence bound — `MAX_RESULTS` is, and it still holds: at this page size
+ * `page × limit` tops out at twenty pages for any `limit` this accepts, so asking
+ * for a million rows through a high page is refused either way. This one is a
+ * preference cap, and it exists so one request cannot ask for a payload nobody
+ * wants: a member choosing to see five hundred of their own listings is asking
+ * for five hundred rows, and one asking for five hundred thousand is asking for
+ * a timeout.
+ *
+ * Raised from 100 because the console now offers the choice ([10, 50, 100, 500])
+ * and the two largest options were unreachable: the endpoint answered a 400 to a
+ * `limit` the interface itself proposed.
+ */
+export const MAX_PAGE_SIZE = 500;
+
 /** `"page and limit combination is too large…"` — one sentence, four DTOs. */
 export const PAGINATION_TOO_LARGE_MESSAGE = `page and limit combination is too large (no more than ${MAX_RESULTS.toLocaleString("en-US")} results can be requested)`;
 
@@ -35,9 +52,9 @@ export const paginationQueryShape = {
     .number()
     .int()
     .min(1)
-    .max(100)
+    .max(MAX_PAGE_SIZE)
     .default(20)
-    .describe("Number of results per page, max 100"),
+    .describe(`Number of results per page, max ${MAX_PAGE_SIZE}`),
 };
 
 /** The bound, as a zod refinement — for the schemas that take `page`/`limit`. */
