@@ -34,6 +34,22 @@ export const RECRUITING_LISTING_STATUSES: ListingStatus[] = [
 ];
 
 /**
+ * Statuses the console counts as a posting still looking for a locum.
+ *
+ * Named apart from `APPLICABLE_LISTING_STATUSES` on purpose: that one is
+ * narrower — a FULL listing is full, so `create` refuses an application to it —
+ * while this one is the set behind the « En cours » bucket, the close/cancel
+ * affordance and the dashboard's headline, which all keep FULL in play because
+ * `close` accepts it. The gap between the two is the product's, not a typo, and
+ * closing it means deciding what a full posting means before either set moves.
+ */
+export const IN_PLAY_LISTING_STATUSES: ListingStatus[] = [
+  "OPEN",
+  "IN_DISCUSSION",
+  "FULL",
+];
+
+/**
  * Statuses a listing can no longer leave.
  *
  * `close` and `cancel` each used to redraw their own list, which is how `close`

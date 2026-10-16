@@ -308,6 +308,116 @@ describe("ReplacementlistingsService", () => {
     );
   });
 
+  /**
+   * The « next replacement » the home screen shows.
+   *
+   * It has to be answered by the server: a client can only find it by reading
+   * every page of the member's postings and comparing dates, and what it found
+   * was the soonest among the pages it walked — a wrong date on a home screen
+   * rather than an obviously missing one. So the two things this could get wrong
+   * are asserted here: the scope it ignores (the caller's filter, its page) and
+   * the statuses it considers in play.
+   */
+  describe("findMine's next replacement", () => {
+    type FindFirstArgs = {
+      where: Record<string, unknown>;
+      orderBy: unknown;
+      select: Record<string, boolean>;
+    };
+
+    function serviceRecordingFirst(
+      findFirst: (args: FindFirstArgs) => unknown,
+    ) {
+      const calls: FindFirstArgs[] = [];
+      const prisma = {
+        profile: { findUnique: async () => ({ id: "profile-1" }) },
+        replacementListing: {
+          findMany: async () => [],
+          count: async () => 0,
+          groupBy: async () => [],
+          findFirst: async (args: FindFirstArgs) => {
+            calls.push(args);
+            return findFirst(args);
+          },
+        },
+        application: { count: async () => 0 },
+      } as unknown as PrismaService;
+
+      return {
+        calls,
+        service: new ReplacementlistingsService(prisma, {
+          get: () => undefined,
+        } as unknown as ConfigService),
+      };
+    }
+
+    const page = { page: 1, limit: 10 };
+
+    it("asks the database for the soonest period, not the newest posting", async () => {
+      const { calls, service } = serviceRecordingFirst(() => ({
+        id: "listing-1",
+        title: "RemplacementDental",
+        startDate: new Date("2026-11-01T08:00:00.000Z"),
+        endDate: new Date("2026-11-04T08:00:00.000Z"),
+      }));
+
+      await service.findMine("user-1", page);
+
+      expect(calls[0]?.orderBy).toEqual([{ startDate: "asc" }, { id: "asc" }]);
+    });
+
+    it("ignores the caller's status filter", async () => {
+      const { calls, service } = serviceRecordingFirst(() => null);
+
+      // « Your next replacement » does not change because the list happens to be
+      // filtered on the bucket the next one is not in.
+      await service.findMine("user-1", { ...page, status: "CANCELLED" });
+
+      const where = calls[0]?.where as {
+        createdById: string;
+        status: { in: string[] };
+        startDate: { gt: Date };
+      };
+      expect(where.createdById).toBe("profile-1");
+      expect(where.status).toEqual({ in: ["OPEN", "IN_DISCUSSION", "FULL"] });
+    });
+
+    it("excludes a posting whose period has passed", async () => {
+      const { calls, service } = serviceRecordingFirst(() => null);
+
+      await service.findMine("user-1", page);
+
+      const where = calls[0]?.where as { startDate: { gt: Date } };
+      expect(where.startDate.gt.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("answers null when nothing is coming", async () => {
+      const { service } = serviceRecordingFirst(() => null);
+
+      const result = await service.findMine("user-1", page);
+
+      expect(result.meta.nextRecruitingListing).toBeNull();
+    });
+
+    it("sends the bounds as ISO instants, like the rest of the wire", async () => {
+      const { service } = serviceRecordingFirst(() => ({
+        id: "listing-1",
+        title: "Remplacement",
+        startDate: new Date("2026-11-01T08:00:00.000Z"),
+        endDate: new Date("2026-11-04T08:00:00.000Z"),
+      }));
+
+      const result = await service.findMine("user-1", page);
+
+      expect(result.meta.nextRecruitingListing).toEqual({
+        id: "listing-1",
+        title: "Remplacement",
+        startDate: "2026-11-01T08:00:00.000Z",
+        endDate: "2026-11-04T08:00:00.000Z",
+      });
+    });
+  });
+
   describe("findPlaces", () => {
     const at = (id: string, latitude: number | null = 50.6) => ({
       id,

@@ -12,6 +12,7 @@ import {
 } from "../common/application-guard";
 import {
   ACTIVE_APPLICATION_STATUSES,
+  IN_PLAY_LISTING_STATUSES,
   isTerminalListingStatus,
   MANUAL_LISTING_STATUSES,
   RECRUITING_LISTING_STATUSES,
@@ -757,7 +758,7 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(countFilters),
     };
 
-    const [data, total, counts] = await Promise.all([
+    const [data, total, counts, nextRecruiting] = await Promise.all([
       this.prisma.replacementListing.findMany({
         where,
         skip,
@@ -770,6 +771,7 @@ export class ReplacementlistingsService {
       }),
       this.prisma.replacementListing.count({ where }),
       this.countListingsByStatus(countsWhere),
+      this.findNextRecruitingListing(profileId),
     ]);
 
     const applicationsCount = await countApplicationsPerListing(
@@ -784,7 +786,50 @@ export class ReplacementlistingsService {
       meta: {
         ...paginationMeta(total, page, limit),
         counts,
+        nextRecruitingListing: nextRecruiting,
       },
+    };
+  }
+
+  /**
+   * The soonest period still to come, among the postings that are in play.
+   *
+   * Sent beside the page rather than derived by the client from it. A client can
+   * only answer this by reading every page of the owner's postings and comparing
+   * dates, which is how the dashboard used to answer it — and the answer it got
+   * was whichever postings happened to fit in the pages it walked: a practice
+   * with more postings than one page holds was shown the soonest period among
+   * the most recent hundred, which is a wrong date on a home screen rather than
+   * an obviously missing one.
+   *
+   * Deliberately *not* over `where`: the caller may be reading one status
+   * bucket, and « your next replacement » does not change because the dashboard
+   * happens to be filtered on something else.
+   *
+   * `startDate` is not unique either, so the id breaks the tie — without it,
+   * two postings starting the same day could come back in either order and the
+   * card would name a different one each visit.
+   */
+  private async findNextRecruitingListing(profileId: string) {
+    const listing = await this.prisma.replacementListing.findFirst({
+      where: {
+        createdById: profileId,
+        status: { in: IN_PLAY_LISTING_STATUSES },
+        startDate: { gt: new Date() },
+      },
+      orderBy: [{ startDate: "asc" }, { id: "asc" }],
+      select: { id: true, title: true, startDate: true, endDate: true },
+    });
+
+    if (!listing) return null;
+
+    return {
+      id: listing.id,
+      title: listing.title,
+      // ISO strings, like the rest of the wire: the client formats the bounds in
+      // the reader's locale, and a Date here would arrive as a string anyway.
+      startDate: listing.startDate.toISOString(),
+      endDate: listing.endDate.toISOString(),
     };
   }
 

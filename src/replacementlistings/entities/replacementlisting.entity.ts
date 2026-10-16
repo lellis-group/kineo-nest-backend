@@ -87,10 +87,26 @@ export const ListingStatusCountsSchema = z.object({
   CANCELLED: z.number(),
 });
 
+/**
+ * The soonest period still to come, among the postings that are in play.
+ *
+ * Nullable because "nothing to come" is the answer most members have, and it is
+ * an answer rather than a missing field. Optional for a rolling deploy: a client
+ * on the older shape reads its absence as nothing to show.
+ */
+export const NextRecruitingListingSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  /** ISO instant — the client formats both bounds in the reader's locale. */
+  startDate: z.string(),
+  endDate: z.string(),
+});
+
 export const PaginatedReplacementListingsSchema = z.object({
   data: z.array(ListingSummarySchema),
   meta: PaginationMetaSchema.extend({
     counts: ListingStatusCountsSchema.optional(),
+    nextRecruitingListing: NextRecruitingListingSchema.nullable().optional(),
   }),
 });
 
