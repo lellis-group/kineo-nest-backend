@@ -105,6 +105,24 @@ export const PaginatedApplicationsSchema = z.object({
   meta: PaginationMetaSchema.extend({
     counts: ApplicationStatusCountsSchema,
     bucketCounts: ApplicationBucketCountsSchema.optional(),
+    /**
+     * Open applications the practice has not opened yet, over the whole
+     * collection.
+     *
+     * A qualifier on `counts.PENDING + counts.SHORTLISTED`, and defined here
+     * rather than left to the client for the same reason `counts` is: the
+     * dashboard used to page the collection to compute it. Optional for a
+     * rolling deploy — a client reads its absence as zero.
+     */
+    unseenOpenCount: z.number().optional(),
+    /**
+     * Applications that got an answer, withdrawn ones excluded.
+     *
+     * The rate on the dashboard is this over `total - WITHDRAWN`, and both ends
+     * of that division have to come from the same place or the percentage
+     * describes two different collections. Optional for a rolling deploy.
+     */
+    respondedCount: z.number().optional(),
   }),
 });
 

@@ -322,4 +322,107 @@ describe("ApplicationsService", () => {
     expect(result.withdrawnReason).toBe("Found another opportunity");
     expect(listingStatusUpdates).toEqual(["OPEN"]);
   });
+
+  /**
+   * The counters `findMine` sends beside the page.
+   *
+   * They describe the whole collection, never the filtered slice the caller
+   * asked for: a chip that counted what it just filtered would read as the page
+   * size. The two added ones are the same kind of figure, and a client that had
+   * to page a collection to compute them was one page short of the truth past
+   * twenty. So the predicates are asserted here rather than the numbers, which
+   * only a real database could answer honestly.
+   */
+  describe("findMine", () => {
+    type CountWhere = Record<string, unknown>;
+
+    /** Records every `count` predicate, and answers a constant for all of them. */
+    function serviceRecordingCounts() {
+      const predicates: CountWhere[] = [];
+      const prisma = {
+        profile: { findUnique: async () => ({ id: "applicant-1" }) },
+        application: {
+          findMany: async () => [],
+          groupBy: async () => [],
+          count: async ({ where }: { where: CountWhere }) => {
+            predicates.push(where);
+            return 0;
+          },
+        },
+      } as unknown as PrismaService;
+
+      return {
+        predicates,
+        service: new ApplicationsService(prisma, {
+          get: () => undefined,
+        } as unknown as ConfigService),
+      };
+    }
+
+    const countsBy = (predicates: CountWhere[], predicate: CountWhere) =>
+      predicates.filter((where) =>
+        Object.entries(predicate).every(
+          ([key, value]) =>
+            JSON.stringify(where[key]) === JSON.stringify(value),
+        ),
+      );
+
+    it("counts the open applications nobody has opened, not the filtered slice", async () => {
+      const { predicates, service } = serviceRecordingCounts();
+
+      await service.findMine("user-1", {
+        page: 1,
+        limit: 20,
+        status: "ACCEPTED",
+      });
+
+      expect(
+        countsBy(predicates, {
+          status: { in: ["PENDING", "SHORTLISTED"] },
+          viewedAt: null,
+        }),
+      ).toHaveLength(1);
+    });
+
+    it("counts answered applications without counting withdrawn ones", async () => {
+      const { predicates, service } = serviceRecordingCounts();
+
+      await service.findMine("user-1", {
+        page: 1,
+        limit: 20,
+        status: "ACCEPTED",
+      });
+
+      expect(
+        countsBy(predicates, {
+          status: { not: "WITHDRAWN" },
+          respondedAt: { not: null },
+        }),
+      ).toHaveLength(1);
+    });
+
+    it("scopes every counter to the applicant, whatever the filter", async () => {
+      const { predicates, service } = serviceRecordingCounts();
+
+      await service.findMine("user-1", {
+        page: 1,
+        limit: 20,
+        status: "ACCEPTED",
+        bucket: "REFUSED",
+      });
+
+      for (const where of predicates) {
+        expect(where.applicantId).toBe("applicant-1");
+      }
+    });
+
+    it("returns both counters in the meta", async () => {
+      const { service } = serviceRecordingCounts();
+
+      const result = await service.findMine("user-1", { page: 1, limit: 20 });
+
+      expect(result.meta.unseenOpenCount).toBe(0);
+      expect(result.meta.respondedCount).toBe(0);
+    });
+  });
 });

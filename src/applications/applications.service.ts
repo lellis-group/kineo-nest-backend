@@ -280,21 +280,44 @@ export class ApplicationsService {
       listingId: filters.listingId,
     };
 
-    const [data, total, counts, bucketCounts] = await Promise.all([
-      this.prisma.application.findMany({
-        where,
-        skip,
-        take: limit,
-        // createdAt is not unique, so ordering by it alone leaves Postgres free to
-        // return two rows in either order between two pages: offset pagination then
-        // repeats one and skips the other. The id breaks the tie.
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        include: { listing: { include: { practice: true } } },
-      }),
-      this.prisma.application.count({ where }),
-      this.countApplicationsByStatus(unfiltered),
-      this.countApplicationsByBucket(unfiltered),
-    ]);
+    const [data, total, counts, bucketCounts, unseenOpenCount, respondedCount] =
+      await Promise.all([
+        this.prisma.application.findMany({
+          where,
+          skip,
+          take: limit,
+          // createdAt is not unique, so ordering by it alone leaves Postgres free to
+          // return two rows in either order between two pages: offset pagination then
+          // repeats one and skips the other. The id breaks the tie.
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          include: { listing: { include: { practice: true } } },
+        }),
+        this.prisma.application.count({ where }),
+        this.countApplicationsByStatus(unfiltered),
+        this.countApplicationsByBucket(unfiltered),
+        // The two figures a dashboard cannot derive from `counts`. It used to walk
+        // the whole collection for them — up to twenty pages of a hundred rows to
+        // answer a home screen — and both are single predicates. A client that has
+        // to page a collection in order to count it is always one page short of
+        // the truth past that.
+        this.prisma.application.count({
+          where: {
+            ...unfiltered,
+            status: { in: ACTIVE_APPLICATION_STATUSES },
+            viewedAt: null,
+          },
+        }),
+        this.prisma.application.count({
+          where: {
+            ...unfiltered,
+            // A withdrawn application was pulled back by its author, so it can
+            // never be answered: leaving it in the denominator turned a
+            // deliberate withdrawal into a mark against the practice.
+            status: { not: "WITHDRAWN" },
+            respondedAt: { not: null },
+          },
+        }),
+      ]);
 
     return {
       data: data.map(toApplicationDto),
@@ -302,6 +325,8 @@ export class ApplicationsService {
         ...paginationMeta(total, page, limit),
         counts,
         bucketCounts,
+        unseenOpenCount,
+        respondedCount,
       },
     };
   }
