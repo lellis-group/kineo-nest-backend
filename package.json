@@ -27,6 +27,7 @@
     "test:e2e:geo": "KINEO_E2E_SUITE=geo bun test --timeout 15000 src/practices/e2e/geo-search.e2e.test.ts",
     "test:e2e:change-email": "KINEO_E2E_SUITE=change-email bun test --timeout 15000 src/common/e2e/change-email.e2e.test.ts",
     "test:e2e:account-emails": "KINEO_E2E_SUITE=account-emails bun test --timeout 15000 src/common/e2e/account-emails.e2e.test.ts",
+    "test:e2e:input-validation": "KINEO_E2E_SUITE=input-validation bun test --timeout 15000 src/common/e2e/auth-input-validation.e2e.test.ts",
     "test:e2e:applications": "KINEO_E2E_SUITE=applications bun test --timeout 15000 src/common/e2e/applications-filters.e2e.test.ts",
     "test:e2e:apptransitions": "KINEO_E2E_SUITE=apptransitions bun test --timeout 15000 src/applications/e2e/applications-transitions.e2e.test.ts",
     "test:e2e:listings": "KINEO_E2E_SUITE=listings bun test --timeout 15000 src/replacementlistings/e2e/listings-lifecycle.e2e.test.ts",

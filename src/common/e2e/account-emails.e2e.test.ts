@@ -24,6 +24,7 @@ import {
   expect,
   it,
 } from "bun:test";
+import { SignJWT } from "jose";
 import request from "supertest";
 import {
   bootApp,
@@ -155,5 +156,143 @@ describe("asking for a password reset", () => {
     // somebody's inbox for a request they made once.
     const recipients = sentEmails.map((mail) => mail.to);
     expect(new Set(recipients).size).toBe(recipients.length);
+  });
+});
+
+/**
+ * The page a reader is left on after clicking a verification link.
+ *
+ * `GET /api/auth/check-email-verification` exists because the frontend cannot
+ * tell an expired link from a fulfilled intent: after a click it needs to say
+ * « your address is verified » rather than show an error. It is the one endpoint
+ * of the verification flow with no test at all — and the thing a person actually
+ * sees between signing up and clicking.
+ *
+ * The tokens are minted here with the application's own secret, which is the
+ * only thing that decides whether this endpoint answers at all: a token signed
+ * with anything else must be refused before a single lookup happens, or the
+ * endpoint becomes a way to ask whether an address has an account on this
+ * platform.
+ */
+describe("GET /api/auth/check-email-verification", () => {
+  function check(token: string) {
+    return request(fx.baseUrl).get("/api/auth/check-email-verification").query({
+      token,
+    });
+  }
+
+  /** A token as better-auth would have minted it, signed with the real secret. */
+  function signToken(payload: Record<string, unknown>, secret?: string) {
+    return new SignJWT(payload)
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 3600)
+      .sign(
+        new TextEncoder().encode(
+          secret ?? process.env.BETTER_AUTH_SECRET ?? "",
+        ),
+      );
+  }
+
+  /** An account that exists and has not verified its address yet. */
+  async function signUp(email: string) {
+    const response = await request(fx.baseUrl)
+      .post("/api/auth/sign-up/email")
+      .send({ name: "Camille", email, password: PASSWORD });
+
+    expect(response.status).toBe(200);
+    return response.body;
+  }
+
+  it("says the address is not verified while the account says so", async () => {
+    await signUp("pending@verify.test");
+    const token = await signToken({ email: "pending@verify.test" });
+
+    const response = await check(token);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ verified: false });
+  });
+
+  it("says the address is verified once the account says so, with the same token", async () => {
+    const account = await signUp("later@verify.test");
+    const token = await signToken({ email: "later@verify.test" });
+
+    // The same link, asked before and after: the answer is about the account's
+    // state now, which is what lets the page recover from a click that arrived
+    // too late.
+    const before = await check(token);
+    expect(before.body).toEqual({ verified: false });
+
+    await fx.prisma.user.update({
+      where: { id: account.user.id },
+      data: { emailVerified: true },
+    });
+
+    const after = await check(token);
+    expect(after.status).toBe(200);
+    expect(after.body).toEqual({ verified: true });
+  });
+
+  it("answers an expired link rather than refusing it", async () => {
+    await signUp("expired@verify.test");
+    const token = await new SignJWT({ email: "expired@verify.test" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
+      .sign(new TextEncoder().encode(process.env.BETTER_AUTH_SECRET ?? ""));
+
+    // The reader who clicked yesterday's link must be told their address is
+    // verified, not handed an error to puzzle over.
+    const response = await check(token);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ verified: false });
+  });
+
+  /**
+   * The one that matters: which of the two addresses a change token is about.
+   *
+   * The account behind the current address is verified by definition — the flow
+   * cannot start otherwise — so asking about it answers « yes » for a change that
+   * has not been applied, on the one page whose only output is that answer.
+   */
+  it("asks about the address a change moves to, never the one it comes from", async () => {
+    const account = await signUp("old@verify.test");
+    await fx.prisma.user.update({
+      where: { id: account.user.id },
+      data: { emailVerified: true },
+    });
+
+    const token = await signToken({
+      email: "old@verify.test",
+      updateTo: "new@verify.test",
+      requestType: "change-email-verification",
+    });
+
+    const response = await check(token);
+
+    // The change has not been applied, so `new@verify.test` belongs to nobody
+    // and the honest answer is false.
+    expect(response.body).toEqual({ verified: false });
+  });
+
+  it("refuses a token signed with another secret", async () => {
+    await signUp("forged@verify.test");
+    const token = await signToken(
+      { email: "forged@verify.test" },
+      "a-secret-this-server-never-used",
+    );
+
+    const response = await check(token);
+
+    // Without this, the endpoint answers « is this address registered here »
+    // to anybody holding a token they minted themselves.
+    expect(response.status).toBe(401);
+  });
+
+  it("refuses a token that is not a token", async () => {
+    const response = await check("not-a-jwt");
+
+    expect(response.status).toBe(401);
   });
 });

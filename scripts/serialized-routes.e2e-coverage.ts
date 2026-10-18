@@ -163,12 +163,48 @@ const untouched = routes.filter(
   (route) => !requests.some((request) => hits(route, request)),
 );
 
+/**
+ * How many suites touch each route.
+ *
+ * Printed rather than enforced, and the reason is the limit of this guard: it
+ * proves a route is exercised, not that a given suite exists. A route held by one
+ * suite alone is the shape a deletion takes — remove that suite and the route
+ * stays covered by nobody, but remove a *different* suite and nothing here moves
+ * at all. So the number is put on the record where a reviewer will read it,
+ * rather than turned into a second gate that fails for reasons nobody can act on.
+ */
+const perRoute = routes.map((route) => ({
+  route,
+  by: suites.filter((suite) =>
+    requestsIn(suite).some((request) => hits(route, request)),
+  ),
+}));
+
+const thin = perRoute
+  .filter((entry) => entry.by.length === 1)
+  .sort((a, b) => a.route.path.localeCompare(b.route.path));
+
 const relative = (file: string) => file.slice(ROOT.length + 1);
 
 if (untouched.length === 0) {
   console.log(
     `✔ ${routes.length} serialized routes, all exercised by ${suites.length} e2e suites`,
   );
+  if (thin.length > 0) {
+    // Capped: this is read far more often than it is acted on, and a list that
+    // fills a screen is a list people stop reading.
+    console.log(
+      `\n  ${thin.length} route(s) held by a single suite — deleting it leaves them uncovered:`,
+    );
+    for (const { route, by } of thin.slice(0, 10)) {
+      console.log(
+        `    ${route.method} ${route.path} — ${by[0] ? relative(by[0]) : "?"}`,
+      );
+    }
+    if (thin.length > 10) {
+      console.log(`    … and ${thin.length - 10} more`);
+    }
+  }
 } else {
   console.error(
     `✖ ${untouched.length} serialized route(s) never exercised over HTTP:`,

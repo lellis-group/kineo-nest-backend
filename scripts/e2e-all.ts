@@ -67,9 +67,34 @@ function suiteNameFor(file: string, taken: Map<string, string>): string {
   return name;
 }
 
+/**
+ * The floor on how many suites there are.
+ *
+ * `test:e2e:routes` guarantees that every serialized route is exercised *by
+ * something*. It cannot notice a whole suite disappearing, because the route it
+ * covered is usually touched by another one too — which is exactly how a suite
+ * can be deleted, or emptied into nothing, without a single build going red.
+ *
+ * So the count of suites is a ratchet of its own, on the pattern of the coverage
+ * floor: it only ever moves up, and moving it up is a one-line change reviewed
+ * like any other. It catches deletion, not erosion — emptying a suite that stays
+ * on disk is still visible in review and nowhere else.
+ */
+const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 16);
+
 const suites = suitesIn(SRC).sort();
 if (suites.length === 0) {
   console.error("No e2e suite found under src/ — the discovery glob is wrong.");
+  process.exit(1);
+}
+
+if (suites.length < MIN_E2E_SUITES) {
+  console.error(
+    `✖ ${suites.length} e2e suite(s) found, floor is ${MIN_E2E_SUITES}.\n\n` +
+      "Either suites were deleted, or the floor is stale. A suite that goes away\n" +
+      "silently leaves its routes covered by whichever suite happened to share\n" +
+      "them, which is the one failure mode `test:e2e:routes` cannot see.",
+  );
   process.exit(1);
 }
 
