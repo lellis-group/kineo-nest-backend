@@ -58,6 +58,9 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run test
+      # The floor, not a target: `test` itself reports nothing, so a change that
+      # deleted the last test for a file used to lower coverage silently.
+      - run: bun run test:coverage
       # Each suite creates and drops its own throwaway database, so it needs the
       # admin URL of the postgres instance rather than the application database.
       #
@@ -92,6 +95,12 @@ jobs:
               exit 1
             fi
           done
+      # Cheap, and it is the only test that can catch the class of bug where a
+      # handler's serializer and what it actually returns disagree: a route
+      # added with a `@ZodSerializerDto` and no e2e suite calling it is a 500
+      # waiting for a bug report. This one failed on the commit that added the
+      # profile and practice routes.
+      - run: bun run test:e2e:routes
       - run: bun run db:seed
       # `db:check` replays the history into the shadow database and Prisma wants
       # it to exist: the service image creates `mydb` and nothing else, so the

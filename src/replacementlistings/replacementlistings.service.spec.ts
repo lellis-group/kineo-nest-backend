@@ -2,10 +2,17 @@ import { describe, expect, it } from "bun:test";
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
+import { REFUSAL_CODES } from "../common/refusal";
+import { Specialty } from "../generated/prisma/enums";
 import { PrismaService } from "../prisma.service";
 import { PLACE_PREVIEW_LIMIT } from "./browse";
+import type {
+  FindPageOfDto,
+  FindReplacementListingsDto,
+} from "./dto/find-replacementlistings.dto";
 import {
   orderByFor,
+  precedesInOrder,
   ReplacementlistingsService,
 } from "./replacementlistings.service";
 
@@ -779,6 +786,538 @@ describe("ReplacementlistingsService", () => {
         { startDate: "asc" },
         { id: "desc" },
       ]);
+    });
+  });
+
+  /**
+   * `precedesInOrder` is the shape the position read counts with, and it is a
+   * hand-written three-level comparison — exactly the kind of thing that drifts
+   * from the ordering it serves. So it is pinned against `orderByFor` itself: a
+   * corpus is sorted in memory with the ordering, and the predicate must accept
+   * every earlier row for a later one, for every sort the feed offers.
+   */
+  describe("precedesInOrder", () => {
+    type Row = {
+      id: string;
+      createdAt: Date;
+      startDate: Date;
+      urgent: boolean;
+    };
+
+    const row = (
+      id: string,
+      createdAt: string,
+      startDate: string,
+      urgent: boolean,
+    ): Row => ({
+      id,
+      createdAt: new Date(createdAt),
+      startDate: new Date(startDate),
+      urgent,
+    });
+
+    const corpus: Row[] = [
+      row("a", "2026-01-01", "2026-11-01", true),
+      row("b", "2026-01-01", "2026-11-02", true),
+      row("c", "2026-01-01", "2026-11-01", false),
+      // The row newest in createdAt, to lead every « recent » page.
+      row("d", "2026-02-01", "2026-11-01", false),
+      // Shares createdAt with a-b-c but has the id tiebreak between them.
+      row("e", "2026-01-01", "2026-11-01", true),
+      row("f", "2026-01-01", "2026-11-02", true),
+    ];
+
+    const equalFields = (x: unknown, y: unknown) =>
+      x instanceof Date && y instanceof Date
+        ? x.getTime() === y.getTime()
+        : x === y;
+
+    const before = (x: unknown, y: unknown) =>
+      x instanceof Date && y instanceof Date
+        ? x.getTime() < y.getTime()
+        : typeof x === "string" && typeof y === "string"
+          ? x < y
+          : false;
+
+    /** A tiny evaluator for the where-shape the predicate emits. */
+    function matches(
+      rowToMatch: Row,
+      condition: Record<string, unknown>,
+    ): boolean {
+      return Object.entries(condition).every(([key, value]) => {
+        if (key === "OR") {
+          return (value as Record<string, unknown>[]).some((sub) =>
+            matches(rowToMatch, sub),
+          );
+        }
+        if (key === "AND") {
+          return (value as Record<string, unknown>[]).every((sub) =>
+            matches(rowToMatch, sub),
+          );
+        }
+        const field = rowToMatch[key as keyof Row];
+        // A bare value — including a Date, which is an object — is equality.
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          !(value instanceof Date)
+        ) {
+          const ops = value as Record<string, unknown>;
+          let ok = true;
+          if ("lt" in ops) {
+            ok &&= before(field, ops.lt);
+          }
+          if ("gt" in ops) {
+            ok &&= before(ops.gt, field);
+          }
+          return ok;
+        }
+        return equalFields(field, value);
+      });
+    }
+
+    function sortedFor(sort: FindReplacementListingsDto["sort"]): Row[] {
+      return [...corpus].sort((a, b) => {
+        for (const key of orderByFor(sort)) {
+          const field = Object.keys(key)[0] as keyof Row;
+          const direction = Object.values(key)[0];
+          const x = a[field];
+          const y = b[field];
+          const cmp =
+            x instanceof Date && y instanceof Date
+              ? x.getTime() - y.getTime()
+              : typeof x === "boolean" && typeof y === "boolean"
+                ? x === y
+                  ? 0
+                  : x
+                    ? 1
+                    : -1
+                : (x as string) < (y as string)
+                  ? -1
+                  : (x as string) > (y as string)
+                    ? 1
+                    : 0;
+          if (cmp !== 0) {
+            return direction === "asc" ? cmp : -cmp;
+          }
+        }
+        return 0;
+      });
+    }
+
+    it("agrees with orderByFor over a corpus, for every sort the feed offers", () => {
+      for (const sort of [
+        undefined,
+        "recent",
+        "startDate",
+        "urgent",
+      ] as const) {
+        const ordered = sortedFor(sort);
+
+        for (const [index, laterRow] of ordered.entries()) {
+          for (const earlierRow of ordered.slice(0, index)) {
+            // The predicate asked about the *later* row must accept the earlier
+            // one, or the count that turns a position into a page would miss it.
+            expect(matches(earlierRow, precedesInOrder(laterRow, sort))).toBe(
+              true,
+            );
+          }
+        }
+      }
+    });
+
+    it("ranks every urgent posting ahead of a non-urgent one", () => {
+      // A posting that starts late but is urgent outranks one that starts early
+      // and is not: the boolean has its own level, before any date.
+      const lateNonUrgent = row("c", "2026-01-01", "2026-11-03", false);
+      const earlyUrgent = row("a", "2026-01-01", "2026-11-01", true);
+
+      expect(
+        matches(earlyUrgent, precedesInOrder(lateNonUrgent, "urgent")),
+      ).toBe(true);
+    });
+
+    it("denies an urgent posting nothing but the same-urgency rows ahead", () => {
+      // Nothing outranks an urgent posting except an earlier urgent one, so the
+      // predicate for an urgent target has no `urgent: true` escape hatch.
+      const target = row("a", "2026-01-01", "2026-11-02", true);
+      const laterUrgent = row("f", "2026-01-01", "2026-11-03", true);
+
+      expect(matches(laterUrgent, precedesInOrder(target, "urgent"))).toBe(
+        false,
+      );
+    });
+  });
+
+  /**
+   * The public feed: the one read every reader, signed in or not, gets.
+   *
+   * Two things here are guarantees rather than implementation, and both are the
+   * kind that fail quietly. The feed is OPEN whatever the caller asked for — a
+   * `status` filter on postings other people own would turn the feed into a way
+   * to read the statuses of postings still in circulation. And a page with no
+   * applications on it has to answer zero counts, not a missing field: the
+   * `groupBy` behind those counts returns rows only where there is something to
+   * count.
+   */
+  describe("findAll", () => {
+    function prismaFor(
+      rows: Array<Record<string, unknown>>,
+      grouped: Array<{ listingId: string; _count: number }> = [],
+    ) {
+      const reads: { findManyWhere?: unknown; countWhere?: unknown } = {};
+      let groupByAsked = false;
+      const prisma = {
+        replacementListing: {
+          findMany: async (args: { where: unknown }) => {
+            reads.findManyWhere = args.where;
+            return rows;
+          },
+          count: async (args: { where: unknown }) => {
+            reads.countWhere = args.where;
+            return rows.length;
+          },
+        },
+        application: {
+          groupBy: async () => {
+            groupByAsked = true;
+            return grouped;
+          },
+        },
+      };
+
+      return {
+        reads,
+        groupByAsked: () => groupByAsked,
+        service: new ReplacementlistingsService(
+          prisma as unknown as PrismaService,
+          { get: () => undefined } as unknown as ConfigService,
+        ),
+      };
+    }
+
+    const row = (id: string) => ({
+      ...openListing,
+      id,
+      startDate: new Date("2026-11-01T08:00:00.000Z"),
+      endDate: new Date("2026-11-04T08:00:00.000Z"),
+    });
+
+    it("is OPEN whatever status the caller asked for", async () => {
+      const { reads, service } = prismaFor([row("listing-1")]);
+
+      await service.findAll({
+        status: "CLOSED",
+      } as unknown as FindReplacementListingsDto);
+
+      // A `status` filter reaching the feed would answer a question about
+      // postings the caller does not own — the drafts and cancellations of every
+      // practice on the platform, readable through the public collection.
+      expect(reads.findManyWhere).toMatchObject({ status: "OPEN" });
+      expect(reads.countWhere).toMatchObject({ status: "OPEN" });
+    });
+
+    it("keeps the caller's filters, including the city", async () => {
+      const { reads, service } = prismaFor([]);
+
+      await service.findAll({
+        city: "Lyon",
+        urgent: true,
+      } as unknown as FindReplacementListingsDto);
+
+      expect(reads.findManyWhere).toMatchObject({
+        status: "OPEN",
+        urgent: true,
+        practice: {
+          city: { contains: "Lyon", mode: "insensitive" },
+          isPublic: true,
+        },
+      });
+    });
+
+    it("filters the practice on its visibility alone when no city is asked", async () => {
+      const { reads, service } = prismaFor([]);
+
+      await service.findAll({} as unknown as FindReplacementListingsDto);
+
+      // Exactly the visibility condition, and nothing more. Prisma reads an
+      // empty `practice: {}` as « match every practice » — a join taken instead
+      // of a predicate — so the shape of this object is what keeps the
+      // unfiltered feed a simple query.
+      expect(reads.findManyWhere).toMatchObject({
+        practice: { isPublic: true },
+      });
+      expect(
+        (reads.findManyWhere as { practice: object }).practice,
+      ).not.toHaveProperty("city");
+    });
+
+    it("counts the applications of the postings it returns", async () => {
+      const { service } = prismaFor(
+        [row("listing-1"), row("listing-2")],
+        [{ listingId: "listing-1", _count: 2 }],
+      );
+
+      const result = await service.findAll(
+        {} as unknown as FindReplacementListingsDto,
+      );
+
+      // One posting has applications, the other has none: `groupBy` says nothing
+      // about the second, so its count is a zero this read has to write itself.
+      expect(result.data[0]?.applicationsCount).toBe(2);
+      expect(result.data[1]?.applicationsCount).toBe(0);
+    });
+
+    it("skips the count read entirely for an empty page", async () => {
+      const { groupByAsked, service } = prismaFor([]);
+
+      const result = await service.findAll(
+        {} as unknown as FindReplacementListingsDto,
+      );
+
+      expect(result.data).toEqual([]);
+      // The read exists to count the page; with no page, asking the database for
+      // a count of nothing is a round trip spent on the answer's absence.
+      expect(groupByAsked()).toBe(false);
+    });
+  });
+
+  /**
+   * The read that turns "open this posting" into "the list turned to page N".
+   * What it can get wrong is quietly answering a page the posting is not on:
+   * the scope has to hold beneath the ordering predicate, and the count has to
+   * divide on the same page size the feed pages with.
+   */
+  describe("findPageOf", () => {
+    const target = {
+      id: "listing-1",
+      createdAt: new Date("2026-01-01T08:00:00.000Z"),
+      startDate: new Date("2026-11-01T08:00:00.000Z"),
+      urgent: false,
+    };
+
+    function prismaFor(returning: { target: unknown; ahead: number }) {
+      const reads: { firstWhere?: unknown; countWhere?: unknown } = {};
+      const prisma = {
+        replacementListing: {
+          findFirst: async (args: { where: unknown }) => {
+            reads.firstWhere = args.where;
+            return returning.target;
+          },
+          count: async (args: { where: unknown }) => {
+            reads.countWhere = args.where;
+            return returning.ahead;
+          },
+        },
+      };
+      return {
+        reads,
+        service: new ReplacementlistingsService(
+          prisma as unknown as PrismaService,
+          { get: () => undefined } as unknown as ConfigService,
+        ),
+      };
+    }
+
+    it("answers the page the posting's rank falls on", async () => {
+      // Twenty-three postings outrank it over twenty rows to a page: page 2,
+      // first row.
+      const { service } = prismaFor({ target, ahead: 23 });
+
+      const result = await service.findPageOf("listing-1", {
+        sort: "startDate",
+      } as FindPageOfDto);
+
+      expect(result).toEqual({ page: 2 });
+    });
+
+    it("turns to the next page once the page holds", async () => {
+      // The limit the reader asked with is the one the page divides on: eleven
+      // ahead over ten rows is page 2, not the feed's default 20.
+      const { service } = prismaFor({ target, ahead: 11 });
+
+      const result = await service.findPageOf("listing-1", {
+        sort: "startDate",
+        limit: 10,
+      } as unknown as FindPageOfDto);
+
+      expect(result).toEqual({ page: 2 });
+    });
+
+    it("answers the first page for the posting on top", async () => {
+      const { service } = prismaFor({ target, ahead: 0 });
+
+      const result = await service.findPageOf("listing-1", {} as FindPageOfDto);
+
+      expect(result).toEqual({ page: 1 });
+    });
+
+    it("answers null, and reads nothing else, when the scope hides the posting", async () => {
+      const { reads, service } = prismaFor({ target: null, ahead: 0 });
+
+      const result = await service.findPageOf("listing-1", {} as FindPageOfDto);
+
+      expect(result).toEqual({ page: null });
+      expect(reads.firstWhere).toBeDefined();
+      expect(reads.countWhere).toBeUndefined();
+    });
+
+    it("counts under the reader's ordering and the public scope together", async () => {
+      const { reads, service } = prismaFor({ target, ahead: 7 });
+
+      await service.findPageOf("listing-1", {
+        sort: "startDate",
+        city: "Lyon",
+      } as unknown as FindPageOfDto);
+
+      const andCondition = (reads.countWhere as { AND: unknown[] }).AND;
+      // The scope the feed pages through, plus the predicate that says which
+      // rows sit ahead of the target in that ordering.
+      expect(andCondition).toHaveLength(2);
+      expect(andCondition[0]).toMatchObject({
+        status: "OPEN",
+        practice: { city: { contains: "Lyon", mode: "insensitive" } },
+      });
+      expect(andCondition[1]).toEqual(precedesInOrder(target, "startDate"));
+    });
+  });
+
+  describe("findFacets", () => {
+    function prismaFor(
+      groups: Array<{ specialty: string; _count: number }>,
+      urgent: number,
+    ) {
+      const reads: { groupByWhere?: unknown; countWhere?: unknown } = {};
+      const prisma = {
+        replacementListing: {
+          groupBy: async (args: { where: unknown }) => {
+            reads.groupByWhere = args.where;
+            return groups;
+          },
+          count: async (args: { where: unknown }) => {
+            reads.countWhere = args.where;
+            return urgent;
+          },
+        },
+      };
+      return {
+        reads,
+        service: new ReplacementlistingsService(
+          prisma as unknown as PrismaService,
+          { get: () => undefined } as unknown as ConfigService,
+        ),
+      };
+    }
+
+    it("zero-fills the panel over the whole specialty enum", async () => {
+      const { service } = prismaFor(
+        [
+          { specialty: "DENTIST", _count: 3 },
+          { specialty: "GENERALIST", _count: 1 },
+        ],
+        2,
+      );
+
+      const result = await service.findFacets({} as FindReplacementListingsDto);
+
+      expect(result.total).toBe(4);
+      expect(result.urgent).toBe(2);
+      expect(result.bySpecialty).toEqual({
+        DENTIST: 3,
+        GENERALIST: 1,
+        DERMATOLOGIST: 0,
+        PSYCHIATRIST: 0,
+        OTHER: 0,
+      });
+    });
+
+    it("answers zero, not an empty map, to an empty collection", async () => {
+      const { service } = prismaFor([], 0);
+
+      const result = await service.findFacets({} as FindReplacementListingsDto);
+
+      expect(result).toEqual({
+        total: 0,
+        urgent: 0,
+        bySpecialty: Object.fromEntries(
+          Object.values(Specialty).map((specialty) => [specialty, 0]),
+        ) as Record<Specialty, number>,
+      });
+    });
+
+    it("drops the specialty filter and pins OPEN, and counts urgent over the same scope", async () => {
+      const { reads, service } = prismaFor([], 0);
+
+      await service.findFacets({
+        specialty: "DENTIST",
+        city: "Lyon",
+      } as unknown as FindReplacementListingsDto);
+
+      // « What else is on offer » ignores the specialty the reader already
+      // picked, and counts only what the feed would show.
+      expect(reads.groupByWhere).toMatchObject({
+        status: "OPEN",
+        practice: { city: { contains: "Lyon", mode: "insensitive" } },
+      });
+      expect(
+        (reads.groupByWhere as { specialty?: unknown }).specialty,
+      ).toBeUndefined();
+      expect(reads.countWhere).toMatchObject({
+        status: "OPEN",
+        urgent: true,
+        practice: { city: { contains: "Lyon", mode: "insensitive" } },
+      });
+    });
+  });
+
+  describe("publish", () => {
+    function prismaFor(row: Record<string, unknown>) {
+      const reads: { updateData?: Record<string, unknown> } = {};
+      const tx = {
+        profile: { findUnique: async () => profile },
+        replacementListing: {
+          findUnique: async () => row,
+          update: async (args: { data: Record<string, unknown> }) => {
+            reads.updateData = args.data;
+            return { ...row, ...args.data };
+          },
+        },
+      };
+      const prisma = {
+        $transaction: async (operation: (client: typeof tx) => unknown) =>
+          operation(tx),
+      };
+      return {
+        reads,
+        service: new ReplacementlistingsService(
+          prisma as unknown as PrismaService,
+          { get: () => undefined } as unknown as ConfigService,
+        ),
+      };
+    }
+
+    it("opens a draft", async () => {
+      const { reads, service } = prismaFor(listing);
+
+      const result = await service.publish("listing-1", "user-1");
+
+      expect(result.status).toBe("OPEN");
+      expect(reads.updateData).toEqual({ status: "OPEN" });
+    });
+
+    it("refuses a listing that has already left the drafting board", async () => {
+      const { service } = prismaFor(openListing);
+
+      const error = await service.publish("listing-1", "user-1").then(
+        () => new Error("publish should have refused") as unknown,
+        (caught: unknown) => caught as BadRequestException,
+      );
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toMatchObject({
+        statusCode: 400,
+        code: REFUSAL_CODES.listingNotDraft,
+      });
     });
   });
 });

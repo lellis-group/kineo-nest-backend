@@ -24,8 +24,10 @@ import { SYSTEM_SCAFFOLD } from "../../common/system-scaffold";
 import { deletionHash } from "../../lib/hash";
 import {
   bootApp,
+  clearSentEmails,
   createVerifiedUser,
   type E2EFixture,
+  emailsTo,
   resetData,
   shutdownApp,
 } from "./harness";
@@ -172,6 +174,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(fx.prisma);
+  clearSentEmails();
 });
 
 describe("POST /api/auth/delete-user", () => {
@@ -191,6 +194,59 @@ describe("POST /api/auth/delete-user", () => {
       }),
     ).toBe(1);
     await expectNothingDestroyed();
+  });
+
+  /**
+   * What the reader is actually told.
+   *
+   * Everything else in this suite is about the request *not* destroying
+   * anything; this is about the message the request sends. It is the only place
+   * the person learns what will be kept after they confirm — the delay before
+   * the purge, the retention of the trail, and the applications belonging to
+   * other candidates, which cannot go with them. The numbers are read from
+   * configuration and from the database, and a template that stops interpolating
+   * them still sends, still renders, and still gets read at the one moment the
+   * reader is deciding whether to confirm.
+   */
+  it("emails a disclosure naming the candidates' applications and the two delays", async () => {
+    const { owner } = await seedScenario();
+    const cookies = await signIn(owner.email);
+
+    await request(fx.baseUrl)
+      .post("/api/auth/delete-user")
+      .set("Cookie", cookies)
+      .send({ password: PASSWORD });
+
+    const sent = emailsTo(owner.email);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.subject).toBe("Account deletion");
+
+    const html = sent[0]?.html ?? "";
+    // The seeded scenario leaves the owner holding one candidate's pending
+    // application, so this is the branch that has to fire here.
+    expect(html).toContain("The applications other candidates sent you.");
+    expect(html).not.toContain("None of your data is passed");
+    // Both durations, interpolated rather than hardcoded: the sentence reads
+    // "After 30 days" and "kept for 1095 days" in the running configuration.
+    expect(html).toMatch(/After \d+ days/);
+    expect(html).toMatch(/kept for \d+ days/);
+    // The confirmation link, to the page the reader is sent to afterwards.
+    expect(html).toContain("/goodbye");
+    expect(/token=[^&"']+/.test(html)).toBe(true);
+  });
+
+  it("emails no disclosure at all when the request was refused", async () => {
+    const { owner } = await seedScenario();
+    const cookies = await signIn(owner.email);
+    const refused = await request(fx.baseUrl)
+      .post("/api/auth/delete-user")
+      .set("Cookie", cookies)
+      .send({ password: "NotThePassword1!" });
+
+    expect(refused.status).toBeGreaterThanOrEqual(400);
+    // A link that only exists once the trail row does: sending one here would
+    // confirm a request that was never recorded.
+    expect(emailsTo(owner.email)).toHaveLength(0);
   });
 
   it("supersedes the previous request instead of failing on it", async () => {
