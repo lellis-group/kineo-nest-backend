@@ -24,7 +24,7 @@ model User {
   sessions      Session[]
   profile       Profile?
 
-  @@index([deletedAt])
+  @@index([deletedAt], where: { deletedAt: { not: null } })
   @@map("user")
 }
 
@@ -74,10 +74,6 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  // The erasure purges by identifier prefix, which is a range: a HASH index
-  // serves equality only, and the existing btree on identifier alone is the one
-  // that can answer it.
-  @@index([identifier])
   @@index([expiresAt])
   @@index([identifier, expiresAt])
   @@map("verification")
@@ -158,7 +154,7 @@ model Profile {
   listings     ReplacementListing[] @relation("CreatedListings")
   applications Application[]
 
-  @@index([specialty], where: { isPublic: true })
+  @@index([specialty, isPublic])
   @@map("profile")
 }
 
@@ -207,6 +203,7 @@ model ReplacementListing {
   @@index([createdAt(sort: Desc), id(sort: Desc)], map: "rl_created_id_desc_idx")
   @@index([startDate(sort: Asc), id(sort: Desc)], map: "rl_startDate_id_desc_idx")
   @@index([urgent(sort: Desc), startDate(sort: Asc), id(sort: Desc)], map: "rl_urgent_startDate_id_idx")
+  @@index([status, createdAt(sort: Desc), id(sort: Desc)], map: "rl_status_created_id_desc_idx")
   @@index([practiceId])
   @@index([createdById, status])
   @@map("replacement_listing")
@@ -229,26 +226,17 @@ model Application {
   updatedAt       DateTime           @updatedAt
 
   @@unique([listingId, applicantId])
-  @@index([applicantId])
-  // Neither this nor the plain `applicantId` index above is partial, and that is
-  // the point: `status` always arrives as a parameter, so a partial index whose
-  // predicate is a literal is invisible to the query that wants it. The two
-  // partial pairs this replaces were never chosen for any read that reaches them
-  // through Prisma — `EXPLAIN` on the statements it sends, which is how they were
-  // found and how the plain index was confirmed to answer the same reads.
   @@index([applicantId, status])
   @@map("application")
 }
 
-/**
- * GDPR accountability trail (art. 5(2), 17): records each account-deletion
- * request and its execution. Deliberately has NO foreign key to `user`: the
- * row must survive the account hard delete (which cascades everything else)
- * so the request/execution timeline stays provable.
- */
-/// Art. 5(2) accountability trail. The identifiers are keyed fingerprints: the
-/// trail has to answer "was my request processed?" without keeping the email it
-/// is about, and the pepper that produces them never reaches the database.
+/// GDPR accountability trail (art. 5(2), 17): records each account-deletion
+/// request and its execution. Deliberately has NO foreign key to `user`: the
+/// row must survive the account hard delete (which cascades everything else)
+/// so the request/execution timeline stays provable. The identifiers are keyed
+/// fingerprints: the trail has to answer "was my request processed?" without
+/// keeping the email it is about, and the pepper that produces them never
+/// reaches the database.
 model DataDeletionRequest {
   id         String                    @id @default(cuid())
   userIdHash String
@@ -262,8 +250,9 @@ model DataDeletionRequest {
   // request for the same person impossible. A new confirmation link supersedes
   // the previous one and inserts a new row, so two concurrent requests can both
   // read "one PENDING" and both insert.
-  @@unique([userIdHash], where: { status: "PENDING" }, map: "data_deletion_request_userIdHash_idx")
+  @@unique([userIdHash], where: { status: "PENDING" }, map: "data_deletion_request_userIdHash_pending_key")
   @@index([userIdHash, createdAt(sort: Desc)])
+  @@index([emailHash])
   @@index([status, updatedAt])
   @@map("data_deletion_request")
 }
