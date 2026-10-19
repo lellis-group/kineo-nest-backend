@@ -397,6 +397,11 @@ function configuration() {
 
     // ---- Database (mirrors validated DATABASE_URL for DI consumers) ----
     databaseUrl: (process.env.DATABASE_URL ?? "").trim(),
+    // Prisma's own client logger, off by default. It is here rather than read
+    // from the environment at the point of use so that it is validated, typed and
+    // visible in the configuration like every other switch; `lib/prisma.ts` keeps
+    // the same rule for the clients built outside Nest.
+    prismaLogQueries: envBoolean(process.env.PRISMA_LOG_QUERIES, false),
 
     // ---- Swagger (can be overridden via env if needed) ----
     swagger: {
