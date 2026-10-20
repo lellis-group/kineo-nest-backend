@@ -271,6 +271,30 @@ Les modifications B1/A1 sont indépendantes — peuvent partir ensemble vers pro
 
 **Reste en déploiement** (non vérifiable depuis le dépôt) : renseigner `TRUST_PROXY_IPS` avec les adresses réelles des proxies de l'infrastructure (AUD-001 citation : une liste qu'on ne fournit pas est un déploiement qui rate la correction) et `REDIS_URL` en production pour que le budget better-auth soit partagé entre réplicas.
 
+### Phase 3 — Performance & données (implémentée le 20/10/2026)
+
+**AUD-015/006 — Résolu.** Un seul client Prisma par processus :
+- la factory `AuthModule.forRootAsync` (src/app.module.ts) injecte désormais `PrismaService` — exporté globalement par `PrismaModule` — dans `createAuth(authEnv, prisma)` : better-auth écrit dans la même base et le même pool que le reste de l'application, une seule configuration de logging ;
+- l'instance autonome `export const auth = createAuth()` (import eager : un better-auth + un troisième PrismaClient construits à chaque import, même là où on ne voulait qu'un helper) devient `createStandaloneAuth(prismaClient?)` construite au premier appel et mise en cache — le chemin DI ne change pas ;
+- le pool est explicitement dimensionnable : `DATABASE_POOL_MAX` (entier positif, rejeté à l'import sinon) plombe le pool partagé via `createPrismaAdapter()` dans les deux chemins (`lib/prisma` et `PrismaService`), absent = défaut pg (10). Les deux fonctions partagent un unique point de construction d'adapter.
+
+**AUD-013/014 — Mesuré, rien écrit avant les chiffres.** Nouveau `scripts/profile-listings.ts` (`bun run profile`) : base jetable créée par le harnais admin (`TEST_DATABASE_ADMIN_URL`) + `prisma migrate deploy`, corpus déterministe (`PROFILE_PRACTICES`, `PROFILE_LISTINGS_MIN/MAX`, `PROFILE_PASSES`, `PROFILE_Q`), scénarios exécutés par le vrai `ReplacementlistingsService` (wall time, lignes, octets de payload JSON), capture des SQL réels via l'event `query` de Prisma et `EXPLAIN (ANALYZE, BUFFERS)` sur l'original paramétré (aucun filtre réécrit en SQL à côté) ; l'index candidat GIN trigramme est créé dans la base jetable, mesuré avant/après, et supprimé avec elle — aucune migration n'a changé.
+
+**Les chiffres** (5 passes, médianes) :
+
+| | corpus produit (620 pratiques × 1–6, 2 174 OPEN) | stress (100 pratiques × 100–200, 14 712 OPEN) |
+|---|---|---|
+| places (sans filtre) | 33,5 ms · 130 kB | 133 ms · 62 kB |
+| places (`city`) | 15,6 ms · 34 kB | 18,6 ms · 6 kB |
+| places (`q`) | 18,8 ms | 139 ms → **53 ms avec l'index** |
+| feed (sans filtre) | 6,3 ms · 9 kB | 55 ms |
+| feed (`q`) | 10,1 ms | 42 ms → **23 ms avec l'index** |
+
+- **AUD-013** : la croissance est linéaire avec le nombre total d'annonces lues (l'EXPLAIN montre la boucle emboîtée matérialisée du join practice × annonces restées volontairement en trois lectures Prisma), plafonnée par la cap de la carte côté réponse : 33 ms au corpus actuel, 133 ms à ~7×, payload borné (≤ 130 kB). **Décision : conserver les trois lectures** ; une réécriture `JOIN LATERAL LIMIT 4` ne devient nécessaire que si les pratiques se mettent à publier des centaines d'annonces — le script fait la vérification en une commande.
+- **AUD-014** : au corpus actuel le scan `ILIKE` ne se voit pas (10 ms). À 14k lignes le gain candidat est réel mais l'index coûte ~1,7 Mo et ralentit les écritures ; **décision : ne pas créer l'index aujourd'hui**, relancer le script quand le corpus s'en rapproche.
+
+**Validation** : typecheck ✔ · lint ✔ (157 fichiers) · tests unitaires ✔ (2 nouveaux : `resolvePoolMax`, mise en cache de `createStandaloneAuth`) · 17/17 suites e2e ✔ (le chemin DI de `AuthModule` booté sur chaque suite) · gate de couverture ✔ (96,01 % lignes / 73,29 % fonctions) · script profilé aux deux échelles, base jetable nettoyée à chaque exécution.
+
 ### Phase 2 — CAS sur les transitions d'application (implémentée le 20/10/2026)
 
 **AUD-002 — Résolu.** `shortlist` et `update` (édition du message) n'écrivent plus via un `update` non préconditionné (`src/applications/applications.service.ts`) :

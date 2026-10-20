@@ -17,6 +17,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
+    "profile": "bun scripts/profile-listings.ts",
     "db:check": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
     "test:e2e": "bun run scripts/e2e-all.ts",
     "test:e2e:routes": "bun run scripts/serialized-routes.e2e-coverage.ts",

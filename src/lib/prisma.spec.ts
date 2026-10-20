@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "bun:test";
 
-import { prismaLogFor, resolvePrismaLog } from "./prisma";
+import { prismaLogFor, resolvePoolMax, resolvePrismaLog } from "./prisma";
 
 describe("prismaLogFor", () => {
   it("adds query logging without dropping Prisma's own levels", () => {
@@ -62,5 +62,29 @@ describe("resolvePrismaLog", () => {
 
   it("reads an environment with no flag in it at all", () => {
     expect(resolvePrismaLog({})).toEqual(["warn", "error"]);
+  });
+});
+
+describe("resolvePoolMax", () => {
+  it("leaves the pool at the library's default when the knob is absent", () => {
+    for (const raw of [undefined, "", "   "]) {
+      expect(resolvePoolMax({ DATABASE_POOL_MAX: raw })).toBeUndefined();
+    }
+    expect(resolvePoolMax({})).toBeUndefined();
+  });
+
+  it("answers the knob once it is set, trimmed", () => {
+    expect(resolvePoolMax({ DATABASE_POOL_MAX: "5" })).toBe(5);
+    expect(resolvePoolMax({ DATABASE_POOL_MAX: " 20 " })).toBe(20);
+  });
+
+  it("refuses what cannot be a ceiling rather than pooling with silence", () => {
+    // Truthy junk fails at import — the moment a wrong number would be set —
+    // instead of surfacing as a pool that quietly does something else.
+    for (const raw of ["0", "-1", "2.5", "ten", "NaN"]) {
+      expect(() => resolvePoolMax({ DATABASE_POOL_MAX: raw })).toThrow(
+        /DATABASE_POOL_MAX/,
+      );
+    }
   });
 });

@@ -27,6 +27,7 @@ import {
 } from "./lib/auth";
 import { PracticesModule } from "./practices/practices.module";
 import { PrismaModule } from "./prisma.module";
+import { PrismaService } from "./prisma.service";
 import { ProfileModule } from "./profile/profile.module";
 import { ReplacementlistingsModule } from "./replacementlistings/replacementlistings.module";
 
@@ -49,10 +50,19 @@ const BODY_LIMIT = "100kb";
     }),
     AuthModule.forRootAsync({
       imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
+      // The PrismaService this application serves every other read and write
+      // from goes to better-auth too. It builds its own PrismaClient if none is
+      // handed it, so omitting the injection here meant three clients in one
+      // process — the app's, the middleware this creates, and one more the
+      // standalone factory below would hold in reserve — three pools against
+      // the database's `max_connections`, grown N times by N replicas, and
+      // three logging configurations where one is configured. One client: the
+      // PrismaModule instance, exported globally.
+      inject: [ConfigService, PrismaService],
+      useFactory: (config: ConfigService, prisma: PrismaService) => ({
         auth: createAuth(
           readAuthEnvFromConfig(config as unknown as ConfigGetter),
+          prisma,
         ),
         // Nest's own body parser is off, so this module mounts the parsers. It
         // defaults to 100kb; stating it here makes the ceiling belong to the

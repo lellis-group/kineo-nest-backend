@@ -3,6 +3,7 @@ import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
 import {
   type ConfigGetter,
   createAuth,
+  createStandaloneAuth,
   readAuthEnv,
   readAuthEnvFromConfig,
 } from "./index";
@@ -424,5 +425,25 @@ describe("the rate-limit custom storage", () => {
     // Development and CI run with no Redis; better-auth's own Map is then the
     // whole story, as it always has been.
     expect(customStorage({})).toBeUndefined();
+  });
+});
+
+describe("createStandaloneAuth", () => {
+  it("answers one instance from every caller instead of building on every ask", () => {
+    const secret = process.env.BETTER_AUTH_SECRET;
+    // The path used to run at import, where a missing secret was a module-load
+    // failure for everything with a helper to read; it now runs on ask, and the
+    // ask still needs the secret — set the way a script that wants this sets it.
+    process.env.BETTER_AUTH_SECRET = "s".repeat(64);
+    const stub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    try {
+      const first = createStandaloneAuth(stub);
+      const second = createStandaloneAuth(stub);
+
+      expect(second).toBe(first);
+    } finally {
+      process.env.BETTER_AUTH_SECRET = secret;
+    }
   });
 });

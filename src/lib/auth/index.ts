@@ -88,7 +88,7 @@ function positiveInt(
 
 /**
  * Single parsing point for the standalone (non-DI) path: scripts, tests,
- * or `import { auth }`. Mirrors `src/config/configuration.ts` semantics
+ * or `createStandaloneAuth()`. Mirrors `src/config/configuration.ts` semantics
  * (durations accept seconds or "15m"/"1h" suffixes, invalid values throw).
  */
 export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
@@ -422,7 +422,7 @@ export function createAuth(
       // better-auth falls back to its own Map — the same dev-and-CI story the
       // NestJS throttler runs. The client connects lazily: nothing is forwarded
       // until the first consume, so a configuration that never serves a request
-      // (scripts, imports of `{ auth }`) opens no connection.
+      // (scripts, standalone auth instances) opens no connection.
       ...(authEnv.redisUrl
         ? {
             customStorage: createRedisRateLimitStorage(
@@ -542,8 +542,28 @@ export function createAuth(
 }
 
 /**
- * Standalone instance for scripts/tests importing `{ auth }` directly.
- * The Nest application path builds its own instance from ConfigService
- * (see `AppModule`), so the validated config stays the single source of truth.
+ * A better-auth the independently importing paths — scripts, one-off tools —
+ * can build for themselves, wired to the shared Prisma client when it is handed
+ * one, and built on first ask rather than at import.
+ *
+ * It used to be `export const auth = createAuth()`: every module that only
+ * wanted a helper out of this file also built a better-auth — and with it a
+ * PrismaClient whose pool was never asked to serve anything, so one process
+ * could carry the application's connections plus this idle copy. The database
+ * keys by `DATABASE_URL` through `lib/prisma`'s adapter; handing the Nest
+ * application's own `PrismaService` to `createAuth` (see `AppModule`) puts
+ * every part on one pool and one logging config, which is what AUD-015 asked
+ * for; the DI path re-reads nothing from `process.env` at module scope, which
+ * is what AUD-006 avoids here.
+ *
+ * Cached: two calls to this share the instance, so this stays a "the standalone
+ * auth" rather than a "another standalone auth".
  */
-export const auth = createAuth();
+let standaloneAuth: ReturnType<typeof createAuth> | undefined;
+
+export function createStandaloneAuth(
+  prismaClient?: ReturnType<typeof createPrismaClient>,
+) {
+  standaloneAuth ??= createAuth(readAuthEnv(), prismaClient);
+  return standaloneAuth;
+}
