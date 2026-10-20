@@ -36,6 +36,7 @@
     "test:e2e:authguard": "KINEO_E2E_SUITE=authguard bun test --timeout 15000 src/common/e2e/global-auth-guard.e2e.test.ts",
     "test:e2e:sessioncookie": "KINEO_E2E_SUITE=sessioncookie bun test --timeout 15000 src/common/e2e/session-cookie.e2e.test.ts",
     "test:e2e:bodylimit": "KINEO_E2E_SUITE=bodylimit bun test --timeout 15000 src/common/e2e/body-limit.e2e.test.ts",
+    "test:e2e:proxyip": "KINEO_E2E_SUITE=proxy-ip bun test --timeout 15000 src/common/e2e/proxy-ip.e2e.test.ts",
     "test:e2e:sweeplock": "KINEO_E2E_SUITE=sweeplock bun test --timeout 15000 src/data-lifecycle/e2e/sweep-lock.e2e.test.ts"
   },
   "dependencies": {

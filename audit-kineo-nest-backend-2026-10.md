@@ -251,3 +251,22 @@ Les modifications B1/A1 sont indépendantes — peuvent partir ensemble vers pro
 ---
 
 *Conformité au contrat de mode Plan : aucun fichier du projet n'a été créé ni modifié pendant l'audit ; toutes les vérifications exécutées ont été des lectures (code, `node_modules`, migrations, registres npm en ligne via fetch). Toute implémentation des phases ci-dessus requerra une validation explicite.*
+
+---
+
+## Journal d'implémentation
+
+### Phase 1 — Sécurisation (implémentée le 20/10/2026)
+
+**AUD-001 — Résolu.** Nouvelle variable `TRUST_PROXY_IPS` (adresses ou CIDR des reverse proxies, séparés par des virgules) :
+- validée par le schéma d'environnement Zod (`src/config/configuration.ts`) : chaque entrée doit être une IPv4/IPv6 ou un CIDR — une coquille devient un échec de démarrage au lieu d'un avertissement silencieux à l'heure de la requête ;
+- exposée dans `configuration().trustProxyIps` et plombée dans `AuthEnv` à travers les deux chemins de lecture (`readAuthEnv`, `readAuthEnvFromConfig`) ;
+- branchée sur `advanced.ipAddress.trustedProxies` dans `createAuth` (`src/lib/auth/index.ts`), uniquement quand la liste est non vide — sinon le comportement défaut better-auth est préservé.
+
+**AUD-003 — Résolu.** Nouveau `src/lib/auth/rate-limit-redis.ts` : implémentation du contrat officiel `rateLimit.customStorage` de better-auth 1.7 (pas de backend Redis natif en 1.7.3) — `consume` atomique (`INCR` + `EXPIRE NX` + `TTL` en un pipeline ordonné, la fenêtre ne peut pas être prolongée par un hit concurrent), clés préfixées `kineo:auth:rate-limit:`, fail-open sur panne Redis avec `logError`, `close()` exposé. Branché dans `createAuth` via `AuthEnv.redisUrl` (connexion paresseuse : un script ne se connecte jamais), sur le pattern exact du `ThrottlerStorageRedisService` du throttler.
+
+**Documentation** : `.env.example` (TRUST_PROXY_IPS + REDIS_URL mis à jour), `README.md` §6.
+
+**Validation** : typecheck ✔ · lint ✔ (156 fichiers) · 518 tests unitaires ✔ (dont 15 nouveaux : plombage des deux chemins d'env, branchement des options better-auth, sémantique du compte atomique — budget partagé entre deux clients sur le même serveur, fenêtre non prolongée, fail-open sur connexion refusée et sur tuple d'erreur ioredis, close) · gate de couverture ✔ (96,01 % lignes / 73,26 % fonctions, planchers 95/72 préservés) · **17/17 suites e2e ✔**, dont la nouvelle suite `proxy-ip` (4 cas : résolution sur chaîne à deux sauts, arrêt à un saut non approuvé, saut approuvé jamais enregistré comme IP, fallback sans en-tête) · ratchet `MIN_E2E_SUITES` relevé 16 → 17.
+
+**Reste en déploiement** (non vérifiable depuis le dépôt) : renseigner `TRUST_PROXY_IPS` avec les adresses réelles des proxies de l'infrastructure (AUD-001 citation : une liste qu'on ne fournit pas est un déploiement qui rate la correction) et `REDIS_URL` en production pour que le budget better-auth soit partagé entre réplicas.

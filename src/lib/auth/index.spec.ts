@@ -63,6 +63,38 @@ describe("readAuthEnv", () => {
     ).toEqual(["http://a.test", "http://b.test"]);
   });
 
+  it("splits the trusted proxy list and drops the blanks, on both paths", () => {
+    const env = readAuthEnv({
+      ...REQUIRED_ENV,
+      TRUST_PROXY_IPS: "10.0.0.0/8, ,192.0.2.10",
+    });
+
+    expect(env.trustedProxyIps).toEqual(["10.0.0.0/8", "192.0.2.10"]);
+    expect(readAuthEnv({ ...REQUIRED_ENV }).trustedProxyIps).toEqual([]);
+    expect(
+      readAuthEnvFromConfig(
+        configWith({ trustProxyIps: ["10.0.0.0/8", "192.0.2.10"] }),
+      ).trustedProxyIps,
+    ).toEqual(["10.0.0.0/8", "192.0.2.10"]);
+    expect(readAuthEnvFromConfig(configWith()).trustedProxyIps).toEqual([]);
+  });
+
+  it("reads the shared-redis URL, on both paths, and nothing else when blank", () => {
+    expect(
+      readAuthEnv({
+        ...REQUIRED_ENV,
+        REDIS_URL: " redis://cache.internal:6379 ",
+      }).redisUrl,
+    ).toBe("redis://cache.internal:6379");
+    expect(readAuthEnv({ ...REQUIRED_ENV }).redisUrl).toBeUndefined();
+    expect(
+      readAuthEnvFromConfig(
+        configWith({ redisUrl: "redis://cache.internal:6379" }),
+      ).redisUrl,
+    ).toBe("redis://cache.internal:6379");
+    expect(readAuthEnvFromConfig(configWith()).redisUrl).toBeUndefined();
+  });
+
   it("reads durations with a suffix", () => {
     const env = readAuthEnv({
       ...REQUIRED_ENV,
@@ -350,5 +382,47 @@ describe("the secure cookie flag", () => {
   it("is not asked for in development and test, where there is no TLS", () => {
     expect(secureCookies("development")).toBe(false);
     expect(secureCookies("test")).toBe(false);
+  });
+});
+
+describe("advanced.ipAddress.trustedProxies", () => {
+  function trustedProxies(extraEnv: Record<string, string>): unknown {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    return createAuth(readAuthEnv({ ...REQUIRED_ENV, ...extraEnv }), prismaStub)
+      .options.advanced?.ipAddress?.trustedProxies;
+  }
+
+  it("reaches better-auth when the deployment names its proxies", () => {
+    expect(
+      trustedProxies({ TRUST_PROXY_IPS: "10.0.0.0/8, 192.0.2.10" }),
+    ).toEqual(["10.0.0.0/8", "192.0.2.10"]);
+  });
+
+  it("stays off otherwise, leaving better-auth's single-header default", () => {
+    expect(trustedProxies({})).toBeUndefined();
+  });
+});
+
+describe("the rate-limit custom storage", () => {
+  function customStorage(extraEnv: Record<string, string>): unknown {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    return createAuth(readAuthEnv({ ...REQUIRED_ENV, ...extraEnv }), prismaStub)
+      .options.rateLimit?.customStorage;
+  }
+
+  it("counts the buckets in Redis when REDIS_URL is set", () => {
+    // Claimed here as an option-shaped fact; the counting itself (atomicity,
+    // shared budgets, fail-open) is rate-limit-redis.spec.ts's business.
+    expect(
+      customStorage({ REDIS_URL: "redis://cache.internal:6379" }),
+    ).toHaveProperty("consume");
+  });
+
+  it("stays in the process's memory when it is not", () => {
+    // Development and CI run with no Redis; better-auth's own Map is then the
+    // whole story, as it always has been.
+    expect(customStorage({})).toBeUndefined();
   });
 });

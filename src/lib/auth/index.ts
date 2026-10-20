@@ -2,6 +2,7 @@ import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
+import { Redis } from "ioredis";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
 import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "../../config/env";
@@ -18,6 +19,7 @@ import { logError } from "../log";
 import { createPrismaClient } from "../prisma";
 import { emailVerificationStatusPlugin } from "./email-verification-status";
 import { inputValidationHook } from "./input-validation";
+import { createRedisRateLimitStorage } from "./rate-limit-redis";
 import {
   decodeVerificationToken,
   isChangeEmailVerificationToken,
@@ -27,6 +29,28 @@ export interface AuthEnv {
   secret: string;
   baseUrl: string;
   trustedOrigins: string[];
+  /**
+   * Addresses or CIDR ranges of the reverse proxies themselves.
+   *
+   * `trustedOrigins` says which origins the API answers to; this says which hops
+   * the forwarded-for chain may contain. better-auth walks the chain right to
+   * left, skips these, and takes the first untrusted address as the client IP —
+   * for the rate-limit keys and the `Session.ipAddress` column alike. Empty
+   * keeps better-auth's default, which only resolves a single-value header: on
+   * a chain of two or more (CDN plus load balancer, or a caller-supplied header
+   * the proxy appends to) that default answers no IP at all, and every such
+   * caller collapses into one shared rate-limit bucket named "no-trusted-ip".
+   */
+  trustedProxyIps: string[];
+  /**
+   * Redis, shared with the NestJS throttler, for better-auth's own buckets.
+   *
+   * better-auth's default storage is a Map inside the process, so N replicas
+   * allow N times the configured budget; `REDIS_URL` is what makes them one
+   * budget. Absent — development and CI, which need no Redis — the buckets stay
+   * in the process.
+   */
+  redisUrl?: string;
   rateLimitWindow: number;
   rateLimitMax: number;
   credentialRateLimitWindow: number;
@@ -80,6 +104,11 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       .split(",")
       .map((origin) => origin.trim())
       .filter(Boolean),
+    trustedProxyIps: (env.TRUST_PROXY_IPS ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    redisUrl: (env.REDIS_URL ?? "").trim() || undefined,
     rateLimitWindow: positiveInt(
       env.RATE_LIMIT_WINDOW,
       60,
@@ -164,6 +193,8 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     secret,
     baseUrl,
     trustedOrigins: config.get<string[]>("cors.origins", []) ?? [],
+    trustedProxyIps: config.get<string[]>("trustProxyIps", []) ?? [],
+    redisUrl: config.get<string>("redisUrl") || undefined,
     rateLimitWindow: config.get<number>("rateLimit.window", 60) ?? 60,
     rateLimitMax: config.get<number>("rateLimit.max", 20) ?? 20,
     credentialRateLimitWindow:
@@ -386,6 +417,22 @@ export function createAuth(
           max: authEnv.changeEmailRateLimitMax,
         },
       },
+      // The buckets counted in the shared Redis, so N replicas enforce one
+      // budget instead of N. Without REDIS_URL the custom storage is absent and
+      // better-auth falls back to its own Map — the same dev-and-CI story the
+      // NestJS throttler runs. The client connects lazily: nothing is forwarded
+      // until the first consume, so a configuration that never serves a request
+      // (scripts, imports of `{ auth }`) opens no connection.
+      ...(authEnv.redisUrl
+        ? {
+            customStorage: createRedisRateLimitStorage(
+              new Redis(authEnv.redisUrl, {
+                lazyConnect: true,
+                maxRetriesPerRequest: 2,
+              }),
+            ),
+          }
+        : {}),
     },
 
     session: {
@@ -399,6 +446,24 @@ export function createAuth(
 
     advanced: {
       useSecureCookies: isHardenedEnv(authEnv.nodeEnv),
+      // The client IP, where better-auth asks for it. `TRUST_PROXY` tells
+      // Express how many hops to believe; this list tells better-auth *which*
+      // hops those are. Without it, a forwarded chain of two or more addresses
+      // — a CDN in front of a load balancer, or a caller-supplied header the
+      // proxy appends to — resolves to nothing: the rate-limit keys lose the
+      // address and every such caller shares one bucket ("no-trusted-ip"), and
+      // the session rows record an empty `ipAddress`. The NestJS throttler was
+      // never wrong about this (Express does the walking), which is why the gap
+      // showed up only on the auth routes Express never sees.
+      //
+      // Empty keeps better-auth's default: a single-value header is taken as
+      // the client IP, which is correct for one proxy that overwrites the
+      // header, and unresolvable for one that appends. The addresses should be
+      // the actual proxies — a range that also covers clients lets a caller
+      // pick its own address by sending enough hops for the walk to stop on one.
+      ...(authEnv.trustedProxyIps.length > 0
+        ? { ipAddress: { trustedProxies: authEnv.trustedProxyIps } }
+        : {}),
     },
 
     emailAndPassword: {

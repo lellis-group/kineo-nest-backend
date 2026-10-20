@@ -124,6 +124,12 @@ function timerMs(value: string | undefined, fallback: number, name: string) {
 }
 
 /**
+ * One entry of the trusted-proxy list, as better-auth's `trustedProxies` takes
+ * it: an IPv4 or IPv6 address, or an equivalent CIDR range.
+ */
+const proxyEntrySchema = z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]);
+
+/**
  * Whether the proxy is trusted, and whether the environment decided that.
  *
  * Trusting it is the right default for an application designed to run behind one,
@@ -171,6 +177,18 @@ function configuration() {
     // proxy to trust, and trusting one there hides real client addresses.
     trustProxy: trustProxy.enabled,
     trustProxyImplied: trustProxy.implied,
+    // The addresses or CIDR ranges of the proxies themselves: TRUST_PROXY says
+    // that a proxy is there, this says which one. better-auth walks the
+    // forwarded-for chain right to left, skips these hops, and takes the first
+    // untrusted address as the client IP — for its rate-limit keys and the
+    // session rows alike. Unset keeps its default, which trusts only a
+    // single-value chain and answers nothing on a two-hop one (CDN plus load
+    // balancer), collapsing every such caller into one shared rate-limit
+    // bucket. See the comment on advanced.ipAddress in lib/auth.
+    trustProxyIps: (process.env.TRUST_PROXY_IPS ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
 
     // ---- Account erasure ----
     // The delay between anonymizing an account and dropping its row for good.
@@ -497,6 +515,27 @@ export const envValidationSchema = z
     // No default: the factory decides between the environment and the hardened
     // one, and a default here would replace that with a flat "false".
     TRUST_PROXY: BoolEnum.optional(),
+    // Comma-separated addresses or CIDR ranges of the reverse proxies
+    // themselves. Each entry has to be an IP, a v4 or v6 CIDR range, or
+    // nothing at all: better-auth refuses an entry it cannot parse with a
+    // warning at request time, and a typo would silently leave every caller in
+    // one shared rate-limit bucket. Refusing it here turns the typo into a
+    // boot failure instead.
+    TRUST_PROXY_IPS: z
+      .string()
+      .default("")
+      .refine(
+        (raw) =>
+          raw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .every((entry) => proxyEntrySchema.safeParse(entry).success),
+        {
+          message:
+            "TRUST_PROXY_IPS must be a comma-separated list of IP addresses or CIDR ranges (IPv4 or IPv6)",
+        },
+      ),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
     // The TTLs were absent from this schema altogether, so a typo in one of them
