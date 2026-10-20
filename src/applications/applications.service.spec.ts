@@ -811,21 +811,82 @@ describe("ApplicationsService", () => {
       },
     };
 
-    function serviceFor(profileId: string, row: unknown) {
+    interface ServiceFixture {
+      writes: Array<Record<string, unknown>>;
+      casCalls: Array<Record<string, unknown>>;
+      commitStatus: (status: string) => void;
+      service: ApplicationsService;
+    }
+
+    /**
+     * The fake holds the row twice on purpose. A read answers with the row as
+     * the service found it; a write commits over the row as it is *then*,
+     * which by then may no longer be the same row. `commitStatus` slides a
+     * decision into that interval — a second tab answering while the first is
+     * still holding its stale read — which is exactly the race the CAS is
+     * written for, and no test gets to make the write see the stale row
+     * instead.
+     */
+    function serviceFor(profileId: string, row: unknown): ServiceFixture {
       const writes: Array<Record<string, unknown>> = [];
+      const casCalls: Array<Record<string, unknown>> = [];
+
+      const views = {
+        row: (row ? { ...row } : null) as
+          | (typeof application & {
+              status: string;
+            })
+          | null,
+        commit: (row ? { ...row } : null) as
+          | (typeof application & {
+              status: string;
+            })
+          | null,
+      };
+
       const prisma = {
         profile: { findUnique: async () => ({ id: profileId }) },
         application: {
-          findUnique: async () => row,
+          findUnique: async () => views.row,
           update: async ({ data }: { data: Record<string, unknown> }) => {
             writes.push(data);
             return { ...application, ...data };
+          },
+          updateMany: async (args: {
+            where: { id: string; status?: string };
+            data: Record<string, unknown>;
+          }) => {
+            casCalls.push(args.where);
+
+            const target = views.commit;
+            const matched =
+              target !== null &&
+              target.id === args.where.id &&
+              (!args.where.status || target.status === args.where.status);
+
+            if (!matched) {
+              return { count: 0 };
+            }
+
+            writes.push(args.data);
+            views.row = { ...views.row, ...args.data } as typeof application;
+            views.commit = {
+              ...views.commit,
+              ...args.data,
+            } as typeof application;
+            return { count: 1 };
           },
         },
       } as unknown as PrismaService;
 
       return {
         writes,
+        casCalls,
+        commitStatus: (status: string) => {
+          if (views.commit) {
+            views.commit = { ...views.commit, status } as typeof application;
+          }
+        },
         service: new ApplicationsService(prisma, {
           get: () => undefined,
         } as unknown as ConfigService),
@@ -924,6 +985,34 @@ describe("ApplicationsService", () => {
       expect(writes[0]?.respondedAt).toBeInstanceOf(Date);
     });
 
+    // The write is an `updateMany` whose `where` asks for the row it means to
+    // move, not a blind overwrite of the row the read happened to see: if
+    // anything ever drops the precondition, this fails first.
+    it("hands the storage a write that carries the pending status", async () => {
+      const { casCalls, service } = serviceFor("owner-1", readable);
+      await service.shortlist("application-1", "user-1");
+
+      expect(casCalls).toEqual([{ id: "application-1", status: "PENDING" }]);
+    });
+
+    it("refuses to shortlist what was accepted while it held its read", async () => {
+      const { writes, commitStatus, service } = serviceFor("owner-1", readable);
+      // The row reads PENDING, and answers the accept that lands between the
+      // read and the write.
+      commitStatus("ACCEPTED");
+
+      const error = await service.shortlist("application-1", "user-1").then(
+        () => null,
+        (caught: unknown) => caught as BadRequestException,
+      );
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error?.getResponse() as { code?: string }).code).toBe(
+        REFUSAL_CODES.applicationNotShortlistable,
+      );
+      expect(writes).toHaveLength(0);
+    });
+
     it("lets only the applicant edit the message", async () => {
       const { service } = serviceFor("owner-1", readable);
 
@@ -960,6 +1049,36 @@ describe("ApplicationsService", () => {
 
       expect(result.message).toBe("Evenings only now.");
       expect(writes).toEqual([{ message: "Evenings only now." }]);
+    });
+
+    it("hands the storage an edit that carries the pending status", async () => {
+      const { casCalls, service } = serviceFor("applicant-1", readable);
+      await service.update("application-1", "user-1", { message: "edit" });
+
+      expect(casCalls).toEqual([{ id: "application-1", status: "PENDING" }]);
+    });
+
+    it("refuses to edit what was answered while it held its read", async () => {
+      const { writes, commitStatus, service } = serviceFor(
+        "applicant-1",
+        readable,
+      );
+      // The row reads PENDING, and answers the shortlist that lands between
+      // the read and the write.
+      commitStatus("SHORTLISTED");
+
+      const error = await service
+        .update("application-1", "user-1", { message: "edit" })
+        .then(
+          () => null,
+          (caught: unknown) => caught as BadRequestException,
+        );
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error?.getResponse() as { code?: string }).code).toBe(
+        REFUSAL_CODES.applicationNotPending,
+      );
+      expect(writes).toHaveLength(0);
     });
   });
 });
