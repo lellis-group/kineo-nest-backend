@@ -271,6 +271,18 @@ Les modifications B1/A1 sont indépendantes — peuvent partir ensemble vers pro
 
 **Reste en déploiement** (non vérifiable depuis le dépôt) : renseigner `TRUST_PROXY_IPS` avec les adresses réelles des proxies de l'infrastructure (AUD-001 citation : une liste qu'on ne fournit pas est un déploiement qui rate la correction) et `REDIS_URL` en production pour que le budget better-auth soit partagé entre réplicas.
 
+### Phase 5 — Dette & maintenance (implémentée le 20/10/2026)
+
+- **AUD-007 — `nextCookies()` retiré** (import + usage dans `createAuth`) : le plugin ne sert que Next.js, sa promesse à moitié avortée re-résolue à chaque `/get-session` pour un coût nul, et l'écriture des cookies reste portée par le Node handler de `@thallesp`. La suite `session-cookie` et les 16 autres restent vertes.
+- **AUD-008 — `@better-auth/prisma-adapter` retiré** des dépendances du projet `bun remove` — l'adapter appliqué reste `better-auth/adapters/prisma` ; le paquet reste dans l'arbre de better-auth lui-même, ce que le lockfile reflète (sa dépendance, pas une nôtre).
+- **AUD-005 — résolu** : `createAuth` convertit maintenant l'expiration JWT en **nombre de secondes** via `durationSeconds()` au moment où la valeur part vers le plugin (`expirationTime: durationSeconds(authEnv.jwtExpirationTime, 900)`). `JWT_EXPIRATION_TIME=3600` — qui passait la validation d'env etatonnait chaque émission de token (`TypeError` du parseur better-auth au runtime) — produit désormais 3600 à boot ; une valeur invalide crashe le boot au lieu du premier token. Deux tests unitaires pin les conversions ("3600" → 3600, "15m" → 900) et le crash à boot.
+- **AUD-011 — `cancel()` séché** : la relecture du listing + le garde de propriété doublon disparaissent au profit du même `assertOwnershipWith(tx, …)` que `publish`/`update`/`remove`, dans la même transaction sérialisable. Sémantique inchangée (404 absent, 403 non-propriétaire).
+- **AUD-019 — plus de redirection silencieuse** : `readAuthEnvFromConfig` sans `auth.secret` lève une erreur explicite (« build the ConfigService from the validated configuration() or hand createAuth an explicit AuthEnv ») au lieu de relire `process.env` en second choix ; le test de fallback est réécrit en assertion d'erreur.
+- **AUD-009 — double requête d'effacement lisible** : le `catch` de la transaction traileée reconnaît maintenant `P2002` (le pending créé par la requête concurrente gagne, l'index unique de fingerprint rejette le second insert) et lève `APIError("CONFLICT")` avec le message utilisateur (« an erasure request is already pending — use the confirmation link already sent ») au lieu d'un 500 générique non contextualisé ; tout autre échec reste le `INTERNAL_SERVER_ERROR` avec son `logError`. (Couverture : ce hook interne de better-auth n'est pas atteignable sans recréer le papier client complet — la carte des tests ne l'ajoute pas.)
+- **AUD-010 (optionnel) — non traité** : le `PrismaExceptionFilter` global ajoute une couche pour un cas structurel rarement atteint ; selon la recommandation "moins de couches", la transformation locale des mutations n'a pas été entreprise — à réévaluer si un P2025 apparaît dans les logs réels.
+
+**Validation** : typecheck ✔ · lint ✔ (157 fichiers) · 530 tests unitaires ✔ (dont 3 retouchés/nouveaux : expiration JWT ×2, erreur de config sans secret) · gate de couverture ✔ (96,01 % lignes / 73,29 % fonctions) · **17/17 suites e2e ✔**, dont `session-cookie` après le retrait de `nextCookies`.
+
 ### Phase 3 — Performance & données (implémentée le 20/10/2026)
 
 **AUD-015/006 — Résolu.** Un seul client Prisma par processus :

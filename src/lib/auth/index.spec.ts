@@ -260,21 +260,65 @@ describe("readAuthEnvFromConfig", () => {
     expect(env.jwtEnabled).toBe(false);
   });
 
-  it("falls back to the process env when the secret is not published", () => {
-    const previous = process.env.BETTER_AUTH_SECRET;
-    process.env.BETTER_AUTH_SECRET = "from-process-env";
+  it("fails loudly when the configuration publishes no secret", () => {
+    // It used to fall back to process.env: two sources of truth, and the
+    // factory's validated configuration silently overruled by whatever the
+    // environment happened to carry at import time. The double that forgets
+    // the key the real ConfigService always publishes now names its mistake.
+    expect(() => readAuthEnvFromConfig(configWith({ auth: {} }))).toThrow(
+      /auth\.secret/,
+    );
+  });
+});
 
-    try {
-      const env = readAuthEnvFromConfig(configWith({ auth: {} }));
+describe("the jwt plugin", () => {
+  function jwtExpirationTime(env: Record<string, string>): unknown {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
 
-      expect(env.secret).toBe("from-process-env");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.BETTER_AUTH_SECRET;
-      } else {
-        process.env.BETTER_AUTH_SECRET = previous;
-      }
+    const plugin = createAuth(
+      readAuthEnv({ ...REQUIRED_ENV, ...env }),
+      prismaStub,
+    ).options.plugins?.find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "id" in entry &&
+        (entry as { id?: string }).id === "jwt",
+    );
+    if (typeof plugin !== "object" || plugin === null) {
+      throw new Error("the jwt plugin is not mounted");
     }
+    const options = (
+      plugin as { options?: { jwt?: { expirationTime?: unknown } } }
+    ).options;
+    return options?.jwt?.expirationTime;
+  }
+
+  it("feeds the plugin a number of seconds, whatever shape the env named", () => {
+    // "3600" passes the environment's own duration validation and the
+    // application's, and used to pass through to the plugin's parser — which
+    // demands a unit — so every token issuance threw in production. The
+    // conversion happens where the value is handed over: one parse, the
+    // repository's, at boot.
+    expect(
+      jwtExpirationTime({ JWT_ENABLED: "true", JWT_EXPIRATION_TIME: "3600" }),
+    ).toBe(3600);
+    expect(
+      jwtExpirationTime({ JWT_ENABLED: "true", JWT_EXPIRATION_TIME: "15m" }),
+    ).toBe(900);
+  });
+
+  it("refuses what no duration meant, at boot instead of at issuing", () => {
+    expect(() =>
+      createAuth(
+        readAuthEnv({
+          ...REQUIRED_ENV,
+          JWT_ENABLED: "true",
+          JWT_EXPIRATION_TIME: "quarter",
+        }),
+        {} as unknown as Parameters<typeof createAuth>[1],
+      ),
+    ).toThrow();
   });
 });
 
@@ -323,10 +367,10 @@ describe("the auth reference plugin", () => {
   });
 
   it("keeps the other plugins either way", () => {
+    // The one plugin that is mounted on both paths whatever the environment:
+    // the reference gating above is the only one conditional on it.
     for (const nodeEnv of ["production", "development"]) {
       const ids = pluginIds(nodeEnv);
-      expect(ids.length).toBeGreaterThan(1);
-      expect(ids).toContain("next-cookies");
       expect(ids).toContain("email-verification-status");
     }
   });

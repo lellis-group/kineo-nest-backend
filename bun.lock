@@ -5,7 +5,6 @@
     "": {
       "name": "kineo-nest-backend",
       "dependencies": {
-        "@better-auth/prisma-adapter": "1.7.3",
         "@nest-lab/throttler-storage-redis": "^1.2.0",
         "@nestjs/common": "^12.0.0",
         "@nestjs/config": "^12.0.0",

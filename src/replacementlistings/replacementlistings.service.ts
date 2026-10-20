@@ -1101,18 +1101,10 @@ export class ReplacementlistingsService {
     const updated = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const listing = await tx.replacementListing.findUnique({
-          where: { id },
-        });
-        if (!listing) {
-          throw new NotFoundException(`Replacement listing ${id} not found`);
-        }
-
-        const profileId = await getOwnedProfileId(tx, userId);
-
-        if (listing.createdById !== profileId) {
-          throw new ForbiddenException();
-        }
+        // The same read-and-ownership guard `publish`, `update` and `remove`
+        // run through, inside the transaction like them: the write it authorizes
+        // and the read that authorizes it stay on one connection.
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
         // Every terminal status, `FILLED` included. A filled listing carries a
         // placement that was agreed with a candidate; cancelling it would leave

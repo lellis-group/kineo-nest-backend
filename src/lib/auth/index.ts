@@ -1,11 +1,11 @@
 import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
 import { Redis } from "ioredis";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
 import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "../../config/env";
+import { Prisma } from "../../generated/prisma/client";
 import {
   sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
@@ -179,9 +179,13 @@ export interface ConfigGetter {
 export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
   const secret = config.get<string>("auth.secret");
   if (!secret) {
-    // ConfigModule validation guarantees BETTER_AUTH_SECRET; this covers
-    // hand-rolled ConfigService doubles in unit tests.
-    return readAuthEnv();
+    // Missing here means the ConfigService double is missing the key the real
+    // one always publishes (config.auth.secret). Falling back to process.env
+    // read the secret a second time from a second source and made the answer
+    // depend on whichever the factory saw last. Fail the call loudly instead.
+    throw new Error(
+      "readAuthEnvFromConfig: no auth.secret in the configuration — build the ConfigService from the validated configuration() or hand createAuth an explicit AuthEnv",
+    );
   }
   const frontendUrl =
     config.get<string>("frontendUrl", "http://localhost:3001") ??
@@ -253,13 +257,19 @@ export function createAuth(
       // Read at module scope, which is fine here and wrong everywhere else:
       // `NODE_ENV` does not change between the import and the request.
       ...(isHardenedEnv(authEnv.nodeEnv) ? [] : [openAPI()]),
-      nextCookies(),
       emailVerificationStatusPlugin(),
       ...(authEnv.jwtEnabled
         ? [
             jwt({
               jwt: {
-                expirationTime: authEnv.jwtExpirationTime,
+                // The env answer can be a bare number of seconds ("3600"),
+                // which the environment accepts and the plugin's own parser
+                // rejects — every `createToken` would throw a TypeError in
+                // production. `durationSeconds` is the one parser this
+                // repository owns, so the plugin receives the seconds number
+                // it also accepts, and a bad value fails at boot rather than
+                // on the first token.
+                expirationTime: durationSeconds(authEnv.jwtExpirationTime, 900),
                 issuer: authEnv.baseUrl,
                 audience: authEnv.baseUrl,
               },
@@ -365,6 +375,21 @@ export function createAuth(
               });
             });
           } catch (error) {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2002"
+            ) {
+              // Two requests in the same instant: the first one's transaction
+              // inserted its PENDING row before this one's read, so the
+              // supersede counted nothing and this create hit the one-pending
+              // fingerprint index. Its link was not sent; the first one's
+              // still is — the answer tells the reader that, instead of the
+              // raw database error a doubled click used to surface.
+              throw new APIError("CONFLICT", {
+                message:
+                  "An erasure request is already pending for this account. Use the confirmation link already sent to its email address.",
+              });
+            }
             logError("account.deletion.request.audit_failed", error, {
               userId: user.id,
             });
