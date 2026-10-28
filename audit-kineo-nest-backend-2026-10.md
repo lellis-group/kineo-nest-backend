@@ -334,3 +334,15 @@ Les modifications B1/A1 sont indépendantes — peuvent partir ensemble vers pro
 - suite e2e `geo-search` : nouveau cas qui compare les deux branches sur les mêmes seeds (`?name=%` → seule la ligne littérale, `?city=a_b` → idem, `Cabinet` → les deux) — échoue sur le code d'avant la correction.
 
 **Validation** : typecheck ✔ · lint ✔ (159 fichiers) · 533 tests unitaires ✔ · gate de couverture ✔ (95,96 % / 94,08 %) · 13/13 cas de la suite `geo-search` ✔ (dont les deux nouveaux).
+
+### AUD-010 — CAS sur les mutations profile et practices (implémenté le 28/10/2026)
+
+**Résolu.** La fenêtre lecture→écriture de `profile.service.update` et `practices.service.update` laissait un P2025 brut atteindre le filtre par défaut de Nest (500 générique) quand la ligne disparaissait entre les deux. Même forme que le correctif AUD-002 :
+- la lecture initiale reste (elle porte la distinction 404 anti-énumération / 403) ;
+- l'écriture passe par `updateMany` portant la propriété elle-même (`{ id, userId }` pour le profil, `{ id, ownerId }` pour la practice) ; `count === 0` → 404 ;
+- le mapping P2002 (RPPS) du profil est conservé autour du `updateMany` ;
+- la réponse relit la ligne écrite, forme plate inchangée.
+
+Couverture : deux nouvelles specs unitaires (`profile.service.spec.ts`, `practices.service.spec.ts`) avec la fake Prisma à deux vues (lecture / commit) — la course « suppression entre lecture et écriture » est rejouée en unitaire, la `where` transmise au stockage est épinglée, et le reste des deux services (create + quota, findAll géo et plat, findOne privé/public, findMine, remove + garde tierce) est couvert au passage : ces fichiers n'étaient jusque-là atteints que par e2e, donc invisibles au gate de couverture unitaire.
+
+**Validation** : typecheck ✔ · lint ✔ (161 fichiers) · 568 tests unitaires ✔ (35 nouveaux) · gate de couverture ✔ (95,78 % / 93,75 %, planchers 95/72 inchangés) · suites `profile-crud` (19/19) et `practices-crud` (14/14) ✔ · **17/17 suites e2e ✔**.

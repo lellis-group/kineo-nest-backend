@@ -156,6 +156,13 @@ export class PracticesService {
     return practice;
   }
 
+  /**
+   * Writes the fields an owner may edit.
+   *
+   * Same shape as the profile update: the read answers 404 and 403 for the
+   * ordinary case, the write carries `ownerId` itself, and a practice deleted
+   * in between answers 404 instead of a raw P2025 through the default filter.
+   */
   async update(
     id: string,
     userId: string,
@@ -168,10 +175,22 @@ export class PracticesService {
       throw new ForbiddenException();
     }
 
-    return this.prisma.practice.update({
-      where: { id },
+    const updated = await this.prisma.practice.updateMany({
+      where: { id, ownerId },
       data: updatePracticeDto,
     });
+
+    if (updated.count === 0) {
+      throw new NotFoundException(`Practice ${id} not found`);
+    }
+
+    const saved = await this.prisma.practice.findUnique({ where: { id } });
+
+    if (!saved) {
+      throw new NotFoundException(`Practice ${id} not found`);
+    }
+
+    return saved;
   }
 
   /**
