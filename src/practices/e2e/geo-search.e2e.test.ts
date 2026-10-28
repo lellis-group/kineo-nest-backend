@@ -98,6 +98,30 @@ async function search(
   return response.body;
 }
 
+/** The flat branch: the same route without coordinates. */
+async function list({
+  name,
+  city,
+}: {
+  name?: string;
+  city?: string;
+} = {}): Promise<{
+  data: { id: string }[];
+  meta: { total: number };
+}> {
+  const response = await request(fx.baseUrl)
+    .get("/practices")
+    .query({
+      limit: "50",
+      page: "1",
+      ...(name ? { name } : {}),
+      ...(city ? { city } : {}),
+    });
+
+  expect(response.status).toBe(200);
+  return response.body;
+}
+
 const ids = (body: { data: { id: string }[] }) =>
   body.data.map((practice) => practice.id);
 
@@ -233,6 +257,29 @@ describe("GET /practices away from the edges", () => {
     const body = await search(0, 0, 100, { name: "%" });
 
     expect(ids(body)).toEqual([]);
+  });
+
+  it("reads a wildcard the same way on the flat branch", async () => {
+    // The flat branch goes through Prisma's `contains`, which escapes nothing:
+    // `?name=%` used to list every practice there and none on the geographic
+    // path — the same term, two answers, depending on whether coordinates came
+    // along.
+    await seedPractice("plain", 0, 0, {
+      name: "Cabinet Epsilon",
+      city: "Lyon",
+    });
+    await seedPractice("literal", 0, 0.001, {
+      name: "Cabinet 100%",
+      city: "a_b",
+    });
+    await seedPractice("matcher", 0, 0.002, { name: "Other", city: "aXb" });
+
+    expect(ids(await list({ name: "%" }))).toEqual(["literal"]);
+    expect(ids(await list({ city: "a_b" }))).toEqual(["literal"]);
+    expect(ids(await list({ name: "Cabinet" })).sort()).toEqual([
+      "literal",
+      "plain",
+    ]);
   });
 
   it("does not return the scaffold", async () => {

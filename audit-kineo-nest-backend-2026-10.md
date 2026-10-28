@@ -324,3 +324,13 @@ Les modifications B1/A1 sont indépendantes — peuvent partir ensemble vers pro
 - suite e2e `proxy-ip` étendue : derrière deux proxies approuvés (CDN + LB), deux clients distincts tombent dans deux buckets throttler distincts — l'assertion qui échoue encore avec un `trust proxy` à un saut. Le harnais expose `KINEO_E2E_REAL_SHORT_BUDGET` pour qu'une suite exerce un budget réel au lieu des plafonds gonflés (l'opt-in est explicite car Bun charge le `.env` du développeur dans le process de test, ce qu'un `??=` ne neutralise pas).
 
 **Validation** : typecheck ✔ · lint ✔ (158 fichiers) · 533 tests unitaires ✔ · gate de couverture ✔ (95,96 % lignes / 94,08 % fonctions) · **17/17 suites e2e ✔**. Note de déploiement inchangée : la correction n'a d'effet que quand `TRUST_PROXY_IPS` est renseigné.
+
+### AUD-012 — wildcards LIKE identiques sur les deux branches (implémenté le 28/10/2026)
+
+**Résolu.** Au moment de la vérification, le commentaire « Neither path has a caller yet » était déjà périmé : `practices.service.findAll` est un appelant des deux branches, la divergence était vivante (`?name=%` listait tout sans coordonnées et rien avec). Correction du côté Prisma :
+- `escapeLike` est exporté depuis `src/practices/geo-query.ts` et appliqué aux termes passés à `contains` dans la branche plate — PostgreSQL lit le backslash comme caractère d'échappement par défaut de LIKE, donc `%` et `_` se nomment eux-mêmes, comme sur le chemin géo ;
+- commentaire de `containsInsensitive` mis à jour (plus de « divergence documentée ») ;
+- les `.describe()` de `find-practices.dto.ts` précisent que les wildcards sont littéraux ;
+- suite e2e `geo-search` : nouveau cas qui compare les deux branches sur les mêmes seeds (`?name=%` → seule la ligne littérale, `?city=a_b` → idem, `Cabinet` → les deux) — échoue sur le code d'avant la correction.
+
+**Validation** : typecheck ✔ · lint ✔ (159 fichiers) · 533 tests unitaires ✔ · gate de couverture ✔ (95,96 % / 94,08 %) · 13/13 cas de la suite `geo-search` ✔ (dont les deux nouveaux).

@@ -14,14 +14,14 @@ export const FindPracticesSchema = z
       .min(1)
       .max(200)
       .optional()
-      .describe("Filter by practice name"),
+      .describe("Filter by practice name (LIKE wildcards are literal)"),
     city: z
       .string()
       .trim()
       .min(1)
       .max(100)
       .optional()
-      .describe("Filter by city"),
+      .describe("Filter by city (LIKE wildcards are literal)"),
     lat: z.coerce
       .number()
       .min(-90)

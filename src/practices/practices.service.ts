@@ -22,6 +22,7 @@ import { CreatePracticeDto } from "./dto/create-practice.dto";
 import type { FindPracticesDto } from "./dto/find-practices.dto";
 import { UpdatePracticeDto } from "./dto/update-practice.dto";
 import {
+  escapeLike,
   geoWhere,
   haversineKm,
   PRACTICE_GEO_COLUMNS,
@@ -101,10 +102,18 @@ export class PracticesService {
       };
     }
 
+    // The term is escaped so `%` and `_` name themselves, as they do on the
+    // geographic branch (`geo-query.ts`): unescaped, Prisma's `contains` would
+    // read them as wildcards and `?name=%` would list every practice here and
+    // none there.
     const where = {
       isPublic: true,
-      ...(name && { name: { contains: name, mode: "insensitive" as const } }),
-      ...(city && { city: { contains: city, mode: "insensitive" as const } }),
+      ...(name && {
+        name: { contains: escapeLike(name), mode: "insensitive" as const },
+      }),
+      ...(city && {
+        city: { contains: escapeLike(city), mode: "insensitive" as const },
+      }),
     };
 
     const [data, total] = await Promise.all([
