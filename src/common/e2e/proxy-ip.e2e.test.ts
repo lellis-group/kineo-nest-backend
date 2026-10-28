@@ -18,8 +18,16 @@
 
 // The app boots once per process and reads its environment on boot, so the
 // trusted list is set here rather than left to the runner: `bun run test:e2e`
-// discovers suites and would not know to pass it.
-process.env.TRUST_PROXY_IPS = "10.0.0.0/8";
+// discovers suites and would not know to pass it. Loopback is on the list
+// because this process talks to the application directly — the socket hop is
+// the first one the walk checks, and a list that does not trust it stops there.
+// The throttler tier keeps its production shape (the harness opt-in below)
+// because the Nest-layer case has to exhaust a small budget.
+process.env.TRUST_PROXY_IPS = "127.0.0.1/32, 10.0.0.0/8";
+process.env.TRUST_PROXY = "true";
+process.env.KINEO_E2E_REAL_SHORT_BUDGET = "1";
+process.env.THROTTLE_SHORT_TTL = "60000";
+process.env.THROTTLE_SHORT_LIMIT = "5";
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
@@ -132,5 +140,29 @@ describe("the session ipAddress behind a trusted proxy", () => {
     // answers with localhost, the way it does in development, instead of
     // refusing to name an address at all.
     expect(await signInAndReadSession("user-no-chain")).toBe("127.0.0.1");
+  });
+});
+
+describe("the throttler bucket behind a trusted proxy", () => {
+  /** The short-tier budget as the request behind the named chain sees it. */
+  async function status(forwardedFor: string): Promise<number> {
+    const response = await fetch(`${fx.baseUrl}/health`, {
+      headers: { "x-forwarded-for": forwardedFor },
+    });
+
+    return response.status;
+  }
+
+  it("keys the budget on the client address past every trusted hop", async () => {
+    // Two proxies (a CDN then a load balancer, both in 10.0.0.0/8) stand in
+    // front of two different callers. A single hop of trust names the CDN as
+    // the client and collapses the two into one bucket; the named list walks
+    // past both proxies and the second caller keeps a budget of its own.
+    for (let i = 0; i < 5; i++) {
+      expect(await status("203.0.113.7, 10.0.0.2, 10.0.0.1")).toBe(200);
+    }
+    expect(await status("203.0.113.7, 10.0.0.2, 10.0.0.1")).toBe(429);
+
+    expect(await status("198.51.100.9, 10.0.0.2, 10.0.0.1")).toBe(200);
   });
 });

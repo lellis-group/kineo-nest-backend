@@ -181,10 +181,12 @@ function configuration() {
     // that a proxy is there, this says which one. better-auth walks the
     // forwarded-for chain right to left, skips these hops, and takes the first
     // untrusted address as the client IP — for its rate-limit keys and the
-    // session rows alike. Unset keeps its default, which trusts only a
-    // single-value chain and answers nothing on a two-hop one (CDN plus load
-    // balancer), collapsing every such caller into one shared rate-limit
-    // bucket. See the comment on advanced.ipAddress in lib/auth.
+    // session rows alike. The same list is handed to Express as its `trust
+    // proxy` setting, so the throttler's `req.ip` resolves the same client.
+    // Unset keeps better-auth's default, which trusts only a single-value chain
+    // and answers nothing on a two-hop one (CDN plus load balancer), collapsing
+    // every such caller into one shared rate-limit bucket. See the comment on
+    // advanced.ipAddress in lib/auth.
     trustProxyIps: (process.env.TRUST_PROXY_IPS ?? "")
       .split(",")
       .map((entry) => entry.trim())

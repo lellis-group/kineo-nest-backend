@@ -12,6 +12,7 @@ import { AppModule } from "./app.module";
 import { compressionFilter } from "./common/compression-filter";
 import { contentSecurityPolicy } from "./common/security-headers";
 import { isHardenedEnv } from "./config/env";
+import { trustProxySetting } from "./config/trust-proxy";
 import { nestLogger } from "./lib/nest-logger";
 
 /**
@@ -39,8 +40,13 @@ export async function createApp(): Promise<NestExpressApplication> {
     }),
   );
 
-  if (configService.get<boolean>("trustProxy", false)) {
-    app.set("trust proxy", 1);
+  const trustProxy = trustProxySetting(
+    configService.get<boolean>("trustProxy", false),
+    configService.get<string[]>("trustProxyIps", []),
+  );
+
+  if (trustProxy !== false) {
+    app.set("trust proxy", trustProxy);
   }
 
   app.enableCors({
