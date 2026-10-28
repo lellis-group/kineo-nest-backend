@@ -302,6 +302,7 @@ Still open: email notifications on status changes are written (templates + maile
 - [ ] V2: RPPS verification via official API, PDF contract generation, bilateral rating, geolocated "emergency" alerts
 - [ ] Decouple Auth from better-auth (deferred tech debt, not MVP): introduce an `AuthPort` (`IAuthProvider`) behind a NestJS wrapper so better-auth becomes swappable — isolate `Session`/`UserSession`/`AllowAnonymous` (`@thallesp/nestjs-better-auth`) in controllers, `lib/auth/index.ts` (`betterAuth`, `prismaAdapter`, plugins), guards (`email-verified.guard.ts`), and `hashPassword` usage in `prisma/seed.ts`
 - [ ] Email via `NotificationsModule` with an `EmailPort` (deferred, not MVP): Nodemailer is already isolated in `lib/email/mailer.ts` (low coupling, single import point) — the work is functional decoupling (queue/retry, wiring into `ApplicationsService`, provider-agnostic templates in `lib/email/templates/*`), not swapping Nodemailer itself
+- [ ] Watch `nestjs-zod` for a release declaring `^12` peers (pinned watch, audit AUD-004): the project runs `nestjs-zod@5.5.0` on Nest 12 — it works and is tested, but the dependency declares `@nestjs/common ^10 || ^11` and `@nestjs/swagger ^7.4.2 || ^8 || ^11`, so the combo is officially untested. When a version declaring `^12` appears, upgrade and pin it with `bun test` + the e2e suites in CI; nothing to do until then.
 
 ---
 

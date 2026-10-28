@@ -346,3 +346,7 @@ Les modifications B1/A1 sont indépendantes — peuvent partir ensemble vers pro
 Couverture : deux nouvelles specs unitaires (`profile.service.spec.ts`, `practices.service.spec.ts`) avec la fake Prisma à deux vues (lecture / commit) — la course « suppression entre lecture et écriture » est rejouée en unitaire, la `where` transmise au stockage est épinglée, et le reste des deux services (create + quota, findAll géo et plat, findOne privé/public, findMine, remove + garde tierce) est couvert au passage : ces fichiers n'étaient jusque-là atteints que par e2e, donc invisibles au gate de couverture unitaire.
 
 **Validation** : typecheck ✔ · lint ✔ (161 fichiers) · 568 tests unitaires ✔ (35 nouveaux) · gate de couverture ✔ (95,78 % / 93,75 %, planchers 95/72 inchangés) · suites `profile-crud` (19/19) et `practices-crud` (14/14) ✔ · **17/17 suites e2e ✔**.
+
+### AUD-004 — surveillance nestjs-zod (consigné le 28/10/2026)
+
+**Consigné, pas codé.** Vérifié le jour même : `nestjs-zod@5.5.0` reste la dernière version publiée, peers toujours `^10 || ^11` — aucune version compatible Nest 12 n'existe, il n'y a donc rien à migrer. La condition de levier est inscrite dans la roadmap du README (§7) : monter dès qu'une version déclare `^12`, épingler avec `bun test` + e2e en CI. Pas de script de veille (réseau requis en CI pour un gain nul aujourd'hui) ; l'entrée de roadmap fait foi.
