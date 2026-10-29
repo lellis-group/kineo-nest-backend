@@ -79,8 +79,11 @@ function suiteNameFor(file: string, taken: Map<string, string>): string {
  * floor: it only ever moves up, and moving it up is a one-line change reviewed
  * like any other. It catches deletion, not erosion — emptying a suite that stays
  * on disk is still visible in review and nowhere else.
+ *
+ * 17 after `proxy-ip` — the better-auth side of proxy-aware IP tracking, which
+ * no other suite was positioned to check.
  */
-const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 16);
+const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 17);
 
 const suites = suitesIn(SRC).sort();
 if (suites.length === 0) {

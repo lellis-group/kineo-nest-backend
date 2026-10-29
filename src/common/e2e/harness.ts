@@ -148,8 +148,17 @@ export async function bootApp(): Promise<E2EFixture> {
   process.env.THROTTLE_DELETION_LIMIT = "1000";
   process.env.THROTTLE_DELETION_TTL = "60000";
   // The shipped limits are production values; a suite makes far more calls per
-  // second than a human and would throttle itself.
-  process.env.THROTTLE_SHORT_LIMIT = "10000";
+  // second than a human and would throttle itself. Forcing rather than
+  // defaulting: Bun loads the developer's .env into this process. A suite that
+  // has to exercise a real budget (the proxy-ip one exhausts the short tier)
+  // opts in with KINEO_E2E_REAL_SHORT_BUDGET and sizes the tier itself.
+  if (process.env.KINEO_E2E_REAL_SHORT_BUDGET === "1") {
+    process.env.THROTTLE_SHORT_TTL ??= "1000";
+    process.env.THROTTLE_SHORT_LIMIT ??= "5";
+  } else {
+    process.env.THROTTLE_SHORT_TTL = "1000";
+    process.env.THROTTLE_SHORT_LIMIT = "10000";
+  }
   process.env.THROTTLE_MEDIUM_LIMIT = "10000";
   process.env.THROTTLE_LONG_LIMIT = "10000";
   process.env.RATE_LIMIT_MAX = "10000";

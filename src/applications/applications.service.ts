@@ -387,6 +387,17 @@ export class ApplicationsService {
     return toApplicationDto(updated);
   }
 
+  /**
+   * Writes the message a pending application carries, and nothing else.
+   *
+   * The check on the row's status answers for the ordinary case, but it answers
+   * from a read that happened before the write: between the two, the practice
+   * on the other side may have already answered the application. `updateMany`
+   * lets the write carry the check itself, so the condition is evaluated over
+   * the row at commit time — a late edit cannot land on a decision, and a
+   * candidate whose application was answered while they typed gets the refusal
+   * rather than a message nobody will read.
+   */
   async update(id: string, userId: string, dto: UpdateApplicationDto) {
     const { application, isApplicant } = await this.assertAccess(id, userId);
 
@@ -401,14 +412,43 @@ export class ApplicationsService {
       );
     }
 
-    const updated = await this.prisma.application.update({
-      where: { id },
+    const edited = await this.prisma.application.updateMany({
+      where: { id, status: "PENDING" },
       data: { message: dto.message },
     });
+
+    if (edited.count === 0) {
+      throw refusal(
+        REFUSAL_CODES.applicationNotPending,
+        "Only pending applications can be edited",
+      );
+    }
+
+    const updated = await this.prisma.application.findUnique({ where: { id } });
+
+    // The write matched one row and nothing here deletes one between the write
+    // and this read; the compiler cannot see it, so the guard is for it.
+    if (!updated) {
+      throw new NotFoundException(`Application ${id} not found`);
+    }
 
     return toApplicationDto(updated);
   }
 
+  /**
+   * Shortlists a pending application for its listing's owner.
+   *
+   * Like the edit above, this write carries its own check rather than trusting
+   * the read that authorized it — but here the stakes are not a message, they
+   * are the lifecycle the decision paths share. `accept` settles in one
+   * serializable transaction the whole listing belongs to: it flips the row to
+   * ACCEPTED, rejects the candidate's siblings and fills the listing. That
+   * ordering is safe for them because it happens atomically; a bare `update`
+   * from this path is not — a shortlist committed after an accept would drag
+   * an ACCEPTED row back to SHORTLISTED, respond with the answer's own stamp
+   * gone, and leave a re-opened candidate on a listing the console already
+   * reports as filled.
+   */
   async shortlist(id: string, userId: string) {
     const { application, isOwner } = await this.assertAccess(id, userId);
 
@@ -423,10 +463,25 @@ export class ApplicationsService {
       );
     }
 
-    const updated = await this.prisma.application.update({
-      where: { id },
+    const shortlisted = await this.prisma.application.updateMany({
+      where: { id, status: "PENDING" },
       data: { status: "SHORTLISTED", respondedAt: new Date() },
     });
+
+    if (shortlisted.count === 0) {
+      throw refusal(
+        REFUSAL_CODES.applicationNotShortlistable,
+        "Only pending applications can be shortlisted",
+      );
+    }
+
+    const updated = await this.prisma.application.findUnique({ where: { id } });
+
+    // The same reasoning as the edit above: the write matched a row that
+    // nothing here can delete before this read answers.
+    if (!updated) {
+      throw new NotFoundException(`Application ${id} not found`);
+    }
 
     return toApplicationDto(updated);
   }

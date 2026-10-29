@@ -27,15 +27,14 @@ function tracker(req: Req): Promise<string> {
 const HASH_LENGTH = 64;
 
 describe("clientAddress", () => {
-  it("takes the address the trusted proxy forwarded", () => {
-    expect(clientAddress({ ip: "10.0.0.7", ips: ["203.0.113.9"] })).toBe(
+  it("takes req.ip, where the walk over the forwarded chain stopped", () => {
+    expect(clientAddress({ ip: "203.0.113.9", ips: ["203.0.113.9"] })).toBe(
       "203.0.113.9",
     );
   });
 
-  it("falls back to req.ip when nothing was forwarded", () => {
-    expect(clientAddress({ ip: "203.0.113.9" })).toBe("203.0.113.9");
-    expect(clientAddress({ ip: "203.0.113.9", ips: [] })).toBe("203.0.113.9");
+  it("falls back to the runtime address when trust proxy resolves nothing", () => {
+    expect(clientAddress({ ip: "127.0.0.1", ips: [] })).toBe("127.0.0.1");
   });
 
   it("never returns undefined, which would collapse every caller into one key", () => {
@@ -124,13 +123,13 @@ describe("TokenAwareThrottlerGuard", () => {
     ).resolves.toBe("203.0.113.9");
   });
 
-  it("keys the erasure endpoint on the address the trusted proxy forwarded", async () => {
+  it("keys the erasure endpoint on the address the forwarded chain resolved", async () => {
     await expect(
       tracker({
         method: "POST",
         url: "/account/confirm-deletion",
-        ip: "10.0.0.7",
-        ips: ["203.0.113.9"],
+        ip: "203.0.113.9",
+        ips: ["203.0.113.9", "10.0.0.1"],
         body: { token: "token-a" },
       }),
     ).resolves.toContain("203.0.113.9|");

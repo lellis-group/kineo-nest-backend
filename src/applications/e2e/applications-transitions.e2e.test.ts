@@ -650,6 +650,67 @@ describe("accepting an application", () => {
   });
 });
 
+describe("the same owner's two tabs racing", () => {
+  /**
+   * The race this suite's other tests cannot stage: both decisions are
+   * authorized, both are issued at once, and the ordering that comes back is
+   * not ours to choose. What has to hold either way is the invariant the
+   * inherited unconditional write used to break — an application settled
+   * ACCEPTED by the serializable accept must never afterwards read
+   * SHORTLISTED, because a shortlist committed after an accept would drag the
+   * row back across a decision its then-rejected siblings stayed rejected on
+   * and its listing stays FILLED because of.
+   */
+  it("never repaints an accepted application shortlisted", async () => {
+    const world = await seedWorld();
+    const application = await fx.prisma.application.create({
+      data: {
+        listingId: world.listing.id,
+        applicantId: world.candidateAProfileId,
+        status: "PENDING",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    // Fired together, on the same owner's cookies: whichever one commits
+    // first, the other has to yield rather than overwrite.
+    const [shortlist, accept] = await Promise.all([
+      request(fx.baseUrl)
+        .patch(`/applications/${application.id}/shortlist`)
+        .set("Cookie", world.ownerCookies)
+        .then((response) => response.status),
+      request(fx.baseUrl)
+        .patch(`/applications/${application.id}/accept`)
+        .set("Cookie", world.ownerCookies)
+        .then((response) => ({
+          status: response.status,
+          body: response.body as Record<string, unknown>,
+        })),
+    ]);
+
+    // The accept wins in both orders the storage can produce: last against a
+    // shortlisted row, first against a still-pending one.
+    expect(accept.status).toBe(200);
+    expect(accept.body).toMatchObject({ status: "ACCEPTED" });
+    // The shortlist either went first (and committed) or lost its race (and
+    // was refused) — both defensible; what is not is a 409-style downgrade
+    // error nobody writes, so only one of the two answers may arrive.
+    expect([200, 400]).toContain(shortlist);
+
+    const settled = await fx.prisma.application.findUniqueOrThrow({
+      where: { id: application.id },
+    });
+    expect(settled.status).toBe("ACCEPTED");
+    expect(settled.decisionSource).toBe("PRACTICE_ACCEPTED");
+
+    const listing = await fx.prisma.replacementListing.findUniqueOrThrow({
+      where: { id: world.listing.id },
+    });
+    expect(listing.status).toBe("FILLED");
+  });
+});
+
 describe("withdrawing an application", () => {
   it("only the applicant withdraws, only an active one, and the listing reopens", async () => {
     const world = await seedWorld();

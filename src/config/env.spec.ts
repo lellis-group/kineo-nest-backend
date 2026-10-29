@@ -194,6 +194,48 @@ describe("gates close by default", () => {
   });
 });
 
+describe("the trusted proxy list", () => {
+  const schema = envValidationSchema.shape.TRUST_PROXY_IPS;
+
+  it("is empty by default, so a deployment behind one proxy needs none", () => {
+    expect(schema.parse(undefined)).toBe("");
+    expect(schema.parse("")).toBe("");
+  });
+
+  it("accepts the addresses and ranges better-auth walks by", () => {
+    const proxyEntries = ["10.0.0.0/8", "192.0.2.10", "2001:db8::/32"].join(
+      ",",
+    );
+    expect(schema.parse(proxyEntries)).toBe(proxyEntries);
+  });
+
+  it("refuses an entry better-auth would only warn about, once, at request time", () => {
+    // A typo here has no second line of defence: better-auth ignores entries it
+    // cannot parse and answers no client IP, which is the failure this list
+    // exists to prevent. The schema makes it a boot failure instead.
+    for (const raw of [
+      "10.0.0.0/8, not-an-address",
+      "300.0.0.1",
+      "10.0.0.0/99",
+      "example.com",
+    ]) {
+      expect(schema.safeParse(raw).success).toBe(false);
+    }
+  });
+
+  it("shows up in the configuration as a list, blanks dropped", () => {
+    withEnv({ TRUST_PROXY_IPS: "10.0.0.0/8, ,192.0.2.10" }, () => {
+      expect(configuration().trustProxyIps).toEqual([
+        "10.0.0.0/8",
+        "192.0.2.10",
+      ]);
+    });
+    withEnv({ TRUST_PROXY_IPS: undefined }, () => {
+      expect(configuration().trustProxyIps).toEqual([]);
+    });
+  });
+});
+
 describe("the verified address requirement", () => {
   it("is required by default outside development and test", () => {
     withEnv(

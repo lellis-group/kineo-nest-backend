@@ -1,10 +1,11 @@
 import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { nextCookies } from "better-auth/next-js";
 import { jwt, openAPI } from "better-auth/plugins";
+import { Redis } from "ioredis";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
 import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "../../config/env";
+import { Prisma } from "../../generated/prisma/client";
 import {
   sendChangeEmailApprovalEmail,
   sendChangeEmailEmail,
@@ -18,6 +19,7 @@ import { logError } from "../log";
 import { createPrismaClient } from "../prisma";
 import { emailVerificationStatusPlugin } from "./email-verification-status";
 import { inputValidationHook } from "./input-validation";
+import { createRedisRateLimitStorage } from "./rate-limit-redis";
 import {
   decodeVerificationToken,
   isChangeEmailVerificationToken,
@@ -27,6 +29,28 @@ export interface AuthEnv {
   secret: string;
   baseUrl: string;
   trustedOrigins: string[];
+  /**
+   * Addresses or CIDR ranges of the reverse proxies themselves.
+   *
+   * `trustedOrigins` says which origins the API answers to; this says which hops
+   * the forwarded-for chain may contain. better-auth walks the chain right to
+   * left, skips these, and takes the first untrusted address as the client IP —
+   * for the rate-limit keys and the `Session.ipAddress` column alike. Empty
+   * keeps better-auth's default, which only resolves a single-value header: on
+   * a chain of two or more (CDN plus load balancer, or a caller-supplied header
+   * the proxy appends to) that default answers no IP at all, and every such
+   * caller collapses into one shared rate-limit bucket named "no-trusted-ip".
+   */
+  trustedProxyIps: string[];
+  /**
+   * Redis, shared with the NestJS throttler, for better-auth's own buckets.
+   *
+   * better-auth's default storage is a Map inside the process, so N replicas
+   * allow N times the configured budget; `REDIS_URL` is what makes them one
+   * budget. Absent — development and CI, which need no Redis — the buckets stay
+   * in the process.
+   */
+  redisUrl?: string;
   rateLimitWindow: number;
   rateLimitMax: number;
   credentialRateLimitWindow: number;
@@ -64,7 +88,7 @@ function positiveInt(
 
 /**
  * Single parsing point for the standalone (non-DI) path: scripts, tests,
- * or `import { auth }`. Mirrors `src/config/configuration.ts` semantics
+ * or `createStandaloneAuth()`. Mirrors `src/config/configuration.ts` semantics
  * (durations accept seconds or "15m"/"1h" suffixes, invalid values throw).
  */
 export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
@@ -80,6 +104,11 @@ export function readAuthEnv(env: EnvSource = process.env): AuthEnv {
       .split(",")
       .map((origin) => origin.trim())
       .filter(Boolean),
+    trustedProxyIps: (env.TRUST_PROXY_IPS ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    redisUrl: (env.REDIS_URL ?? "").trim() || undefined,
     rateLimitWindow: positiveInt(
       env.RATE_LIMIT_WINDOW,
       60,
@@ -150,9 +179,13 @@ export interface ConfigGetter {
 export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
   const secret = config.get<string>("auth.secret");
   if (!secret) {
-    // ConfigModule validation guarantees BETTER_AUTH_SECRET; this covers
-    // hand-rolled ConfigService doubles in unit tests.
-    return readAuthEnv();
+    // Missing here means the ConfigService double is missing the key the real
+    // one always publishes (config.auth.secret). Falling back to process.env
+    // read the secret a second time from a second source and made the answer
+    // depend on whichever the factory saw last. Fail the call loudly instead.
+    throw new Error(
+      "readAuthEnvFromConfig: no auth.secret in the configuration — build the ConfigService from the validated configuration() or hand createAuth an explicit AuthEnv",
+    );
   }
   const frontendUrl =
     config.get<string>("frontendUrl", "http://localhost:3001") ??
@@ -164,6 +197,8 @@ export function readAuthEnvFromConfig(config: ConfigGetter): AuthEnv {
     secret,
     baseUrl,
     trustedOrigins: config.get<string[]>("cors.origins", []) ?? [],
+    trustedProxyIps: config.get<string[]>("trustProxyIps", []) ?? [],
+    redisUrl: config.get<string>("redisUrl") || undefined,
     rateLimitWindow: config.get<number>("rateLimit.window", 60) ?? 60,
     rateLimitMax: config.get<number>("rateLimit.max", 20) ?? 20,
     credentialRateLimitWindow:
@@ -222,13 +257,19 @@ export function createAuth(
       // Read at module scope, which is fine here and wrong everywhere else:
       // `NODE_ENV` does not change between the import and the request.
       ...(isHardenedEnv(authEnv.nodeEnv) ? [] : [openAPI()]),
-      nextCookies(),
       emailVerificationStatusPlugin(),
       ...(authEnv.jwtEnabled
         ? [
             jwt({
               jwt: {
-                expirationTime: authEnv.jwtExpirationTime,
+                // The env answer can be a bare number of seconds ("3600"),
+                // which the environment accepts and the plugin's own parser
+                // rejects — every `createToken` would throw a TypeError in
+                // production. `durationSeconds` is the one parser this
+                // repository owns, so the plugin receives the seconds number
+                // it also accepts, and a bad value fails at boot rather than
+                // on the first token.
+                expirationTime: durationSeconds(authEnv.jwtExpirationTime, 900),
                 issuer: authEnv.baseUrl,
                 audience: authEnv.baseUrl,
               },
@@ -334,6 +375,21 @@ export function createAuth(
               });
             });
           } catch (error) {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2002"
+            ) {
+              // Two requests in the same instant: the first one's transaction
+              // inserted its PENDING row before this one's read, so the
+              // supersede counted nothing and this create hit the one-pending
+              // fingerprint index. Its link was not sent; the first one's
+              // still is — the answer tells the reader that, instead of the
+              // raw database error a doubled click used to surface.
+              throw new APIError("CONFLICT", {
+                message:
+                  "An erasure request is already pending for this account. Use the confirmation link already sent to its email address.",
+              });
+            }
             logError("account.deletion.request.audit_failed", error, {
               userId: user.id,
             });
@@ -386,6 +442,22 @@ export function createAuth(
           max: authEnv.changeEmailRateLimitMax,
         },
       },
+      // The buckets counted in the shared Redis, so N replicas enforce one
+      // budget instead of N. Without REDIS_URL the custom storage is absent and
+      // better-auth falls back to its own Map — the same dev-and-CI story the
+      // NestJS throttler runs. The client connects lazily: nothing is forwarded
+      // until the first consume, so a configuration that never serves a request
+      // (scripts, standalone auth instances) opens no connection.
+      ...(authEnv.redisUrl
+        ? {
+            customStorage: createRedisRateLimitStorage(
+              new Redis(authEnv.redisUrl, {
+                lazyConnect: true,
+                maxRetriesPerRequest: 2,
+              }),
+            ),
+          }
+        : {}),
     },
 
     session: {
@@ -399,6 +471,24 @@ export function createAuth(
 
     advanced: {
       useSecureCookies: isHardenedEnv(authEnv.nodeEnv),
+      // The client IP, where better-auth asks for it. `TRUST_PROXY` tells
+      // Express how many hops to believe; this list tells better-auth *which*
+      // hops those are. Without it, a forwarded chain of two or more addresses
+      // — a CDN in front of a load balancer, or a caller-supplied header the
+      // proxy appends to — resolves to nothing: the rate-limit keys lose the
+      // address and every such caller shares one bucket ("no-trusted-ip"), and
+      // the session rows record an empty `ipAddress`. The NestJS throttler was
+      // never wrong about this (Express does the walking), which is why the gap
+      // showed up only on the auth routes Express never sees.
+      //
+      // Empty keeps better-auth's default: a single-value header is taken as
+      // the client IP, which is correct for one proxy that overwrites the
+      // header, and unresolvable for one that appends. The addresses should be
+      // the actual proxies — a range that also covers clients lets a caller
+      // pick its own address by sending enough hops for the walk to stop on one.
+      ...(authEnv.trustedProxyIps.length > 0
+        ? { ipAddress: { trustedProxies: authEnv.trustedProxyIps } }
+        : {}),
     },
 
     emailAndPassword: {
@@ -477,8 +567,27 @@ export function createAuth(
 }
 
 /**
- * Standalone instance for scripts/tests importing `{ auth }` directly.
- * The Nest application path builds its own instance from ConfigService
- * (see `AppModule`), so the validated config stays the single source of truth.
+ * A better-auth the independently importing paths — scripts, one-off tools —
+ * can build for themselves, wired to the shared Prisma client when it is handed
+ * one, and built on first ask rather than at import.
+ *
+ * It used to be `export const auth = createAuth()`: every module that only
+ * wanted a helper out of this file also built a better-auth — and with it a
+ * PrismaClient whose pool was never asked to serve anything, so one process
+ * could carry the application's connections plus this idle copy. The database
+ * keys by `DATABASE_URL` through `lib/prisma`'s adapter; handing the Nest
+ * application's own `PrismaService` to `createAuth` (see `AppModule`) puts
+ * every part on one pool and one logging config, and keeps the DI path from
+ * reading `process.env` at module scope a second time.
+ *
+ * Cached: two calls to this share the instance, so this stays a "the standalone
+ * auth" rather than a "another standalone auth".
  */
-export const auth = createAuth();
+let standaloneAuth: ReturnType<typeof createAuth> | undefined;
+
+export function createStandaloneAuth(
+  prismaClient?: ReturnType<typeof createPrismaClient>,
+) {
+  standaloneAuth ??= createAuth(readAuthEnv(), prismaClient);
+  return standaloneAuth;
+}

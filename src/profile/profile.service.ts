@@ -94,6 +94,14 @@ export class ProfileService {
     return profile;
   }
 
+  /**
+   * Writes the fields an owner may edit, and nothing else.
+   *
+   * The read answers 404 and 403 for the ordinary case, but it answers from
+   * before the write: a profile deleted in between made the plain `update`
+   * throw a raw P2025 at the default filter — a 500 nobody could act on. The
+   * write carries the ownership itself, so a row that vanished answers 404.
+   */
   async update(id: string, userId: string, updateProfileDto: UpdateProfileDto) {
     const profile = await this.findOne(id, userId);
 
@@ -102,10 +110,22 @@ export class ProfileService {
     }
 
     try {
-      return await this.prisma.profile.update({
-        where: { id },
+      const updated = await this.prisma.profile.updateMany({
+        where: { id, userId },
         data: updateProfileDto,
       });
+
+      if (updated.count === 0) {
+        throw new NotFoundException(`Profile ${id} not found`);
+      }
+
+      const saved = await this.prisma.profile.findUnique({ where: { id } });
+
+      if (!saved) {
+        throw new NotFoundException(`Profile ${id} not found`);
+      }
+
+      return saved;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

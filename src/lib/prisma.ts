@@ -13,6 +13,44 @@ function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
+ * The connection ceiling of the shared pool, from `DATABASE_POOL_MAX`.
+ *
+ * The adapter takes whatever `Pool` config it is handed and creates its `pg.Pool`
+ * with the library's default otherwise — `max: 10` per client. It stayed
+ * implicit while there was one client; with a single shared one, the number is
+ * what a replica costs against Postgres `max_connections`, so it is a
+ * spelled-out setting rather than a library detail. Absent — local development
+ * against a database sized for `max_connections` 100 and a client that connects
+ * on demand — the default stands.
+ */
+export function resolvePoolMax(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = (env.DATABASE_POOL_MAX ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `DATABASE_POOL_MAX must be a positive integer, got: ${raw}`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * One adapter for one client. Both builders go through this, so the pool the
+ * application serves its reads from and the pool scripts build are configured
+ * the same way — `PrismaPg` given the connection string alone would answer with
+ * its own defaults, whatever the environment said.
+ */
+export function createPrismaAdapter(connectionString: string): PrismaPg {
+  const max = resolvePoolMax();
+  return new PrismaPg(max ? { connectionString, max } : connectionString);
+}
+
+/**
  * What the client is asked to log.
  *
  * The flag only ever *adds* `query`: Prisma's own defaults are named explicitly
@@ -39,9 +77,7 @@ export function resolvePrismaLog(
   return prismaLogFor(envBoolean(env.PRISMA_LOG_QUERIES, false));
 }
 
-const adapter = new PrismaPg({
-  connectionString: resolveDatabaseUrl(),
-});
+const adapter = createPrismaAdapter(resolveDatabaseUrl());
 
 /**
  * The options for the clients built outside Nest — the seed, standalone

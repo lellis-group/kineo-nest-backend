@@ -480,6 +480,12 @@ export class ReplacementlistingsService {
       // naming the work, not a place. An `OR` over title and description, each
       // a case-insensitive `contains`, so a term in either field matches — and
       // omitted entirely when unset, since an empty `OR` would match nothing.
+      //
+      // No trigram index backs it: measured with `bun run profile`, the `ILIKE`
+      // costs ~10–19 ms at the product corpus (~2.2k OPEN) and only becomes
+      // visible around 14k rows, where a GIN index cut the places read from
+      // 139 ms to 53 ms (the feed's from 42 ms to 23 ms). The index costs
+      // ~1.7 MB and taxes writes, so it waits for the corpus to get there.
       ...(filters.q
         ? {
             OR: [
@@ -614,6 +620,14 @@ export class ReplacementlistingsService {
    * for the coordinates of every practice involved, one for the previews. The
    * alternative — a window function over the postings — would need the filters
    * written a second time in SQL, and the two definitions would drift.
+   *
+   * The shape is measured rather than provisional: reading every OPEN listing
+   * of the practices drawn costs ~33 ms on the product corpus (620 practices,
+   * ~2.2k OPEN) and ~133 ms at roughly seven times that size, while the
+   * response stays capped by `maxPlaces`. A `JOIN LATERAL … LIMIT 4` would
+   * bound the work per place, but it would duplicate the predicates in SQL; it
+   * is the right trade only once practices publish hundreds of listings each.
+   * `bun run profile` measures that case against a throwaway database.
    */
   async findPlaces(filters: FindPlacesDto, maxPlaces: number) {
     const where: Prisma.ReplacementListingWhereInput = {
@@ -1101,18 +1115,10 @@ export class ReplacementlistingsService {
     const updated = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
-        const listing = await tx.replacementListing.findUnique({
-          where: { id },
-        });
-        if (!listing) {
-          throw new NotFoundException(`Replacement listing ${id} not found`);
-        }
-
-        const profileId = await getOwnedProfileId(tx, userId);
-
-        if (listing.createdById !== profileId) {
-          throw new ForbiddenException();
-        }
+        // The same read-and-ownership guard `publish`, `update` and `remove`
+        // run through, inside the transaction like them: the write it authorizes
+        // and the read that authorizes it stay on one connection.
+        const listing = await this.assertOwnershipWith(tx, id, userId);
 
         // Every terminal status, `FILLED` included. A filled listing carries a
         // placement that was agreed with a candidate; cancelling it would leave
