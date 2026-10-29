@@ -17,8 +17,8 @@ function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
  *
  * The adapter takes whatever `Pool` config it is handed and creates its `pg.Pool`
  * with the library's default otherwise — `max: 10` per client. It stayed
- * implicit while there was one client; with a single shared one (AUD-015), the
- * number is what a replica costs against Postgres `max_connections`, so it is a
+ * implicit while there was one client; with a single shared one, the number is
+ * what a replica costs against Postgres `max_connections`, so it is a
  * spelled-out setting rather than a library detail. Absent — local development
  * against a database sized for `max_connections` 100 and a client that connects
  * on demand — the default stands.

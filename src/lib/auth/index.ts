@@ -577,9 +577,8 @@ export function createAuth(
  * could carry the application's connections plus this idle copy. The database
  * keys by `DATABASE_URL` through `lib/prisma`'s adapter; handing the Nest
  * application's own `PrismaService` to `createAuth` (see `AppModule`) puts
- * every part on one pool and one logging config, which is what AUD-015 asked
- * for; the DI path re-reads nothing from `process.env` at module scope, which
- * is what AUD-006 avoids here.
+ * every part on one pool and one logging config, and keeps the DI path from
+ * reading `process.env` at module scope a second time.
  *
  * Cached: two calls to this share the instance, so this stays a "the standalone
  * auth" rather than a "another standalone auth".

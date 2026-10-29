@@ -1,8 +1,8 @@
 /**
- * Profiling for the two listing reads whose growth the audit declined to
- * answer from theory: AUD-013 (`/places` reads every OPEN listing of the
- * practices the map draws) and AUD-014 (the free-text `q` runs an `ILIKE`
- * over title and description, with no index behind it).
+ * Profiling for the two listing reads whose growth was left to measurement:
+ * `/places` reads every OPEN listing of the practices the map draws, and the
+ * free-text `q` runs an `ILIKE` over title and description with no index
+ * behind it.
  *
  * The measurement answers both over a corpus the script builds itself in a
  * throwaway database — the same throwaway-database discipline the e2e suites
@@ -13,10 +13,11 @@
  *     bun run profile
  *
  * The knobs put the product's own scale (`PROFILE_PRACTICES=620`,
- * `PROFILE_LISTINGS_MAX=6`) around the risk cases the audit named:
+ * `PROFILE_LISTINGS_MAX=6`) around the two growth cases:
  * `PROFILE_LISTINGS_MAX=200` asks what a practice with hundreds of postings
  * costs the map, `PROFILE_PRACTICES=5000` asks what a corpus grown well past
- * today's costs the free-text search. `PROFILE_PASSES` exists so the medians
+ * today's costs the free-text search — the same cases named where those reads
+ * are written. `PROFILE_PASSES` exists so the medians
  * rest on more runs than the ones a warm cache finishes before being noticed.
  *
  * Every scenario runs against the real `ReplacementlistingsService`, without
@@ -28,8 +29,8 @@
  *
  * The free-text scenarios are finally rerun against the candidate GIN trigram
  * index, created in — and dropped with — the throwaway database itself. The
- * before/after the audit asked for comes from one corpus in one run, and no
- * migration changes until these numbers, rather than a prediction, ask for it.
+ * before/after comparison comes from one corpus in one run, and no migration
+ * changes until these numbers, rather than a prediction, ask for it.
  *
  * Run: `bun run profile`
  */
@@ -222,8 +223,8 @@ async function createCorpus(
   const listingRows: Array<ReturnType<typeof listingFor>> = [];
   for (let index = 0; index < PRACTICE_COUNT; index++) {
     // The band of postings one practice carries — the knob, so the stress
-    // corpus can name the case the audit worried about instead of trusting
-    // the seed's average to answer it.
+    // corpus can name the growth case instead of trusting the seed's average
+    // to answer it.
     const spread =
       LISTINGS_MIN + (hash(index) % (LISTINGS_MAX - LISTINGS_MIN + 1));
     for (let within = 0; within < spread; within++) {
@@ -406,7 +407,7 @@ async function printPlans(
   }
 }
 
-/** The candidate index AUD-014 names. Created here only — see the header. */
+/** The candidate index this script measures. Created here only — see the header. */
 const CANDIDATE_SEARCH_INDEX_SQL =
   "CREATE INDEX profile_candidate_search_trgm " +
   "ON replacement_listing " +
@@ -442,7 +443,7 @@ type Scenario = {
 };
 
 async function main() {
-  console.log("=== Profiling the listing reads (AUD-013 / AUD-014) ===");
+  console.log("=== Profiling the listing reads ===");
   console.log(
     `corpus: ${PRACTICE_COUNT} practices × ${LISTINGS_MIN}–${LISTINGS_MAX} open postings, ` +
       `${PASS_COUNT} measured passes, the map capped at ${MAP_PLACE_CAP} places, search "${SEARCH_TERM}"`,
@@ -559,7 +560,8 @@ async function main() {
     // The free-text index, measured where it would land if the numbers asked
     // for one: created inside the throwaway database, measured against, and
     // dropped with it. It is not a proposal here either — it is the question
-    // AUD-014 left open, answered on the corpus that has to answer it.
+    // the free-text read left open, answered on the corpus that has to answer
+    // it.
     const searchScenarios = scenarios.filter(
       (scenario) => "q" in scenario.filters,
     );
