@@ -177,9 +177,14 @@ describe("gates close by default", () => {
     // The windows are unset in every ordinary deployment and the factory holds
     // the defaults. `z.coerce.number()` turns an absent variable into NaN rather
     // than undefined, so an unbounded schema here would refuse to boot.
+    //
+    // NODE_ENV is left unset on purpose: it defaults to the hardened one, which
+    // now also means a pepper — that is the shape a bare production host boots
+    // in.
     const parsed = envValidationSchema.safeParse({
       DATABASE_URL: "postgresql://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "s".repeat(64),
+      DELETION_PEPPER: "p".repeat(64),
     });
     expect(parsed.success).toBe(true);
   });
@@ -188,6 +193,7 @@ describe("gates close by default", () => {
     const parsed = envValidationSchema.safeParse({
       DATABASE_URL: "postgresql://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "s".repeat(64),
+      DELETION_PEPPER: "p".repeat(64),
       THROTTLE_LONG_TTL: String(2_147_483_648),
     });
     expect(parsed.success).toBe(false);
@@ -303,5 +309,79 @@ describe("the pending erasure horizon has a floor", () => {
   it("refuses a horizon shorter than the link it belongs to", () => {
     expect(() => retentionFor("1")).toThrow(/PENDING_DELETION_REQUEST/);
     expect(() => retentionFor("0")).toThrow(/PENDING_DELETION_REQUEST/);
+  });
+});
+
+describe("the erasure pepper is required where it is needed", () => {
+  /**
+   * The pepper is what keeps an HMAC of an email from being reversible from the
+   * same database's other tables, so a hardened environment is refused at boot
+   * rather than at the first confirmation link. Development, test and CI keep
+   * theirs optional: erasure is not reachable there by a real caller, and a
+   * secret that cannot leave the deployer's control is better absent than
+   * committed.
+   *
+   * `NODE_ENV` unset defaults to the hardened one, so the bare parse below is
+   * the shape of a production host that never set it.
+   */
+  const base = {
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    BETTER_AUTH_SECRET: "s".repeat(64),
+  };
+
+  function hasPepperIssue(parsed: {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[] }[] };
+  }) {
+    return (
+      !parsed.success &&
+      parsed.error?.issues.some((issue) =>
+        issue.path.includes("DELETION_PEPPER"),
+      )
+    );
+  }
+
+  it("refuses a hardened environment that has no pepper", () => {
+    expect(hasPepperIssue(envValidationSchema.safeParse(base))).toBe(true);
+    expect(
+      hasPepperIssue(
+        envValidationSchema.safeParse({ ...base, NODE_ENV: "production" }),
+      ),
+    ).toBe(true);
+    expect(
+      hasPepperIssue(
+        envValidationSchema.safeParse({ ...base, NODE_ENV: "provision" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a hardened environment that has one", () => {
+    expect(
+      envValidationSchema.safeParse({
+        ...base,
+        DELETION_PEPPER: "p".repeat(64),
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts a test environment without one", () => {
+    expect(
+      envValidationSchema.safeParse({ ...base, NODE_ENV: "test" }).success,
+    ).toBe(true);
+    expect(
+      envValidationSchema.safeParse({ ...base, NODE_ENV: "development" })
+        .success,
+    ).toBe(true);
+  });
+
+  it("holds an existing pepper to the same floor as the auth secret", () => {
+    // An eight-character pepper would be as guessable as the four-character
+    // "secret" this floor exists for.
+    const pepper = envValidationSchema.shape.DELETION_PEPPER;
+
+    expect(pepper.safeParse("p").success).toBe(false);
+    expect(pepper.safeParse("p".repeat(31)).success).toBe(false);
+    expect(pepper.safeParse("p".repeat(32)).success).toBe(true);
+    expect(pepper.safeParse(undefined).success).toBe(true);
   });
 });

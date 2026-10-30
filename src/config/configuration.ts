@@ -606,6 +606,15 @@ export const envValidationSchema = z
       .positive()
       .optional(),
 
+    // ---- Account erasure ----
+    // 32 characters is the same floor better-auth's secret is held to: the
+    // pepper is the one thing that keeps an HMAC of an email from being
+    // reversible by anyone holding a dump. Optional here, and required by the
+    // refinement below wherever the environment is hardened — a production host
+    // that boots without one answers its first erasure request with a failure
+    // the deployer learns about from that request instead of from the boot log.
+    DELETION_PEPPER: z.string().min(32).optional(),
+
     // ---- Auth ----
     // No default: the factory decides between the environment and the hardened
     // one, and a default here would replace that with a flat "false".
@@ -628,6 +637,20 @@ export const envValidationSchema = z
         code: "custom",
         message: "SMTP_USER and SMTP_PASS must be set together",
         path: ["SMTP_USER"],
+      });
+    }
+
+    // The erasure trail cannot be keyed without a pepper, and an unkeyed hash
+    // of an email is reversible from any other table of the same database. A
+    // hardened environment is refused at boot rather than at the first
+    // confirmation link; development, test and CI keep theirs optional, and
+    // the e2e harness sets one.
+    if (isHardenedEnv(env.NODE_ENV) && !env.DELETION_PEPPER) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "DELETION_PEPPER is required in a hardened environment: without it the erasure trail cannot be keyed, and an unkeyed hash of an email is reversible",
+        path: ["DELETION_PEPPER"],
       });
     }
   })

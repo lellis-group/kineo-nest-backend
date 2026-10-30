@@ -23,6 +23,17 @@ export const PRESERVED_APPLICATION_STATUSES = [
 
 export interface DetachmentOutcome {
   ghostListingIds: string[];
+  /**
+   * The applications the detachment moved, whatever their status.
+   *
+   * The caller settles the undecided ones within its own transaction. A
+   * `PENDING` or `SHORTLISTED` application parked here would otherwise wait
+   * forever on a decision nobody can make — the account that would have made it
+   * is gone — and keep consuming the candidate's own application quota while it
+   * waits. An `ACCEPTED` one is a placement, not a pending question, and is
+   * left as it is.
+   */
+  applicationIds: string[];
   detachedApplications: number;
 }
 
@@ -57,6 +68,10 @@ function ghostListingIdFor(originalListingId: string): string {
  * that received it would see a row pointing at a placeholder. Both keep a real
  * row, on a listing that exists precisely to hold them.
  *
+ * Moved, not settled: what the moved applications end up being is the caller's
+ * policy. The caller reads them back from `applicationIds` and decides what an
+ * unanswered candidacy on a withdrawn listing becomes.
+ *
  * The ghosts belong to the system profile, so the purge sweep never collects them:
  * they live as long as the applications they carry, which is what should happen.
  *
@@ -86,6 +101,7 @@ export async function detachThirdPartyApplications(
   }
 
   const ghostListingIds: string[] = [];
+  const applicationIds: string[] = [];
   let detachedApplications = 0;
 
   for (const listingId of listingIds) {
@@ -104,6 +120,9 @@ export async function detachThirdPartyApplications(
     if (applications.length === 0) {
       continue;
     }
+
+    const movedIds = applications.map((application) => application.id);
+    applicationIds.push(...movedIds);
 
     const ghostId = ghostListingIdFor(listingId);
 
@@ -136,7 +155,7 @@ export async function detachThirdPartyApplications(
     detachedApplications += applications.length;
   }
 
-  return { ghostListingIds, detachedApplications };
+  return { ghostListingIds, applicationIds, detachedApplications };
 }
 
 /**

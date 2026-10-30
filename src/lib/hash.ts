@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 
+import { ServiceUnavailableException } from "@nestjs/common";
+
 /**
  * Keyed fingerprints for the account-erasure trail.
  *
@@ -21,17 +23,37 @@ export function deletionHash(value: string, pepper: string): string {
   return createHmac("sha256", pepper).update(value).digest("hex");
 }
 
+/**
+ * Raised when the pepper is absent or too short, instead of a plain `Error`.
+ *
+ * The erasure controller already documents a 503 for exactly this precondition;
+ * a plain `Error` went through the global filter as a 500, which a hardened
+ * environment rewrites into "Internal server error" — a body that names neither
+ * the cause nor the fact that the caller's inputs are fine and the installation
+ * is misconfigured. The same shape `ServiceUnavailableScaffoldError` draws for
+ * the scaffold, for the same kind of precondition.
+ *
+ * The message still tells whoever reads the log what to do, which is the only
+ * place it is visible: a hardened body does not carry it.
+ */
+export class DeletionPepperError extends ServiceUnavailableException {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeletionPepperError";
+  }
+}
+
 export function deletionPepper(env: NodeJS.ProcessEnv = process.env): string {
   const pepper = (env.DELETION_PEPPER ?? "").trim();
 
   if (!pepper) {
-    throw new Error(
+    throw new DeletionPepperError(
       "DELETION_PEPPER is required: without it the erasure trail cannot be keyed, and an unkeyed hash of an email is reversible",
     );
   }
 
   if (pepper.length < 32) {
-    throw new Error(
+    throw new DeletionPepperError(
       `DELETION_PEPPER must be at least 32 characters, got ${pepper.length}`,
     );
   }
