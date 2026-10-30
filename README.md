@@ -215,7 +215,7 @@ sequenceDiagram
     API->>DB: status=OPEN
 
     R->>API: GET /replacement-listings?specialty=...&city=...
-    API->>DB: Search OPEN listings
+    API->>DB: Search applicable listings (OPEN and IN_DISCUSSION)
     API-->>R: Paginated listings with active application count
 
     R->>API: POST /applications (listingId, message)
