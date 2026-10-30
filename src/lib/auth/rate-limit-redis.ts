@@ -72,9 +72,10 @@ export function createRedisRateLimitStorage(
         return { allowed: true, retryAfter: null };
       } catch (error) {
         // Fail open. A rate limiter that answers on nothing should not take
-        // authentication down with it; the NestJS throttler in front of these
-        // routes shares the same Redis and refuses first anyway, so this is the
-        // belt for an outage that already took out the buckles.
+        // authentication down with it; the NestJS throttler counting the same
+        // Redis fails open the same way (`common/throttle.ts`), and with both
+        // doing so, an outage costs neither piece of the stack its honest
+        // failure — its limit, which is what it may not protect anyway.
         logError("auth.rate_limit.redis_consume_failed", error);
         return { allowed: true, retryAfter: null };
       }
