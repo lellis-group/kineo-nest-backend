@@ -28,6 +28,7 @@ import {
   PRACTICE_GEO_COLUMNS,
   type PracticeGeoRow,
 } from "./geo-query";
+import { toPracticeDto } from "./practice.mapper";
 
 const EARTH_RADIUS_KM = 6_371;
 
@@ -51,7 +52,10 @@ export class PracticesService {
         }
       }
 
-      return tx.practice.create({ data: { ...createPracticeDto, ownerId } });
+      const created = await tx.practice.create({
+        data: { ...createPracticeDto, ownerId },
+      });
+      return toPracticeDto(created);
     });
   }
 
@@ -97,7 +101,7 @@ export class PracticesService {
       const total = Number(counts[0]?.total ?? 0);
 
       return {
-        data: rows,
+        data: rows.map(toPracticeDto),
         meta: paginationMeta(total, page, limit),
       };
     }
@@ -127,7 +131,7 @@ export class PracticesService {
     ]);
 
     return {
-      data,
+      data: data.map(toPracticeDto),
       meta: paginationMeta(total, page, limit),
     };
   }
@@ -135,7 +139,8 @@ export class PracticesService {
   async findMine(userId: string) {
     const ownerId = await getOwnedProfileId(this.prisma, userId);
 
-    return this.prisma.practice.findMany({ where: { ownerId } });
+    const owned = await this.prisma.practice.findMany({ where: { ownerId } });
+    return owned.map(toPracticeDto);
   }
 
   async findOne(id: string, requesterUserId?: string) {
@@ -153,7 +158,7 @@ export class PracticesService {
       }
     }
 
-    return practice;
+    return toPracticeDto(practice);
   }
 
   /**
@@ -190,7 +195,7 @@ export class PracticesService {
       throw new NotFoundException(`Practice ${id} not found`);
     }
 
-    return saved;
+    return toPracticeDto(saved);
   }
 
   /**
@@ -225,7 +230,8 @@ export class PracticesService {
         PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
       );
 
-      return tx.practice.delete({ where: { id } });
+      const deleted = await tx.practice.delete({ where: { id } });
+      return toPracticeDto(deleted);
     });
   }
 }

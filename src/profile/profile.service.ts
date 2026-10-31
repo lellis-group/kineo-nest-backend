@@ -16,6 +16,7 @@ import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
 import { FindProfilesDto } from "./dto/find-profiles.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
+import { toProfileDto } from "./profile.mapper";
 
 @Injectable()
 export class ProfileService {
@@ -31,9 +32,10 @@ export class ProfileService {
     }
 
     try {
-      return await this.prisma.profile.create({
+      const created = await this.prisma.profile.create({
         data: { ...createProfileDto, userId },
       });
+      return toProfileDto(created);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -65,7 +67,7 @@ export class ProfileService {
     ]);
 
     return {
-      data,
+      data: data.map(toProfileDto),
       meta: paginationMeta(total, page, limit),
     };
   }
@@ -81,7 +83,7 @@ export class ProfileService {
       throw new NotFoundException(`Profile ${id} not found`);
     }
 
-    return profile;
+    return toProfileDto(profile);
   }
 
   async findByUserId(userId: string) {
@@ -91,7 +93,7 @@ export class ProfileService {
       throw new NotFoundException("No profile found for this user");
     }
 
-    return profile;
+    return toProfileDto(profile);
   }
 
   /**
@@ -125,7 +127,7 @@ export class ProfileService {
         throw new NotFoundException(`Profile ${id} not found`);
       }
 
-      return saved;
+      return toProfileDto(saved);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -139,6 +141,9 @@ export class ProfileService {
 
   /**
    * Deletes a profile, unless a cascade would take somebody else's application.
+   *
+   * One serializable transaction: the ownership read, the count and the delete ran
+   * on thle, unless a cascade would take somebody else's application.
    *
    * One serializable transaction: the ownership read, the count and the delete ran
    * on three connections, so an application committed in the gap was invisible to
@@ -163,7 +168,8 @@ export class ProfileService {
       // something.
       await assertNoThirdPartyApplications(tx, id, ownedListingsFilter(id));
 
-      return tx.profile.delete({ where: { id } });
+      const deleted = await tx.profile.delete({ where: { id } });
+      return toProfileDto(deleted);
     });
   }
 }

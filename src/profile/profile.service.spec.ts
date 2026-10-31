@@ -19,6 +19,10 @@ describe("ProfileService", () => {
     profileType: "INSTALLED",
     city: "Lyon",
     rppsNumber: "101000000001",
+    // A real row carries it, and the response serializer demands it as an ISO
+    // string — the mapper reads it off whatever the storage answered.
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
   };
 
   /**
