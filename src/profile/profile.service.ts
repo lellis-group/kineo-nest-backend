@@ -18,6 +18,35 @@ import { FindProfilesDto } from "./dto/find-profiles.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { toProfileDto } from "./profile.mapper";
 
+/**
+ * The conflict a unique constraint names, translated.
+ *
+ * A `P2002` reaches these routes through two different races: the pre-check and
+ * the `create`/`update` can both lose, and they lose on *different* keys —
+ * `userId` is the profile-per-user rename of the user who double submitted,
+ * `rppsNumber` is a number somebody registered with in between. The old answer
+ * named `RPPS number` for both, which told a racing caller their profile
+ * exists while every retry answered "RPPS in use".
+ */
+function p2002Message(error: unknown): string | undefined {
+  if (
+    !(
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    )
+  ) {
+    return undefined;
+  }
+
+  const target = (error.meta as { target?: string[] | string } | undefined)
+    ?.target;
+  const fields = Array.isArray(target) ? target : [target ?? ""];
+  if (fields.includes("userId")) {
+    return "Profile already exists for this user";
+  }
+  return "RPPS number already in use";
+}
+
 @Injectable()
 export class ProfileService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -37,11 +66,9 @@ export class ProfileService {
       });
       return toProfileDto(created);
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        throw new ConflictException("RPPS number already in use");
+      const message = p2002Message(error);
+      if (message) {
+        throw new ConflictException(message);
       }
       throw error;
     }
@@ -129,11 +156,9 @@ export class ProfileService {
 
       return toProfileDto(saved);
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        throw new ConflictException("RPPS number already in use");
+      const message = p2002Message(error);
+      if (message) {
+        throw new ConflictException(message);
       }
       throw error;
     }

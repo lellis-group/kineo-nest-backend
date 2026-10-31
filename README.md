@@ -359,11 +359,20 @@ What it does, in order:
 2. Moves the applications other candidates wrote on this account's listings onto
    a ghost listing owned by the system scaffold. They are not the account
    holder's data to erase, so both their authors and the practices that received
-   them keep a real row.
+   them keep a real row. A placement (`ACCEPTED` on a `FILLED` listing) is never
+   moved: the candidate is waiting on that listing, and it carries no undecided
+   answer anyway.
 3. Anonymizes: the address becomes `erased-<fingerprint>@deleted.invalid`, the
    name and image go, the profile loses its RPPS number, city and coordinates, the
-   listings lose their title, description and dates and leave circulation, the
-   account's own applications are settled so their listings recalculate.
+   account's own applications are settled so their listings recalculate. A
+   listing still circulating loses its title, description and dates and stops
+   being shown (`CLOSED_NO_CANDIDATE`); one already past its end (`CLOSED`,
+   `CANCELLED`, a protected placement) is scrubbed of the owner's words only —
+   the status it was closed with is part of the trail.
+   The candidacies parked on a ghost that nobody can decide any more
+   (`PENDING`, `SHORTLISTED`) are settled `REJECTED` with `decisionSource =
+   SYSTEM`: the account that would have answered is gone, and an open row would
+   queue the candidate's own application quota for nothing.
 4. Drops the sessions and credentials, so the erasure takes effect immediately.
 5. Sets `deletedAt`. The hourly sweep drops the row after
    `ACCOUNT_PURGE_GRACE_DAYS`.
@@ -371,7 +380,11 @@ What it does, in order:
 A listing holding an **accepted placement** is deliberately left alone: the
 placement was agreed with a candidate who is still waiting for an answer. It
 leaves circulation rather than being scrubbed, and the response says how many
-there are.
+there are. That is the policy the erasure chose — "F2, option A" in the audit
+conversation that drove this codebase's 2026 hardening: never detach an
+`ACCEPTED` application from a `FILLED` listing, because the placement is a
+verifiable fact and `accept` has already settled the other actives that could
+have been stranded behind it.
 
 The trail (`DataDeletionRequest`) stores two keyed fingerprints, not the
 identifier:
@@ -435,6 +448,15 @@ WHERE "userIdHash" IS NULL;
   unit spec would silently assert against the developer's own database.
 - Every list endpoint orders by `createdAt` then `id`. `createdAt` is not unique,
   and offset pagination over a non-total order repeats and skips rows.
+- `prisma/schema.prisma` runs with `previewFeatures = ["partialIndexes"]` — the
+  partial unique indexes the erasure's one-`PENDING`-per-fingerprint rule rests
+  on. It is production code on a preview flag (Prisma 7.9.1 at the time of
+  writing): check the release notes at every upgrade before touching it.
+- The public feed answers the *applicable* set — `OPEN` **and** `IN_DISCUSSION`
+  (`src/common/listing-status.ts`), the statuses `applications.create` accepts —
+  and so do the facets, the map and the anonymous link. A `FULL` posting is out
+  by construction, `RECRUITING_LISTING_STATUSES` is the wider console set, and
+  the gap between the two is the product's, not an accident.
 
 ## 11. Notes for AI Takeover
 

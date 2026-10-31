@@ -312,6 +312,24 @@ describe("the pending erasure horizon has a floor", () => {
   });
 });
 
+/**
+ * Whether the parse refused for a *named* reason, rather than a wrong value
+ * elsewhere in the environment — the helper the pepper and lifecycle-knob
+ * suites share.
+ */
+function hasNamedIssue(
+  parsed: {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[] }[] };
+  },
+  key: PropertyKey,
+) {
+  return (
+    !parsed.success &&
+    (parsed.error?.issues ?? []).some((issue) => issue.path.includes(key))
+  );
+}
+
 describe("the erasure pepper is required where it is needed", () => {
   /**
    * The pepper is what keeps an HMAC of an email from being reversible from the
@@ -333,12 +351,7 @@ describe("the erasure pepper is required where it is needed", () => {
     success: boolean;
     error?: { issues: { path: PropertyKey[] }[] };
   }) {
-    return (
-      !parsed.success &&
-      parsed.error?.issues.some((issue) =>
-        issue.path.includes("DELETION_PEPPER"),
-      )
-    );
+    return hasNamedIssue(parsed, "DELETION_PEPPER");
   }
 
   it("refuses a hardened environment that has no pepper", () => {
@@ -383,5 +396,79 @@ describe("the erasure pepper is required where it is needed", () => {
     expect(pepper.safeParse("p".repeat(31)).success).toBe(false);
     expect(pepper.safeParse("p".repeat(32)).success).toBe(true);
     expect(pepper.safeParse(undefined).success).toBe(true);
+  });
+});
+
+describe("the lifecycle knobs fail in the same boot-time document", () => {
+  /**
+   * Three lifecycle variables used to be validated later, in three readers with
+   * three different error shapes — one of the validation fails at the schema,
+   * one at the factory read, one only when the first consumer resolved it. The
+   * schema now carries them, so a bad value is one named issue at boot, and the
+   * pending floor lives here too rather than in a function that only ran when
+   * the configuration happened to be resolved.
+   */
+  const base = {
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    BETTER_AUTH_SECRET: "s".repeat(64),
+    DELETION_PEPPER: "p".repeat(64),
+  };
+
+  it("accepts every knob at its sane value", () => {
+    expect(
+      envValidationSchema.safeParse({
+        ...base,
+        DATABASE_POOL_MAX: "20",
+        ACCOUNT_PURGE_GRACE_DAYS: "30",
+        PENDING_DELETION_REQUEST_RETENTION_DAYS: "30",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses a pool ceiling that cannot hold a connection", () => {
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({ ...base, DATABASE_POOL_MAX: "0" }),
+        "DATABASE_POOL_MAX",
+      ),
+    ).toBe(true);
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({ ...base, DATABASE_POOL_MAX: "abc" }),
+        "DATABASE_POOL_MAX",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a purge grace of less than a day", () => {
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({
+          ...base,
+          ACCOUNT_PURGE_GRACE_DAYS: "0",
+        }),
+        "ACCOUNT_PURGE_GRACE_DAYS",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a pending erasure horizon that outruns its own link", () => {
+    // The floor the factory applied under the same reasoning: a one-day
+    // horizon sweeps the request while its confirmation link is still live.
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({
+          ...base,
+          PENDING_DELETION_REQUEST_RETENTION_DAYS: "1",
+        }),
+        "PENDING_DELETION_REQUEST_RETENTION_DAYS",
+      ),
+    ).toBe(true);
+    expect(
+      envValidationSchema.safeParse({
+        ...base,
+        PENDING_DELETION_REQUEST_RETENTION_DAYS: "2",
+      }).success,
+    ).toBe(true);
   });
 });

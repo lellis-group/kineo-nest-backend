@@ -33,10 +33,31 @@ export interface RedisRateLimitStorage {
   close(): Promise<void>;
 }
 
+/**
+ * The one storage this process holds for better-auth's buckets, or null —
+ * development and CI build none, and a second `createAuth` in one process would
+ * share this instead of opening a second connection per instance.
+ */
+let activeStorage: RedisRateLimitStorage | null = null;
+
+/**
+ * Hangs up the shared better-auth Redis, and clears it.
+ *
+ * The caller does this when their application is shutting down; nothing else
+ * does, since better-auth holds the storage only as configuration and never
+ * closes it itself. Safe to call from a lifecycle hook at most once per
+ * shutdown, whatever the competitive wiring produced.
+ */
+export async function closeAuthRateLimitStorage(): Promise<void> {
+  const storage = activeStorage;
+  activeStorage = null;
+  await storage?.close();
+}
+
 export function createRedisRateLimitStorage(
   redis: Redis,
 ): RedisRateLimitStorage {
-  return {
+  const storage: RedisRateLimitStorage = {
     async consume(key, rule) {
       const namespaced = `${KEY_PREFIX}${key}`;
 
@@ -85,4 +106,6 @@ export function createRedisRateLimitStorage(
       await redis.quit();
     },
   };
+  activeStorage = storage;
+  return storage;
 }

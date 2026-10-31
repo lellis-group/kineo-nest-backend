@@ -606,6 +606,19 @@ export const envValidationSchema = z
       .positive()
       .optional(),
 
+    // The three lifecycle knobs the factory also reads, named here so a bad
+    // value fails in the one boot-time document instead of wherever the
+    // factory's own reader happens to be called from. The floor below keeps a
+    // horizon that cannot outrun its own confirmation link; the rest of the
+    // ranges are the factory's to refine.
+    ACCOUNT_PURGE_GRACE_DAYS: z.coerce.number().int().positive().optional(),
+    PENDING_DELETION_REQUEST_RETENTION_DAYS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional(),
+    DATABASE_POOL_MAX: z.coerce.number().int().positive().optional(),
+
     // ---- Account erasure ----
     // 32 characters is the same floor better-auth's secret is held to: the
     // pepper is the one thing that keeps an HMAC of an email from being
@@ -651,6 +664,21 @@ export const envValidationSchema = z
         message:
           "DELETION_PEPPER is required in a hardened environment: without it the erasure trail cannot be keyed, and an unkeyed hash of an email is reversible",
         path: ["DELETION_PEPPER"],
+      });
+    }
+
+    // The confirmation link lives 24 hours. A shorter horizon sweeps the pending
+    // erasure row while its own link is still usable, and every confirmation
+    // after that finds no request and refuses — the account can then never be
+    // erased by that link, and the only way out is to ask again.
+    if (
+      env.PENDING_DELETION_REQUEST_RETENTION_DAYS !== undefined &&
+      env.PENDING_DELETION_REQUEST_RETENTION_DAYS < MIN_PENDING_RETENTION_DAYS
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `PENDING_DELETION_REQUEST_RETENTION_DAYS must be at least ${MIN_PENDING_RETENTION_DAYS}, got: ${env.PENDING_DELETION_REQUEST_RETENTION_DAYS}`,
+        path: ["PENDING_DELETION_REQUEST_RETENTION_DAYS"],
       });
     }
   })
