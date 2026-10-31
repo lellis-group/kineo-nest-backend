@@ -19,6 +19,10 @@ describe("ProfileService", () => {
     profileType: "INSTALLED",
     city: "Lyon",
     rppsNumber: "101000000001",
+    // A real row carries it, and the response serializer demands it as an ISO
+    // string — the mapper reads it off whatever the storage answered.
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
   };
 
   /**
@@ -184,6 +188,33 @@ describe("ProfileService", () => {
       await expect(
         new ProfileService(prisma).create("user-1", {} as never),
       ).rejects.toThrow("RPPS number already in use");
+    });
+
+    it("names the user race on the key it lost, not the RPPS one", async () => {
+      // Both writes go through one guard clause, and before it looked the
+      // target up, the pre-check's own race — two first submissions of one
+      // user — also read "RPPS number already in use". A caller retrying that
+      // advice then heard the wrong story forever: their RPPS was fine, the
+      // profile was the thing that had come into existence.
+      const prisma = {
+        profile: {
+          findUnique: async () => null,
+          create: async () => {
+            throw new Prisma.PrismaClientKnownRequestError(
+              "Unique constraint failed",
+              {
+                code: "P2002",
+                clientVersion: "test",
+                meta: { target: ["User", "userId", "Profile_userId_key"] },
+              },
+            );
+          },
+        },
+      } as unknown as PrismaService;
+
+      await expect(
+        new ProfileService(prisma).create("user-1", {} as never),
+      ).rejects.toThrow("Profile already exists for this user");
     });
   });
 

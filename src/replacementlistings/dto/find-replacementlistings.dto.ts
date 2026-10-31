@@ -54,7 +54,7 @@ const listingFilterShape = {
     .enum(ListingStatus)
     .optional()
     .describe(
-      "Filter by status. Only meaningful on the caller's own listings: the public feed is always OPEN.",
+      "Filter by status. Only meaningful on the caller's own listings: the public feed is always the applicable set, OPEN and IN_DISCUSSION.",
     ),
   startDateFrom: z.iso
     .datetime()

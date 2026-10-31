@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, type OnApplicationShutdown } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import {
   APP_FILTER,
@@ -25,6 +25,7 @@ import {
   createAuth,
   readAuthEnvFromConfig,
 } from "./lib/auth";
+import { closeAuthRateLimitStorage } from "./lib/auth/rate-limit-redis";
 import { PracticesModule } from "./practices/practices.module";
 import { PrismaModule } from "./prisma.module";
 import { PrismaService } from "./prisma.service";
@@ -33,6 +34,21 @@ import { ReplacementlistingsModule } from "./replacementlistings/replacementlist
 
 /** The request body ceiling, shared by the JSON and the form parser. */
 const BODY_LIMIT = "100kb";
+
+/**
+ * The life of the better-auth connection to Redis.
+ *
+ * The rate-limit storage is built inside `createAuth` and handed there as
+ * configuration, so nothing else in the container holds the object that ought
+ * to call its own `.close()` — which is why the graceful-shutdown path hung up
+ * only where `process.exit` cut it short. The hook does it, and it is registered
+ * as a plain provider so `app.close()` reaches it in tests as on a signal.
+ */
+class AuthRateLimitShutdown implements OnApplicationShutdown {
+  onApplicationShutdown() {
+    return closeAuthRateLimitStorage();
+  }
+}
 
 @Module({
   imports: [
@@ -87,6 +103,7 @@ const BODY_LIMIT = "100kb";
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
     { provide: APP_GUARD, useClass: TokenAwareThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
+    AuthRateLimitShutdown,
   ],
 })
 export class AppModule {}

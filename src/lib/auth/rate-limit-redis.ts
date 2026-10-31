@@ -33,10 +33,31 @@ export interface RedisRateLimitStorage {
   close(): Promise<void>;
 }
 
+/**
+ * The one storage this process holds for better-auth's buckets, or null —
+ * development and CI build none, and a second `createAuth` in one process would
+ * share this instead of opening a second connection per instance.
+ */
+let activeStorage: RedisRateLimitStorage | null = null;
+
+/**
+ * Hangs up the shared better-auth Redis, and clears it.
+ *
+ * The caller does this when their application is shutting down; nothing else
+ * does, since better-auth holds the storage only as configuration and never
+ * closes it itself. Safe to call from a lifecycle hook at most once per
+ * shutdown, whatever the competitive wiring produced.
+ */
+export async function closeAuthRateLimitStorage(): Promise<void> {
+  const storage = activeStorage;
+  activeStorage = null;
+  await storage?.close();
+}
+
 export function createRedisRateLimitStorage(
   redis: Redis,
 ): RedisRateLimitStorage {
-  return {
+  const storage: RedisRateLimitStorage = {
     async consume(key, rule) {
       const namespaced = `${KEY_PREFIX}${key}`;
 
@@ -72,9 +93,10 @@ export function createRedisRateLimitStorage(
         return { allowed: true, retryAfter: null };
       } catch (error) {
         // Fail open. A rate limiter that answers on nothing should not take
-        // authentication down with it; the NestJS throttler in front of these
-        // routes shares the same Redis and refuses first anyway, so this is the
-        // belt for an outage that already took out the buckles.
+        // authentication down with it; the NestJS throttler counting the same
+        // Redis fails open the same way (`common/throttle.ts`), and with both
+        // doing so, an outage costs neither piece of the stack its honest
+        // failure — its limit, which is what it may not protect anyway.
         logError("auth.rate_limit.redis_consume_failed", error);
         return { allowed: true, retryAfter: null };
       }
@@ -84,4 +106,6 @@ export function createRedisRateLimitStorage(
       await redis.quit();
     },
   };
+  activeStorage = storage;
+  return storage;
 }

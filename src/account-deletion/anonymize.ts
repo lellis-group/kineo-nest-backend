@@ -1,5 +1,9 @@
 import { ownedListingsFilter } from "../common/application-guard";
-import { ACTIVE_APPLICATION_STATUSES } from "../common/listing-status";
+import {
+  ACTIVE_APPLICATION_STATUSES,
+  isTerminalListingStatus,
+  recalcListingStatus,
+} from "../common/listing-status";
 import type { Prisma } from "../generated/prisma/client";
 import type { PrismaService } from "../prisma.service";
 import { verificationRowsForIdentity } from "./deletion-token";
@@ -52,7 +56,7 @@ export function anonymizedEmail(userIdHash: string): string {
 export interface ErasureOutcome {
   /** Third-party applications moved onto the ghost listing rather than destroyed. */
   detachedApplications: number;
-  /** Own listings taken out of circulation. */
+  /** Own listings rewritten out of circulation (already-terminal ones excluded). */
   anonymizedListings: number;
   /** Own applications settled so their listing recalculates. */
   settledApplications: number;
@@ -90,7 +94,7 @@ export async function anonymizeAccount(
     ? ownedListingsFilter(profile.id)
     : { id: NO_SUCH_LISTING_ID };
 
-  const listingIds = await prisma.replacementListing.findMany({
+  const listings = await prisma.replacementListing.findMany({
     where: practiceFilter,
     select: { id: true, status: true },
   });
@@ -98,27 +102,56 @@ export async function anonymizeAccount(
   // Before anything is scrubbed: the applications other candidates wrote are
   // moved onto a ghost listing, so neither they nor the practice that received
   // them lose the thread.
-  const detachment = profile
-    ? await detachThirdPartyApplications(prisma, {
-        ownerProfileId: profile.id,
-        listingIds: listingIds.map((listing) => listing.id),
-      })
-    : { ghostListingIds: [], detachedApplications: 0 };
-
-  // A listing holding an accepted placement stays as it is: the placement is a
-  // real one, agreed with a candidate, and the candidate is still waiting for an
-  // answer. It leaves circulation instead of being scrubbed.
-  const protectedListingIds = listingIds
-    .filter((listing) => listing.status === "FILLED")
-    .map((listing) => listing.id);
-
-  const openListingIds = listingIds
+  //
+  // A listing holding an accepted placement is left out of the move: the
+  // candidate waiting on it is waiting for *that* listing — its practice, its
+  // dates — and parking their application on a `1970` placeholder would sever
+  // the thread from the placement it agreed on. A FILLED listing carries no
+  // active application — `accept` settles the others the moment it lands — so
+  // nothing undecided is stranded behind this.
+  const detachableListingIds = listings
     .filter((listing) => listing.status !== "FILLED")
     .map((listing) => listing.id);
 
-  if (openListingIds.length > 0) {
+  const detachment = profile
+    ? await detachThirdPartyApplications(prisma, {
+        ownerProfileId: profile.id,
+        listingIds: detachableListingIds,
+      })
+    : { ghostListingIds: [], applicationIds: [], detachedApplications: 0 };
+
+  // A candidacy the erased account would have decided — PENDING or SHORTLISTED
+  // — can never be decided now, and one left open on its ghost would sit there
+  // queueing the candidate's own application quota for nothing. Settled here,
+  // inside the same transaction, with the decision attributed to the system
+  // rather than to a practice that never answered; the row stays readable in
+  // `findMine`, which is what keeps the thread those candidates were told they
+  // keep.
+  if (detachment.applicationIds.length > 0) {
+    await prisma.application.updateMany({
+      where: {
+        id: { in: detachment.applicationIds },
+        status: { in: ACTIVE_APPLICATION_STATUSES },
+      },
+      data: {
+        status: "REJECTED",
+        decisionSource: "SYSTEM",
+        rejectionReason: null,
+        respondedAt: new Date(),
+      },
+    });
+  }
+
+  // A listing still looking for a locum — DRAFT, OPEN, IN_DISCUSSION, FULL —
+  // leaves circulation: nobody can answer a posting whose author is gone, and
+  // a scrubbed title alone would leave it findable anyway.
+  const circulatingListingIds = listings
+    .filter((listing) => !isTerminalListingStatus(listing.status))
+    .map((listing) => listing.id);
+
+  if (circulatingListingIds.length > 0) {
     await prisma.replacementListing.updateMany({
-      where: { id: { in: openListingIds } },
+      where: { id: { in: circulatingListingIds } },
       data: {
         title: ANONYMIZED_LISTING_TITLE,
         description: ANONYMIZED_DESCRIPTION,
@@ -128,17 +161,41 @@ export async function anonymizeAccount(
         urgent: false,
       },
     });
+  }
 
-    await prisma.application.updateMany({
-      where: { listingId: { in: openListingIds }, status: "PENDING" },
+  // Already-terminal ones keep the status their owner chose: rewriting a
+  // CANCELLED listing to CLOSED_NO_CANDIDATE used to erase the difference the
+  // owner drew between "closed after a replacement" and "withdrawn", and
+  // history is part of what an accountability record is for. What goes is the
+  // owner's own words, and nothing else about the row. This sweep covers a
+  // protected placement too: the placement stays, the erased person's text
+  // does not.
+  const sealedListingIds = listings
+    .filter((listing) => isTerminalListingStatus(listing.status))
+    .map((listing) => listing.id);
+
+  if (sealedListingIds.length > 0) {
+    await prisma.replacementListing.updateMany({
+      where: { id: { in: sealedListingIds } },
       data: {
-        status: "REJECTED",
-        decisionSource: "SYSTEM",
-        rejectionReason: null,
-        respondedAt: new Date(),
+        title: ANONYMIZED_LISTING_TITLE,
+        description: ANONYMIZED_DESCRIPTION,
+        urgent: false,
       },
     });
   }
+
+  // The listings this account's own applications sit on, read before the
+  // settling below so the ids survive the write that makes them ineligible.
+  const ownActiveListings = profile
+    ? await prisma.application.findMany({
+        where: {
+          applicantId: profile.id,
+          status: { in: ACTIVE_APPLICATION_STATUSES },
+        },
+        select: { listingId: true },
+      })
+    : [];
 
   const settledApplications = await prisma.application.updateMany({
     where: profile
@@ -152,6 +209,19 @@ export async function anonymizeAccount(
       respondedAt: new Date(),
     },
   });
+
+  // The recount the settled status promises. A FULL listing whose freed slot
+  // rests on this account's withdrawn application stays FULL forever without
+  // it — refusing every candidate although a place re-opened — and an
+  // IN_DISCUSSION one keeps looking undecided to a feed that only shows the
+  // statuses a candidate may answer. The recount runs inside this same
+  // transaction, like every other write here.
+  const recountedListingIds = [
+    ...new Set(ownActiveListings.map(({ listingId }) => listingId)),
+  ];
+  for (const listingId of recountedListingIds) {
+    await recalcListingStatus(prisma, listingId);
+  }
 
   if (profile) {
     await prisma.profile.update({
@@ -212,10 +282,16 @@ export async function anonymizeAccount(
     where: verificationRowsForIdentity(email, userId),
   });
 
+  // A listing that carried a placement is not counted as anonymized: it did
+  // not leave circulation, only its words did.
+  const placementListingIds = listings
+    .filter((listing) => listing.status === "FILLED")
+    .map((listing) => listing.id);
+
   return {
     detachedApplications: detachment.detachedApplications,
-    anonymizedListings: openListingIds.length,
+    anonymizedListings: circulatingListingIds.length,
     settledApplications: settledApplications.count,
-    protectedPlacements: protectedListingIds.length,
+    protectedPlacements: placementListingIds.length,
   };
 }

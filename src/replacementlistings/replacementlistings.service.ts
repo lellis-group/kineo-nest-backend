@@ -12,6 +12,7 @@ import {
 } from "../common/application-guard";
 import {
   ACTIVE_APPLICATION_STATUSES,
+  APPLICABLE_LISTING_STATUSES,
   IN_PLAY_LISTING_STATUSES,
   isTerminalListingStatus,
   MANUAL_LISTING_STATUSES,
@@ -519,13 +520,17 @@ export class ReplacementlistingsService {
 
   async findAll(filters: FindReplacementListingsDto) {
     const { page, limit, skip } = paginate(filters);
-    // The public feed is OPEN whatever the caller asked for: a status filter on
-    // a listing somebody else owns would turn the feed into a way to read the
-    // statuses of postings still in circulation.
+    // The public feed is the applicable set whatever the caller asked for: a
+    // status filter on a listing somebody else owns would turn the feed into a
+    // way to read the statuses of postings still in circulation. `OPEN` alone
+    // used to be the gate here, but `applications.create` accepts
+    // `IN_DISCUSSION` too — a listing that took a first candidate and still has
+    // room disappeared from the feed the moment its next application landed,
+    // while its direct link kept answering: the contract contradicted itself.
     const { status: _statusFilter, ...publicFilters } = filters;
     const where: Prisma.ReplacementListingWhereInput = {
       ...this.buildListingsWhere(publicFilters, { publicOnly: true }),
-      status: "OPEN",
+      status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
     const [data, total] = await Promise.all([
@@ -575,9 +580,11 @@ export class ReplacementlistingsService {
   async findFacets(filters: FindReplacementListingsDto) {
     const { specialty: _specialty, status: _status, ...scope } = filters;
 
+    // Same set as the feed: the panels count what the feed shows, and an
+    // `IN_DISCUSSION` opening the feed counts must not vanish from its facets.
     const where: Prisma.ReplacementListingWhereInput = {
       ...this.buildListingsWhere(scope, { publicOnly: true }),
-      status: "OPEN",
+      status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
     const [grouped, urgent] = await Promise.all([
@@ -632,7 +639,7 @@ export class ReplacementlistingsService {
   async findPlaces(filters: FindPlacesDto, maxPlaces: number) {
     const where: Prisma.ReplacementListingWhereInput = {
       ...this.buildListingsWhere(filters, { publicOnly: true }),
-      status: "OPEN",
+      status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
     const grouped = await this.prisma.replacementListing.groupBy({
@@ -643,7 +650,9 @@ export class ReplacementlistingsService {
 
     const ranked = grouped
       .map((group) => ({ practiceId: group.practiceId, count: group._count }))
-      .sort((a, b) => b.count - a.count);
+      .sort(
+        (a, b) => b.count - a.count || a.practiceId.localeCompare(b.practiceId),
+      );
 
     // Every practice involved, not only the busiest ones: which of them has no
     // coordinates decides both the map and the "N could not be placed" line,
@@ -688,6 +697,13 @@ export class ReplacementlistingsService {
     const previews = await this.prisma.replacementListing.findMany({
       where: { ...where, practiceId: { in: placeIds } },
       select: PLACE_LISTING_SELECT,
+      // The popup shows the first four (`assemblePlaces` slices), so the read
+      // has to carry an order — the database does not promise one, and which
+      // four of a place its preview showed used to change with every
+      // refresh. `startDate asc` puts the soonest opening first, the sense the
+      // feed itself opens with, and `id desc` breaks the ties between two
+      // postings with the same date deterministically.
+      orderBy: [{ startDate: "asc" }, { id: "desc" }],
     });
 
     return {
@@ -719,7 +735,7 @@ export class ReplacementlistingsService {
   async findPageOf(id: string, filters: FindPageOfDto) {
     const scope: Prisma.ReplacementListingWhereInput = {
       ...this.buildListingsWhere(filters, { publicOnly: true }),
-      status: "OPEN",
+      status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
     const target = await this.prisma.replacementListing.findFirst({
@@ -879,7 +895,12 @@ export class ReplacementlistingsService {
       throw new NotFoundException(`Replacement listing ${id} not found`);
     }
 
-    if (listing.status !== "OPEN") {
+    // Anonymous readers reach the applicable set, and nothing beyond it: a
+    // listing the feed shows must answer its direct link too, and the link the
+    // feed's first candidate produced used to answer 404 with the OPEN-only
+    // gate. Everyone else — owner or not — still needs to identify themselves
+    // to read a listing outside that set.
+    if (!APPLICABLE_LISTING_STATUSES.includes(listing.status)) {
       if (!requesterUserId) {
         throw new NotFoundException(`Replacement listing ${id} not found`);
       }

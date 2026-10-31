@@ -82,8 +82,12 @@ function suiteNameFor(file: string, taken: Map<string, string>): string {
  *
  * 17 after `proxy-ip` — the better-auth side of proxy-aware IP tracking, which
  * no other suite was positioned to check.
+ *
+ * 18 after `openapi` — the document swagger mounts only outside a hardened
+ * environment, which is where the frontend reads it; nothing else would notice
+ * a schema the generator refuses.
  */
-const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 17);
+const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 18);
 
 const suites = suitesIn(SRC).sort();
 if (suites.length === 0) {

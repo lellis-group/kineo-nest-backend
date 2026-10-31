@@ -7,8 +7,10 @@ import {
   THROTTLER_SKIP,
   THROTTLER_TTL,
 } from "@nestjs/throttler/dist/throttler.constants";
+import type { ThrottlerStorageRecord } from "@nestjs/throttler/dist/throttler-storage-record.interface";
 import {
   DELETION_THROTTLE_KEY,
+  FailOpenThrottlerStorage,
   THROTTLE_NAMES,
   ThrottleDeletion,
   ThrottleWithConfig,
@@ -146,6 +148,103 @@ describe("throttlerModuleOptions", () => {
       new Reflector(),
     );
 
-    expect(options.storage).toBeInstanceOf(ThrottlerStorageRedisService);
+    // The storage is wrapped: what the guard reads through is the fail-open
+    // surrogate, whose own suite pins what it answers when Redis is gone.
+    expect(options.storage).toBeInstanceOf(FailOpenThrottlerStorage);
+  });
+});
+
+describe("FailOpenThrottlerStorage", () => {
+  /** An inner storage the tests codify a verdict for, without any Redis. */
+  function innerThat(
+    behavior: { throws?: Error; record?: ThrottlerStorageRecord } = {},
+  ): ThrottlerStorageRedisService {
+    return {
+      redis: {},
+      increment: async () => {
+        if (behavior.throws) {
+          throw behavior.throws;
+        }
+        return (
+          behavior.record ?? {
+            totalHits: 1,
+            timeToExpire: 999,
+            isBlocked: false,
+            timeToBlockExpire: 0,
+          }
+        );
+      },
+      onModuleDestroy: async () => undefined,
+    } as unknown as ThrottlerStorageRedisService;
+  }
+
+  const CALL = ["key", 60_000, 5, 30_000, "short"] as const;
+
+  it("counts what Redis counted while it answers", async () => {
+    // The wrapper is transparent on the path requests take on an ordinary
+    // day: the block decision and the hit count must be exactly Redis's.
+    const storage = new FailOpenThrottlerStorage(
+      innerThat({
+        record: {
+          totalHits: 4,
+          timeToExpire: 55_000,
+          isBlocked: true,
+          timeToBlockExpire: 3_000,
+        },
+      }),
+    );
+
+    expect(await storage.increment(...CALL)).toEqual({
+      totalHits: 4,
+      timeToExpire: 55_000,
+      isBlocked: true,
+      timeToBlockExpire: 3_000,
+    });
+  });
+
+  it("lets the request through when Redis refuses, and keeps its own answer out of the process", async () => {
+    // `ThrottlerStorageRedisService` raises whatever Redis raised, and the
+    // guard calls `increment` on every request — a global guard means a dead
+    // Redis answers the whole API with 500, `/health` included. The answer
+    // below cannot throttle anyone: no hit is counted and nobody is blocked,
+    // which is the load an outage may not protect anyway.
+    const outage = new Error("Connection is closed.");
+    const storage = new FailOpenThrottlerStorage(innerThat({ throws: outage }));
+
+    expect(await storage.increment(...CALL)).toEqual({
+      totalHits: 0,
+      timeToExpire: 0,
+      isBlocked: false,
+      timeToBlockExpire: 0,
+    });
+  });
+
+  it("exposes the connection the inner service holds", () => {
+    // The guard never touches `redis` itself today, but the `ThrottlerStorage`
+    // contract carries it — and whatever speaks to this storage next should
+    // see the same Redis, not a proxy that owns a second connection.
+    const fake = innerThat();
+    const storage = new FailOpenThrottlerStorage(fake);
+
+    expect(storage.redis).toBe(fake.redis);
+  });
+
+  it("alive until the module's shutdown hook lets the inner service quit", async () => {
+    const calls: string[] = [];
+    const exited = {
+      redis: {},
+      onModuleDestroy: async () => {
+        calls.push("inner quit");
+      },
+    };
+    const storage = new FailOpenThrottlerStorage(
+      exited as unknown as ThrottlerStorageRedisService,
+    );
+
+    await storage.onModuleDestroy();
+
+    // The wrapper does not answer before the inner disconnect has: a teardown
+    // that returns early leaves the socket half-open.
+    expect(calls).toEqual(["inner quit"]);
   });
 });

@@ -290,6 +290,54 @@ describe("the owner-side lifecycle of a listing", () => {
     expect(pageOf.body).toEqual({ page: 1 });
   });
 
+  it("keeps a listing on the feed after its first application", async () => {
+    // The contract this pins: `applications.create` accepts a listing in
+    // `IN_DISCUSSION`, so a posting that took a first candidate without
+    // filling every slot is still open to the next one — and the public reads
+    // used to contradict that. `OPEN` was the gate on the feed, the facets,
+    // the map and the anonymous link, so the first application made the
+    // posting vanish from every one of them while it went on accepting
+    // candidacies. The feed froze with statuses it could not be answered for.
+    const owner = await seedOwner();
+    const candidate = await seedCandidate("candidate");
+    const listing = await seedListingRow(owner.profileId, owner.practiceId);
+
+    const applied = await request(fx.baseUrl)
+      .post("/applications")
+      .set("Cookie", await signIn(fx.baseUrl, candidate.email, PASSWORD))
+      .send({ listingId: listing.id, message: "I am available." });
+    expect(applied.status).toBe(201);
+
+    // What the recount recorded — the listing left `OPEN` without leaving
+    // circulation.
+    const after = await fx.prisma.replacementListing.findUnique({
+      where: { id: listing.id },
+      select: { status: true },
+    });
+    expect(after?.status).toBe("IN_DISCUSSION");
+
+    const feed = await request(fx.baseUrl).get("/replacement-listings");
+    expect(feed.status).toBe(200);
+    expect(feed.body.data).toMatchObject([
+      { id: listing.id, status: "IN_DISCUSSION" },
+    ]);
+
+    const facets = await request(fx.baseUrl).get(
+      "/replacement-listings/facets",
+    );
+    expect(facets.status).toBe(200);
+    expect(facets.body).toMatchObject({ total: 1 });
+
+    const direct = await request(fx.baseUrl).get(
+      `/replacement-listings/${listing.id}`,
+    );
+    expect(direct.status).toBe(200);
+    expect(direct.body).toMatchObject({
+      id: listing.id,
+      status: "IN_DISCUSSION",
+    });
+  });
+
   it("refuses to publish a listing that is not a draft", async () => {
     const owner = await seedOwner();
     const { status, body } = await createListing(

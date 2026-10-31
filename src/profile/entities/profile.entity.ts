@@ -14,8 +14,8 @@ export const ProfileSchema = z.object({
   city: z.string().nullable(),
   latitude: z.number().nullable(),
   longitude: z.number().nullable(),
-  createdAt: z.date(),
-  updatedAt: z.date(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 
 export class Profile extends createZodDto(ProfileSchema) {}

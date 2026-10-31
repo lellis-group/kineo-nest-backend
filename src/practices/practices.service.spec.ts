@@ -17,6 +17,9 @@ describe("PracticesService", () => {
     isPublic: true,
     name: "Cabinet Lyon",
     city: "Lyon",
+    // A real row carries it, and the response serializer demands it as an ISO
+    // string — the mapper reads it off whatever the storage answered.
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
   };
 
   function configFor(limits?: number) {

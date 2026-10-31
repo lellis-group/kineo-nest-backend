@@ -200,12 +200,18 @@ describe("ReplacementlistingsService", () => {
     expect(result.id).toBe("listing-1");
   });
 
-  it("allows anonymous users to view an OPEN listing", async () => {
+  it("allows anonymous users to view an applicable listing, IN_DISCUSSION included", async () => {
+    // The feed carries `IN_DISCUSSION`: `applications.create` accepts the
+    // status, so a listing that took a first candidate without filling every
+    // slot is still open to the next one. Its direct link used to answer 404
+    // while the feed it came from kept showing it — a contract the contract
+    // contradicted.
     const prisma = {
       replacementListing: {
         findUnique: async () => ({
-          ...openListing,
-          _count: { applications: 0 },
+          ...listing,
+          status: "IN_DISCUSSION",
+          _count: { applications: 1 },
         }),
       },
     } as unknown as PrismaService;
@@ -217,7 +223,7 @@ describe("ReplacementlistingsService", () => {
     expect(result.id).toBe("listing-1");
   });
 
-  it("blocks unauthenticated access to non-OPEN listings", async () => {
+  it("blocks unauthenticated access to listings outside the applicable set", async () => {
     const prisma = {
       replacementListing: {
         findUnique: async () => ({ ...listing, _count: { applications: 0 } }),
@@ -610,7 +616,7 @@ describe("ReplacementlistingsService", () => {
       expect(askedWhere).not.toHaveProperty("OR");
     });
 
-    it("orders the postings the reader asked for, not the server's default", async () => {
+    it("orders the previews deterministically, whatever the reader's sort", async () => {
       let askedOrderBy: unknown;
       const svc = service({
         replacementListing: {
@@ -623,12 +629,46 @@ describe("ReplacementlistingsService", () => {
         practice: { findMany: async () => [] },
       });
 
-      await svc.findPlaces({ sort: "startDate" }, 200);
+      await svc.findPlaces({ sort: "urgent" }, 200);
 
-      // The map's previews are no longer ordered by the reader's sort — nothing
-      // in the map depends on it any more. The reader's *filters* still are, and
-      // that is the other half of the test above.
-      expect(askedOrderBy).toBeUndefined();
+      // The popup slices four previews off whatever order the read returns,
+      // and the database does not promise an order — so which four a place
+      // previewed used to change between two refreshes. The read now carries
+      // its own order, always the same one: soonest opening first, then the id
+      // descending to break ties.
+      expect(askedOrderBy).toEqual([{ startDate: "asc" }, { id: "desc" }]);
+    });
+
+    it("breaks ranking ties between practices deterministically", async () => {
+      const svc = service({
+        replacementListing: {
+          groupBy: async () => [
+            { practiceId: "practice-b", _count: 5 },
+            { practiceId: "practice-a", _count: 5 },
+          ],
+          findMany: async () => [],
+        },
+        practice: {
+          findMany: async () =>
+            ["practice-a", "practice-b"].map((id) => ({
+              id,
+              name: id,
+              city: "Lille",
+              latitude: 50.6,
+              longitude: 3.06,
+            })),
+        },
+      });
+
+      const response = await svc.findPlaces({}, 1);
+
+      // Same count, one slot left under the cap. A tie the sort could not
+      // break left the choice to `groupBy`'s row order — which Postgres does
+      // not promise to repeat — so two refreshes could name two different
+      // practices "the busiest". The id settles it.
+      expect(response.places.map((place) => place.practiceId)).toEqual([
+        "practice-a",
+      ]);
     });
 
     /**
@@ -710,9 +750,11 @@ describe("ReplacementlistingsService", () => {
      * because the same query also carried the id of every posting so the browser
      * could find one of them later. A position is asked for now, when it is
      * needed — which leaves this read scoped to the capped practices, and makes
-     * it independent of the ordering entirely.
+     * it independent of the reader's ordering entirely. Its own ordering is
+     * pinned by the test above, which is what "no particular order" was
+     * replaced with.
      */
-    it("reads previews for the capped practices, and in no particular order", async () => {
+    it("reads previews for the capped practices only", async () => {
       let askedWhere: Record<string, unknown> = {};
       let askedOrderBy: unknown = "unset";
       const svc = service({
@@ -752,7 +794,9 @@ describe("ReplacementlistingsService", () => {
       expect(askedWhere).toMatchObject({
         practiceId: { in: ["practice-1", "practice-2"] },
       });
-      expect(askedOrderBy).toBeUndefined();
+      // The order itself is the preview-order test's subject: this one pins the
+      // scope alone.
+      expect(askedOrderBy).toEqual([{ startDate: "asc" }, { id: "desc" }]);
     });
   });
 
@@ -1003,7 +1047,7 @@ describe("ReplacementlistingsService", () => {
       endDate: new Date("2026-11-04T08:00:00.000Z"),
     });
 
-    it("is OPEN whatever status the caller asked for", async () => {
+    it("is the applicable set whatever status the caller asked for", async () => {
       const { reads, service } = prismaFor([row("listing-1")]);
 
       await service.findAll({
@@ -1012,9 +1056,18 @@ describe("ReplacementlistingsService", () => {
 
       // A `status` filter reaching the feed would answer a question about
       // postings the caller does not own — the drafts and cancellations of every
-      // practice on the platform, readable through the public collection.
-      expect(reads.findManyWhere).toMatchObject({ status: "OPEN" });
-      expect(reads.countWhere).toMatchObject({ status: "OPEN" });
+      // practice on the platform, readable through the public collection. The
+      // set the gate carries is the applicable one, `OPEN` *and*
+      // `IN_DISCUSSION`: `applications.create` accepts the second, so a listing
+      // that took a first candidate without filling every slot is still open
+      // to the next one — and used to vanish from the feed the moment it got
+      // one, while its direct link kept answering.
+      expect(reads.findManyWhere).toMatchObject({
+        status: { in: ["OPEN", "IN_DISCUSSION"] },
+      });
+      expect(reads.countWhere).toMatchObject({
+        status: { in: ["OPEN", "IN_DISCUSSION"] },
+      });
     });
 
     it("keeps the caller's filters, including the city", async () => {
@@ -1026,7 +1079,7 @@ describe("ReplacementlistingsService", () => {
       } as unknown as FindReplacementListingsDto);
 
       expect(reads.findManyWhere).toMatchObject({
-        status: "OPEN",
+        status: { in: ["OPEN", "IN_DISCUSSION"] },
         urgent: true,
         practice: {
           city: { contains: "Lyon", mode: "insensitive" },
@@ -1175,7 +1228,7 @@ describe("ReplacementlistingsService", () => {
       // rows sit ahead of the target in that ordering.
       expect(andCondition).toHaveLength(2);
       expect(andCondition[0]).toMatchObject({
-        status: "OPEN",
+        status: { in: ["OPEN", "IN_DISCUSSION"] },
         practice: { city: { contains: "Lyon", mode: "insensitive" } },
       });
       expect(andCondition[1]).toEqual(precedesInOrder(target, "startDate"));
@@ -1245,7 +1298,7 @@ describe("ReplacementlistingsService", () => {
       });
     });
 
-    it("drops the specialty filter and pins OPEN, and counts urgent over the same scope", async () => {
+    it("drops the specialty filter and pins the applicable set, and counts urgent over the same scope", async () => {
       const { reads, service } = prismaFor([], 0);
 
       await service.findFacets({
@@ -1256,14 +1309,14 @@ describe("ReplacementlistingsService", () => {
       // « What else is on offer » ignores the specialty the reader already
       // picked, and counts only what the feed would show.
       expect(reads.groupByWhere).toMatchObject({
-        status: "OPEN",
+        status: { in: ["OPEN", "IN_DISCUSSION"] },
         practice: { city: { contains: "Lyon", mode: "insensitive" } },
       });
       expect(
         (reads.groupByWhere as { specialty?: unknown }).specialty,
       ).toBeUndefined();
       expect(reads.countWhere).toMatchObject({
-        status: "OPEN",
+        status: { in: ["OPEN", "IN_DISCUSSION"] },
         urgent: true,
         practice: { city: { contains: "Lyon", mode: "insensitive" } },
       });

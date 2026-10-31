@@ -16,6 +16,36 @@ import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
 import { FindProfilesDto } from "./dto/find-profiles.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
+import { toProfileDto } from "./profile.mapper";
+
+/**
+ * The conflict a unique constraint names, translated.
+ *
+ * A `P2002` reaches these routes through two different races: the pre-check and
+ * the `create`/`update` can both lose, and they lose on *different* keys —
+ * `userId` is the profile-per-user rename of the user who double submitted,
+ * `rppsNumber` is a number somebody registered with in between. The old answer
+ * named `RPPS number` for both, which told a racing caller their profile
+ * exists while every retry answered "RPPS in use".
+ */
+function p2002Message(error: unknown): string | undefined {
+  if (
+    !(
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    )
+  ) {
+    return undefined;
+  }
+
+  const target = (error.meta as { target?: string[] | string } | undefined)
+    ?.target;
+  const fields = Array.isArray(target) ? target : [target ?? ""];
+  if (fields.includes("userId")) {
+    return "Profile already exists for this user";
+  }
+  return "RPPS number already in use";
+}
 
 @Injectable()
 export class ProfileService {
@@ -31,15 +61,14 @@ export class ProfileService {
     }
 
     try {
-      return await this.prisma.profile.create({
+      const created = await this.prisma.profile.create({
         data: { ...createProfileDto, userId },
       });
+      return toProfileDto(created);
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        throw new ConflictException("RPPS number already in use");
+      const message = p2002Message(error);
+      if (message) {
+        throw new ConflictException(message);
       }
       throw error;
     }
@@ -65,7 +94,7 @@ export class ProfileService {
     ]);
 
     return {
-      data,
+      data: data.map(toProfileDto),
       meta: paginationMeta(total, page, limit),
     };
   }
@@ -81,7 +110,7 @@ export class ProfileService {
       throw new NotFoundException(`Profile ${id} not found`);
     }
 
-    return profile;
+    return toProfileDto(profile);
   }
 
   async findByUserId(userId: string) {
@@ -91,7 +120,7 @@ export class ProfileService {
       throw new NotFoundException("No profile found for this user");
     }
 
-    return profile;
+    return toProfileDto(profile);
   }
 
   /**
@@ -125,13 +154,11 @@ export class ProfileService {
         throw new NotFoundException(`Profile ${id} not found`);
       }
 
-      return saved;
+      return toProfileDto(saved);
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
-        throw new ConflictException("RPPS number already in use");
+      const message = p2002Message(error);
+      if (message) {
+        throw new ConflictException(message);
       }
       throw error;
     }
@@ -139,6 +166,9 @@ export class ProfileService {
 
   /**
    * Deletes a profile, unless a cascade would take somebody else's application.
+   *
+   * One serializable transaction: the ownership read, the count and the delete ran
+   * on thle, unless a cascade would take somebody else's application.
    *
    * One serializable transaction: the ownership read, the count and the delete ran
    * on three connections, so an application committed in the gap was invisible to
@@ -163,7 +193,8 @@ export class ProfileService {
       // something.
       await assertNoThirdPartyApplications(tx, id, ownedListingsFilter(id));
 
-      return tx.profile.delete({ where: { id } });
+      const deleted = await tx.profile.delete({ where: { id } });
+      return toProfileDto(deleted);
     });
   }
 }
