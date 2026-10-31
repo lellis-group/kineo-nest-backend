@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, type OnApplicationShutdown } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import {
   APP_FILTER,
@@ -25,13 +25,30 @@ import {
   createAuth,
   readAuthEnvFromConfig,
 } from "./lib/auth";
+import { closeAuthRateLimitStorage } from "./lib/auth/rate-limit-redis";
 import { PracticesModule } from "./practices/practices.module";
 import { PrismaModule } from "./prisma.module";
+import { PrismaService } from "./prisma.service";
 import { ProfileModule } from "./profile/profile.module";
 import { ReplacementlistingsModule } from "./replacementlistings/replacementlistings.module";
 
 /** The request body ceiling, shared by the JSON and the form parser. */
 const BODY_LIMIT = "100kb";
+
+/**
+ * The life of the better-auth connection to Redis.
+ *
+ * The rate-limit storage is built inside `createAuth` and handed there as
+ * configuration, so nothing else in the container holds the object that ought
+ * to call its own `.close()` — which is why the graceful-shutdown path hung up
+ * only where `process.exit` cut it short. The hook does it, and it is registered
+ * as a plain provider so `app.close()` reaches it in tests as on a signal.
+ */
+class AuthRateLimitShutdown implements OnApplicationShutdown {
+  onApplicationShutdown() {
+    return closeAuthRateLimitStorage();
+  }
+}
 
 @Module({
   imports: [
@@ -49,10 +66,19 @@ const BODY_LIMIT = "100kb";
     }),
     AuthModule.forRootAsync({
       imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
+      // The PrismaService this application serves every other read and write
+      // from goes to better-auth too. It builds its own PrismaClient if none is
+      // handed it, so omitting the injection here meant three clients in one
+      // process — the app's, the middleware this creates, and one more the
+      // standalone factory below would hold in reserve — three pools against
+      // the database's `max_connections`, grown N times by N replicas, and
+      // three logging configurations where one is configured. One client: the
+      // PrismaModule instance, exported globally.
+      inject: [ConfigService, PrismaService],
+      useFactory: (config: ConfigService, prisma: PrismaService) => ({
         auth: createAuth(
           readAuthEnvFromConfig(config as unknown as ConfigGetter),
+          prisma,
         ),
         // Nest's own body parser is off, so this module mounts the parsers. It
         // defaults to 100kb; stating it here makes the ceiling belong to the
@@ -77,6 +103,7 @@ const BODY_LIMIT = "100kb";
     { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
     { provide: APP_GUARD, useClass: TokenAwareThrottlerGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
+    AuthRateLimitShutdown,
   ],
 })
 export class AppModule {}

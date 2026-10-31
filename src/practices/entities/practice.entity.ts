@@ -10,7 +10,7 @@ export const PracticeSchema = z.object({
   latitude: z.number().nullable(),
   longitude: z.number().nullable(),
   isPublic: z.boolean(),
-  createdAt: z.date(),
+  createdAt: z.iso.datetime(),
 });
 
 export class Practice extends createZodDto(PracticeSchema) {}

@@ -3,6 +3,7 @@ import {
   MIN_PENDING_RETENTION_DAYS,
   PENDING_DELETION_REQUEST_RETENTION_DAYS,
 } from "../data-lifecycle/data-lifecycle.service";
+import { MAX_BROWSE_MAP_PLACES } from "../replacementlistings/browse";
 import { DEFAULT_NODE_ENV, envBoolean, isHardenedEnv } from "./env";
 
 function positiveInteger(
@@ -123,6 +124,12 @@ function timerMs(value: string | undefined, fallback: number, name: string) {
 }
 
 /**
+ * One entry of the trusted-proxy list, as better-auth's `trustedProxies` takes
+ * it: an IPv4 or IPv6 address, or an equivalent CIDR range.
+ */
+const proxyEntrySchema = z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]);
+
+/**
  * Whether the proxy is trusted, and whether the environment decided that.
  *
  * Trusting it is the right default for an application designed to run behind one,
@@ -170,6 +177,20 @@ function configuration() {
     // proxy to trust, and trusting one there hides real client addresses.
     trustProxy: trustProxy.enabled,
     trustProxyImplied: trustProxy.implied,
+    // The addresses or CIDR ranges of the proxies themselves: TRUST_PROXY says
+    // that a proxy is there, this says which one. better-auth walks the
+    // forwarded-for chain right to left, skips these hops, and takes the first
+    // untrusted address as the client IP — for its rate-limit keys and the
+    // session rows alike. The same list is handed to Express as its `trust
+    // proxy` setting, so the throttler's `req.ip` resolves the same client.
+    // Unset keeps better-auth's default, which trusts only a single-value chain
+    // and answers nothing on a two-hop one (CDN plus load balancer), collapsing
+    // every such caller into one shared rate-limit bucket. See the comment on
+    // advanced.ipAddress in lib/auth.
+    trustProxyIps: (process.env.TRUST_PROXY_IPS ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
 
     // ---- Account erasure ----
     // The delay between anonymizing an account and dropping its row for good.
@@ -379,8 +400,28 @@ function configuration() {
       ),
     },
 
+    // ---- Browse feed ----
+    // How many distinct practices the /listings map is drawn from. A guard on
+    // the payload, not a product quota, which is why it does not live in
+    // `limits.*`: that block is documented as "undefined = unlimited", and an
+    // unbounded map is the one outcome this endpoint exists to prevent. It is
+    // tunable because the collection grows; `truncated` in the response is
+    // what lets the client adapt to whatever it is set to.
+    browse: {
+      mapPlaces: positiveInteger(
+        process.env.MAX_BROWSE_MAP_PLACES,
+        MAX_BROWSE_MAP_PLACES,
+        "MAX_BROWSE_MAP_PLACES",
+      ),
+    },
+
     // ---- Database (mirrors validated DATABASE_URL for DI consumers) ----
     databaseUrl: (process.env.DATABASE_URL ?? "").trim(),
+    // Prisma's own client logger, off by default. It is here rather than read
+    // from the environment at the point of use so that it is validated, typed and
+    // visible in the configuration like every other switch; `lib/prisma.ts` keeps
+    // the same rule for the clients built outside Nest.
+    prismaLogQueries: envBoolean(process.env.PRISMA_LOG_QUERIES, false),
 
     // ---- Swagger (can be overridden via env if needed) ----
     swagger: {
@@ -476,6 +517,27 @@ export const envValidationSchema = z
     // No default: the factory decides between the environment and the hardened
     // one, and a default here would replace that with a flat "false".
     TRUST_PROXY: BoolEnum.optional(),
+    // Comma-separated addresses or CIDR ranges of the reverse proxies
+    // themselves. Each entry has to be an IP, a v4 or v6 CIDR range, or
+    // nothing at all: better-auth refuses an entry it cannot parse with a
+    // warning at request time, and a typo would silently leave every caller in
+    // one shared rate-limit bucket. Refusing it here turns the typo into a
+    // boot failure instead.
+    TRUST_PROXY_IPS: z
+      .string()
+      .default("")
+      .refine(
+        (raw) =>
+          raw
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .every((entry) => proxyEntrySchema.safeParse(entry).success),
+        {
+          message:
+            "TRUST_PROXY_IPS must be a comma-separated list of IP addresses or CIDR ranges (IPv4 or IPv6)",
+        },
+      ),
 
     // ---- Throttler (NestJS ThrottlerModule) ----
     // The TTLs were absent from this schema altogether, so a typo in one of them
@@ -535,6 +597,7 @@ export const envValidationSchema = z
       .int()
       .positive()
       .optional(),
+    MAX_BROWSE_MAP_PLACES: z.coerce.number().int().positive().optional(),
 
     // ---- Data lifecycle ----
     DATA_DELETION_REQUEST_RETENTION_DAYS: z.coerce
@@ -542,6 +605,28 @@ export const envValidationSchema = z
       .int()
       .positive()
       .optional(),
+
+    // The three lifecycle knobs the factory also reads, named here so a bad
+    // value fails in the one boot-time document instead of wherever the
+    // factory's own reader happens to be called from. The floor below keeps a
+    // horizon that cannot outrun its own confirmation link; the rest of the
+    // ranges are the factory's to refine.
+    ACCOUNT_PURGE_GRACE_DAYS: z.coerce.number().int().positive().optional(),
+    PENDING_DELETION_REQUEST_RETENTION_DAYS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional(),
+    DATABASE_POOL_MAX: z.coerce.number().int().positive().optional(),
+
+    // ---- Account erasure ----
+    // 32 characters is the same floor better-auth's secret is held to: the
+    // pepper is the one thing that keeps an HMAC of an email from being
+    // reversible by anyone holding a dump. Optional here, and required by the
+    // refinement below wherever the environment is hardened — a production host
+    // that boots without one answers its first erasure request with a failure
+    // the deployer learns about from that request instead of from the boot log.
+    DELETION_PEPPER: z.string().min(32).optional(),
 
     // ---- Auth ----
     // No default: the factory decides between the environment and the hardened
@@ -565,6 +650,35 @@ export const envValidationSchema = z
         code: "custom",
         message: "SMTP_USER and SMTP_PASS must be set together",
         path: ["SMTP_USER"],
+      });
+    }
+
+    // The erasure trail cannot be keyed without a pepper, and an unkeyed hash
+    // of an email is reversible from any other table of the same database. A
+    // hardened environment is refused at boot rather than at the first
+    // confirmation link; development, test and CI keep theirs optional, and
+    // the e2e harness sets one.
+    if (isHardenedEnv(env.NODE_ENV) && !env.DELETION_PEPPER) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "DELETION_PEPPER is required in a hardened environment: without it the erasure trail cannot be keyed, and an unkeyed hash of an email is reversible",
+        path: ["DELETION_PEPPER"],
+      });
+    }
+
+    // The confirmation link lives 24 hours. A shorter horizon sweeps the pending
+    // erasure row while its own link is still usable, and every confirmation
+    // after that finds no request and refuses — the account can then never be
+    // erased by that link, and the only way out is to ask again.
+    if (
+      env.PENDING_DELETION_REQUEST_RETENTION_DAYS !== undefined &&
+      env.PENDING_DELETION_REQUEST_RETENTION_DAYS < MIN_PENDING_RETENTION_DAYS
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `PENDING_DELETION_REQUEST_RETENTION_DAYS must be at least ${MIN_PENDING_RETENTION_DAYS}, got: ${env.PENDING_DELETION_REQUEST_RETENTION_DAYS}`,
+        path: ["PENDING_DELETION_REQUEST_RETENTION_DAYS"],
       });
     }
   })

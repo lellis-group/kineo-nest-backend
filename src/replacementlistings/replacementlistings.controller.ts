@@ -3,12 +3,14 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import {
@@ -19,14 +21,42 @@ import {
 import { ZodSerializerDto } from "nestjs-zod";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
+import { MAX_BROWSE_MAP_PLACES } from "../replacementlistings/browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
-import { FindReplacementListingsDto } from "./dto/find-replacementlistings.dto";
+import {
+  FindPageOfDto,
+  FindPlacesDto,
+  FindReplacementListingsDto,
+} from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import {
+  ListingFacets,
+  ListingPageOf,
+  ListingPlaces,
   PaginatedReplacementListings,
   ReplacementListing,
 } from "./entities/replacementlisting.entity";
 import { ReplacementlistingsService } from "./replacementlistings.service";
+
+/**
+ * What a public read of the feed may be cached for, by whoever holds it.
+ *
+ * The browse endpoints answer the same collection to every reader: the feed is
+ * OPEN listings under public practices, with nothing scoped to a caller, which
+ * is what makes the cacheability a property of the response rather than a
+ * per-route decision. Before this, none of the three carried any header, so a
+ * browser re-downloaded a 142 kB `/places` on every visit and the Next.js proxy
+ * paid its own hop for it each time.
+ *
+ * The window is deliberately short. The collection changes the moment somebody
+ * publishes or closes a posting, and a reader who is told 42 results for a
+ * minute after there are 41 sees a count that is stale by one; a reader who is
+ * told that for an hour sees a feed that is quietly lying. 60 s shared, 15 s
+ * private, with a stale answer served while a fresh one is fetched behind it —
+ * so the cost of a cold cache is paid once and not by the reader who caused it.
+ */
+const BROWSE_CACHE_CONTROL =
+  "public, max-age=15, s-maxage=60, stale-while-revalidate=300";
 
 @ApiTags("Replacement Listings")
 @UseGuards(EmailVerifiedGuard)
@@ -34,6 +64,7 @@ import { ReplacementlistingsService } from "./replacementlistings.service";
 export class ReplacementlistingsController {
   constructor(
     private readonly replacementlistingsService: ReplacementlistingsService,
+    private readonly config: ConfigService,
   ) {}
 
   @Post()
@@ -59,10 +90,61 @@ export class ReplacementlistingsController {
 
   @Get()
   @AllowAnonymous()
+  @Header("Cache-Control", BROWSE_CACHE_CONTROL)
   @ApiOperation({ summary: "Search open replacement listings" })
   @ZodSerializerDto(PaginatedReplacementListings)
   findAll(@Query() query: FindReplacementListingsDto) {
     return this.replacementlistingsService.findAll(query);
+  }
+
+  // Declared before `:id` on purpose: Nest matches the routes in the order they
+  // appear in the file, so a `facets` handler declared after `:id` would never be
+  // reached — the `:id` route would answer to the literal string "facets" and
+  // look for a listing with that id.
+  @Get("facets")
+  @AllowAnonymous()
+  @Header("Cache-Control", BROWSE_CACHE_CONTROL)
+  @ApiOperation({
+    summary:
+      "Counts for the browse screen: total, urgent, and the distribution per specialty",
+  })
+  @ZodSerializerDto(ListingFacets)
+  findFacets(@Query() query: FindReplacementListingsDto) {
+    return this.replacementlistingsService.findFacets(query);
+  }
+
+  // Declared before `:id`, like `facets` above: Nest matches routes in the order
+  // they appear, so a handler declared after `:id` would never be reached — the
+  // `:id` route would answer to the literal string "places" and look for a
+  // listing with that id.
+  @Get("places")
+  @AllowAnonymous()
+  @Header("Cache-Control", BROWSE_CACHE_CONTROL)
+  @ApiOperation({
+    summary:
+      "The places the browse map is drawn from, over the whole matching collection",
+  })
+  @ZodSerializerDto(ListingPlaces)
+  findPlaces(@Query() query: FindPlacesDto) {
+    return this.replacementlistingsService.findPlaces(
+      query,
+      this.config.get<number>("browse.mapPlaces") ?? MAX_BROWSE_MAP_PLACES,
+    );
+  }
+
+  // Declared before `:id`, like `facets` and `places` above: Nest matches routes
+  // in the order they appear in the file, so a handler declared after `:id`
+  // would never be reached.
+  @Get("page-of")
+  @AllowAnonymous()
+  @Header("Cache-Control", BROWSE_CACHE_CONTROL)
+  @ApiOperation({
+    summary:
+      "Which page of the reader's ordering holds one posting, or null if the filters do not show it",
+  })
+  @ZodSerializerDto(ListingPageOf)
+  findPageOf(@Query() query: FindPageOfDto) {
+    return this.replacementlistingsService.findPageOf(query.id, query);
   }
 
   @Get("mine")

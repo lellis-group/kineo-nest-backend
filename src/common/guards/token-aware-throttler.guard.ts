@@ -36,19 +36,13 @@ export class TokenAwareThrottlerGuard extends ThrottlerGuard {
 /**
  * The address to attribute a request to.
  *
- * Express truncates `req.ips` at the first hop it does not trust, and this
- * application sets `trust proxy` to a single hop (`src/app.ts`). `req.ips` can
- * therefore only ever hold the address the trusted proxy observed, which is why
- * entries an untrusted caller prefixed to `X-Forwarded-For` never reach this
- * key, and why `req.ips[0]` and `req.ip` name the same address here.
+ * `req.ip` is where the walk over the forwarded chain stopped: the first
+ * address not on the trusted list, or the runtime address when trust proxy is
+ * off. The list names the proxies (`TRUST_PROXY_IPS`, `src/app.ts`), so an
+ * untrusted caller prefixed to `X-Forwarded-For` only ever names itself, and
+ * two callers behind the same chain resolve to two addresses.
  */
 export function clientAddress(req: Record<string, unknown>): string {
-  const ips = req.ips;
-
-  if (Array.isArray(ips) && ips.length > 0 && typeof ips[0] === "string") {
-    return ips[0];
-  }
-
   return typeof req.ip === "string" ? req.ip : "unknown";
 }
 

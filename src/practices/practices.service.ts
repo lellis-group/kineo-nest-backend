@@ -22,11 +22,13 @@ import { CreatePracticeDto } from "./dto/create-practice.dto";
 import type { FindPracticesDto } from "./dto/find-practices.dto";
 import { UpdatePracticeDto } from "./dto/update-practice.dto";
 import {
+  escapeLike,
   geoWhere,
   haversineKm,
   PRACTICE_GEO_COLUMNS,
   type PracticeGeoRow,
 } from "./geo-query";
+import { toPracticeDto } from "./practice.mapper";
 
 const EARTH_RADIUS_KM = 6_371;
 
@@ -50,7 +52,10 @@ export class PracticesService {
         }
       }
 
-      return tx.practice.create({ data: { ...createPracticeDto, ownerId } });
+      const created = await tx.practice.create({
+        data: { ...createPracticeDto, ownerId },
+      });
+      return toPracticeDto(created);
     });
   }
 
@@ -96,15 +101,23 @@ export class PracticesService {
       const total = Number(counts[0]?.total ?? 0);
 
       return {
-        data: rows,
+        data: rows.map(toPracticeDto),
         meta: paginationMeta(total, page, limit),
       };
     }
 
+    // The term is escaped so `%` and `_` name themselves, as they do on the
+    // geographic branch (`geo-query.ts`): unescaped, Prisma's `contains` would
+    // read them as wildcards and `?name=%` would list every practice here and
+    // none there.
     const where = {
       isPublic: true,
-      ...(name && { name: { contains: name, mode: "insensitive" as const } }),
-      ...(city && { city: { contains: city, mode: "insensitive" as const } }),
+      ...(name && {
+        name: { contains: escapeLike(name), mode: "insensitive" as const },
+      }),
+      ...(city && {
+        city: { contains: escapeLike(city), mode: "insensitive" as const },
+      }),
     };
 
     const [data, total] = await Promise.all([
@@ -118,7 +131,7 @@ export class PracticesService {
     ]);
 
     return {
-      data,
+      data: data.map(toPracticeDto),
       meta: paginationMeta(total, page, limit),
     };
   }
@@ -126,7 +139,8 @@ export class PracticesService {
   async findMine(userId: string) {
     const ownerId = await getOwnedProfileId(this.prisma, userId);
 
-    return this.prisma.practice.findMany({ where: { ownerId } });
+    const owned = await this.prisma.practice.findMany({ where: { ownerId } });
+    return owned.map(toPracticeDto);
   }
 
   async findOne(id: string, requesterUserId?: string) {
@@ -144,9 +158,16 @@ export class PracticesService {
       }
     }
 
-    return practice;
+    return toPracticeDto(practice);
   }
 
+  /**
+   * Writes the fields an owner may edit.
+   *
+   * Same shape as the profile update: the read answers 404 and 403 for the
+   * ordinary case, the write carries `ownerId` itself, and a practice deleted
+   * in between answers 404 instead of a raw P2025 through the default filter.
+   */
   async update(
     id: string,
     userId: string,
@@ -159,10 +180,22 @@ export class PracticesService {
       throw new ForbiddenException();
     }
 
-    return this.prisma.practice.update({
-      where: { id },
+    const updated = await this.prisma.practice.updateMany({
+      where: { id, ownerId },
       data: updatePracticeDto,
     });
+
+    if (updated.count === 0) {
+      throw new NotFoundException(`Practice ${id} not found`);
+    }
+
+    const saved = await this.prisma.practice.findUnique({ where: { id } });
+
+    if (!saved) {
+      throw new NotFoundException(`Practice ${id} not found`);
+    }
+
+    return toPracticeDto(saved);
   }
 
   /**
@@ -197,7 +230,8 @@ export class PracticesService {
         PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
       );
 
-      return tx.practice.delete({ where: { id } });
+      const deleted = await tx.practice.delete({ where: { id } });
+      return toPracticeDto(deleted);
     });
   }
 }

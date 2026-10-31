@@ -215,7 +215,7 @@ sequenceDiagram
     API->>DB: status=OPEN
 
     R->>API: GET /replacement-listings?specialty=...&city=...
-    API->>DB: Search OPEN listings
+    API->>DB: Search applicable listings (OPEN and IN_DISCUSSION)
     API-->>R: Paginated listings with active application count
 
     R->>API: POST /applications (listingId, message)
@@ -270,8 +270,9 @@ Resolved in the branches that built this section; the state of each is
 reflected below rather than claimed:
 
 - **Access control**: ownership checks on every mutating route across all four modules; `404` (not `403`) returned for private resources to avoid enumeration.
-- **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades).
-- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, declared once in `config/configuration.ts` and applied per route by `common/throttle.ts`; proxy-aware IP tracking. A fourth `deletion` tier is registered but refused by the guard unless the route opted in, so its budget cannot leak onto the rest of the API. better-auth's own 3-per-10s rule on the credential endpoints is overridden by `CREDENTIAL_RATE_LIMIT_*`.
+- **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades); the raw relations the front end drives race-side (`shortlist`, the message edit) go through optimistic CAS instead — the write carries the expected status in its `where`, and a count of zero answers the refusal, so a decision committed between the authorizing read and the write cannot be overwritten. The shortlist-vs-accept race is pinned over HTTP (`applications-transitions.e2e.test.ts`).
+- **One database client**: the application and better-auth serve every read and write from the single `PrismaService` instance (`PrismaModule`), `DATABASE_POOL_MAX` states what a replica costs against Postgres `max_connections` (the pg default of 10 per client otherwise), and the standalone auth scripts want is built on first ask (`createStandaloneAuth()`), never at import.
+- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, declared once in `config/configuration.ts` and applied per route by `common/throttle.ts`; proxy-aware IP tracking. A fourth `deletion` tier is registered but refused by the guard unless the route opted in, so its budget cannot leak onto the rest of the API. better-auth's own 3-per-10s rule on the credential endpoints is overridden by `CREDENTIAL_RATE_LIMIT_*`. On the auth routes Express never sees, better-auth does its own IP resolution: the proxies themselves are named in `TRUST_PROXY_IPS`, and the same list is Express's `trust proxy` setting, so the throttler's `req.ip` resolves the same client (a two-hop `X-Forwarded-For` chain otherwise resolves to no client at all, and every such caller collapses into one shared bucket). When `REDIS_URL` is set, both layers count their buckets in the shared Redis (`lib/auth/rate-limit-redis.ts`, `ThrottlerStorageRedisService`), so N replicas enforce one budget instead of N.
 - **Account erasure**: `deleteUser.beforeDelete` refuses better-auth's hard delete, so the only path is the anonymization described in §9. The `verification` purge, the ghost listings and the keyed trail are covered by the e2e suite, not only by fakes.
 - **Input validation**: length/range constraints on every Zod DTO (text fields capped, coordinates bounded, RPPS format-checked); per-profile resource caps configurable via env vars (`MAX_PRACTICES_PER_PROFILE`, `MAX_ACTIVE_LISTINGS_PER_PROFILE`, `MAX_ACTIVE_APPLICATIONS_PER_PROFILE`).
 - **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`.
@@ -301,6 +302,7 @@ Still open: email notifications on status changes are written (templates + maile
 - [ ] V2: RPPS verification via official API, PDF contract generation, bilateral rating, geolocated "emergency" alerts
 - [ ] Decouple Auth from better-auth (deferred tech debt, not MVP): introduce an `AuthPort` (`IAuthProvider`) behind a NestJS wrapper so better-auth becomes swappable — isolate `Session`/`UserSession`/`AllowAnonymous` (`@thallesp/nestjs-better-auth`) in controllers, `lib/auth/index.ts` (`betterAuth`, `prismaAdapter`, plugins), guards (`email-verified.guard.ts`), and `hashPassword` usage in `prisma/seed.ts`
 - [ ] Email via `NotificationsModule` with an `EmailPort` (deferred, not MVP): Nodemailer is already isolated in `lib/email/mailer.ts` (low coupling, single import point) — the work is functional decoupling (queue/retry, wiring into `ApplicationsService`, provider-agnostic templates in `lib/email/templates/*`), not swapping Nodemailer itself
+- [ ] Watch `nestjs-zod` for a release declaring `^12` peers: the project runs `nestjs-zod@5.5.0` on Nest 12 — it works and is tested, but the dependency declares `@nestjs/common ^10 || ^11` and `@nestjs/swagger ^7.4.2 || ^8 || ^11`, so the combo is officially untested. When a version declaring `^12` appears, upgrade and pin it with `bun test` + the e2e suites in CI. No scheduled check: it would add a network dependency to CI to detect a release whose only action is a manual upgrade — this entry is the reminder.
 
 ---
 
@@ -325,6 +327,7 @@ go through it too. Nothing in the chain spawns node.
 | `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
 | `bun run db:seed` | **Wipe and repopulate.** Development fixtures only: it refuses to run outside development and test |
 | `bun run db:check` | Replay the migration history and diff it against the schema |
+| `bun run profile` | Measure the two listing reads left unindexed on purpose (`scripts/profile-listings.ts`) over a self-built throwaway corpus — `TEST_DATABASE_ADMIN_URL` required, `PROFILE_PRACTICES` / `PROFILE_LISTINGS_MIN`–`MAX` resize the corpus, nothing it measures is ever written back into the schema |
 
 `tsconfig.json` is the base every tool reads and covers `src/` and `prisma/` with
 the specs included; `tsconfig.build.json` is what the build compiles, adding
@@ -356,11 +359,20 @@ What it does, in order:
 2. Moves the applications other candidates wrote on this account's listings onto
    a ghost listing owned by the system scaffold. They are not the account
    holder's data to erase, so both their authors and the practices that received
-   them keep a real row.
+   them keep a real row. A placement (`ACCEPTED` on a `FILLED` listing) is never
+   moved: the candidate is waiting on that listing, and it carries no undecided
+   answer anyway.
 3. Anonymizes: the address becomes `erased-<fingerprint>@deleted.invalid`, the
    name and image go, the profile loses its RPPS number, city and coordinates, the
-   listings lose their title, description and dates and leave circulation, the
-   account's own applications are settled so their listings recalculate.
+   account's own applications are settled so their listings recalculate. A
+   listing still circulating loses its title, description and dates and stops
+   being shown (`CLOSED_NO_CANDIDATE`); one already past its end (`CLOSED`,
+   `CANCELLED`, a protected placement) is scrubbed of the owner's words only —
+   the status it was closed with is part of the trail.
+   The candidacies parked on a ghost that nobody can decide any more
+   (`PENDING`, `SHORTLISTED`) are settled `REJECTED` with `decisionSource =
+   SYSTEM`: the account that would have answered is gone, and an open row would
+   queue the candidate's own application quota for nothing.
 4. Drops the sessions and credentials, so the erasure takes effect immediately.
 5. Sets `deletedAt`. The hourly sweep drops the row after
    `ACCOUNT_PURGE_GRACE_DAYS`.
@@ -368,7 +380,11 @@ What it does, in order:
 A listing holding an **accepted placement** is deliberately left alone: the
 placement was agreed with a candidate who is still waiting for an answer. It
 leaves circulation rather than being scrubbed, and the response says how many
-there are.
+there are. That is the policy the erasure chose — "F2, option A" in the audit
+conversation that drove this codebase's 2026 hardening: never detach an
+`ACCEPTED` application from a `FILLED` listing, because the placement is a
+verifiable fact and `accept` has already settled the other actives that could
+have been stranded behind it.
 
 The trail (`DataDeletionRequest`) stores two keyed fingerprints, not the
 identifier:
@@ -432,6 +448,15 @@ WHERE "userIdHash" IS NULL;
   unit spec would silently assert against the developer's own database.
 - Every list endpoint orders by `createdAt` then `id`. `createdAt` is not unique,
   and offset pagination over a non-total order repeats and skips rows.
+- `prisma/schema.prisma` runs with `previewFeatures = ["partialIndexes"]` — the
+  partial unique indexes the erasure's one-`PENDING`-per-fingerprint rule rests
+  on. It is production code on a preview flag (Prisma 7.9.1 at the time of
+  writing): check the release notes at every upgrade before touching it.
+- The public feed answers the *applicable* set — `OPEN` **and** `IN_DISCUSSION`
+  (`src/common/listing-status.ts`), the statuses `applications.create` accepts —
+  and so do the facets, the map and the anonymous link. A `FULL` posting is out
+  by construction, `RECRUITING_LISTING_STATUSES` is the wider console set, and
+  the gap between the two is the product's, not an accident.
 
 ## 11. Notes for AI Takeover
 

@@ -1,18 +1,32 @@
 import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { Inject, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/prisma/client";
-import { prismaClientOptions } from "./lib/prisma";
+import {
+  createPrismaAdapter,
+  prismaClientOptions,
+  prismaLogFor,
+} from "./lib/prisma";
 
 function resolveAdapter(config?: ConfigService) {
-  // Pre-DI contexts (seed, standalone better-auth): fall back to process.env.
-  // Inside Nest, prefer the validated ConfigService value when available.
   const fromConfig = config?.get<string>("databaseUrl");
-  if (typeof fromConfig === "string" && fromConfig.trim()) {
-    return { adapter: new PrismaPg({ connectionString: fromConfig.trim() }) };
-  }
-  return prismaClientOptions;
+  // The logging switch comes from the validated configuration when there is one,
+  // rather than from the options frozen when `lib/prisma` was first imported:
+  // reading it at startup is what makes it a setting of the application instead
+  // of an accident of module order.
+  const logQueries = config?.get<boolean>("prismaLogQueries");
+  const log =
+    typeof logQueries === "boolean"
+      ? prismaLogFor(logQueries)
+      : prismaClientOptions.log;
+
+  return typeof fromConfig === "string" && fromConfig.trim()
+    ? {
+        ...prismaClientOptions,
+        adapter: createPrismaAdapter(fromConfig.trim()),
+        log,
+      }
+    : { ...prismaClientOptions, log };
 }
 
 @Injectable()

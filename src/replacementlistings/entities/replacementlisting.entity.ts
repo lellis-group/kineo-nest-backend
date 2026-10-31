@@ -3,15 +3,47 @@ import { z } from "zod";
 import { PaginationMetaSchema } from "../../common/pagination";
 import { ListingStatus, Specialty } from "../../generated/prisma/enums";
 
+/**
+ * The practice a listing is attached to, reduced to what a reader of the public
+ * feed can act on.
+ *
+ * A listing carried `practiceId` and nothing else, which made the practice
+ * itself unreachable from the feed: a client had to ask `/practices` for a second
+ * time and stitch the two answers together on `practiceId`, and could not place a
+ * listing on a map at all because it had no coordinates. These are the fields the
+ * browse screen actually renders — where the posting is, and under whose name.
+ *
+ * Deliberately not the whole `Practice` entity: `ownerId` and `createdAt` are not
+ * the feed's business, and the address is a level of precision the feed does not
+ * need on every row.
+ */
+export const PracticeSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  city: z.string(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+});
+
 export const ReplacementListingSchema = z.object({
   id: z.string(),
   practiceId: z.string(),
+  /**
+   * Absent on the reads that did not ask for it.
+   *
+   * The feed and the owner's list include the practice, because the browse map
+   * needs to place a row. A mutation does not: `remove` returns a row it has
+   * just deleted, and there is nothing left to read a relation from. Making
+   * this required is how every write endpoint answered 500.
+   */
+  practice: PracticeSummarySchema.optional(),
   title: z.string(),
   startDate: z.iso.datetime(),
   endDate: z.iso.datetime(),
   specialty: z.enum(Specialty),
   status: z.enum(ListingStatus),
   urgent: z.boolean(),
+  /** On the detail read only — a feed omits the field, see `ListingSummarySchema`. */
   description: z.string().nullable(),
   maxApplications: z.number().nullable(),
   applicationsCount: z.number(),
@@ -22,6 +54,22 @@ export const ReplacementListingSchema = z.object({
 export class ReplacementListing extends createZodDto(
   ReplacementListingSchema,
 ) {}
+
+/**
+ * A listing as a feed publishes it: everything the row on screen reads, and no
+ * `description`.
+ *
+ * The paragraph belongs to the detail read, where it is rendered (`listing-detail`
+ * on the frontend). On the browse screen neither the table nor the card draws it,
+ * and sending it meant a page of ten postings carried its longest field for
+ * nothing — most of the 6.8 kB feed payload on the seeded corpus, on every page
+ * and every filter change. `omit` rather than a second hand-written schema, so
+ * the summary cannot drift from the record: adding a field to the listing adds it
+ * here too, automatically.
+ */
+export const ListingSummarySchema = ReplacementListingSchema.omit({
+  description: true,
+});
 
 /**
  * Totals per status, so the tabs on the owner's own listings can stay stable
@@ -39,13 +87,126 @@ export const ListingStatusCountsSchema = z.object({
   CANCELLED: z.number(),
 });
 
+/**
+ * The soonest period still to come, among the postings that are in play.
+ *
+ * Nullable because "nothing to come" is the answer most members have, and it is
+ * an answer rather than a missing field. Optional for a rolling deploy: a client
+ * on the older shape reads its absence as nothing to show.
+ */
+export const NextRecruitingListingSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  /** ISO instant — the client formats both bounds in the reader's locale. */
+  startDate: z.string(),
+  endDate: z.string(),
+});
+
 export const PaginatedReplacementListingsSchema = z.object({
-  data: z.array(ReplacementListingSchema),
+  data: z.array(ListingSummarySchema),
   meta: PaginationMetaSchema.extend({
     counts: ListingStatusCountsSchema.optional(),
+    nextRecruitingListing: NextRecruitingListingSchema.nullable().optional(),
   }),
 });
 
 export class PaginatedReplacementListings extends createZodDto(
   PaginatedReplacementListingsSchema,
 ) {}
+
+/**
+ * Counts the browse screen can draw a summary from, computed over the whole
+ * matching collection rather than over the rows of one page.
+ *
+ * Every one of these numbers was, until this endpoint existed, unavailable: the
+ * feed reports `meta.total` for the active filter and nothing else, so a client
+ * wanting "how many urgent ones are there" or "how are they spread across
+ * specialties" had no honest source. The only alternative was to aggregate the
+ * current page — which produces a number that changes as the reader pages, and
+ * is wrong beyond the first hundred rows.
+ *
+ * `bySpecialty` is the full enum rather than only the specialties present: the
+ * screen draws one row per specialty in a fixed order, and a missing key would
+ * render as an absent row rather than as a zero.
+ */
+export const ListingFacetsSchema = z.object({
+  /** Open listings matching the filters, ignoring `specialty` itself. */
+  total: z.number(),
+  /** Of those, the ones flagged urgent. */
+  urgent: z.number(),
+  bySpecialty: z.record(z.enum(Specialty), z.number()),
+});
+
+export class ListingFacets extends createZodDto(ListingFacetsSchema) {}
+
+/**
+ * A place the map draws, with the postings that sit on it.
+ *
+ * A place, not a posting. The map feeds from the collection a filter selects,
+ * and the endpoint paginates; a client reading the page to draw the map showed
+ * a hundred postings' worth of practices and silently dropped the rest, with no
+ * way to see the gap.
+ *
+ * `listings` is a preview, capped. `count` is the population and is what the
+ * badge, the accessible label and the "+N others" line read — never the length
+ * of the preview, which is a rendering convenience and not a fact.
+ */
+export type ListingPlace = z.infer<typeof ListingPlaceSchema>;
+
+export const ListingPlaceSchema = z.object({
+  practiceId: z.string(),
+  name: z.string(),
+  city: z.string(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  count: z.number(),
+  listings: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      // ISO, and formatted by the client: it already knows the reader's locale,
+      // and a second French sentence written server-side would be a second
+      // place for them to disagree.
+      startDate: z.iso.datetime(),
+      endDate: z.iso.datetime(),
+    }),
+  ),
+});
+
+export const ListingPlacesSchema = z.object({
+  places: z.array(ListingPlaceSchema),
+
+  /** Matching postings whose practice was never geocoded. */
+  unlocated: z.number(),
+
+  /** How many places the filters actually matched, before the ceiling. */
+  totalPlaces: z.number(),
+
+  /**
+   * True when `places` was cut at the ceiling.
+   *
+   * Paired with `totalPlaces` so the client can say how many are missing rather
+   * than only that some are. A flag with no count is a flag nothing can render:
+   * "there are more" invites the reader to look for what.
+   */
+  truncated: z.boolean(),
+});
+
+export class ListingPlaces extends createZodDto(ListingPlacesSchema) {}
+
+/**
+ * The page of the reader's ordering that holds one posting — `null` when the
+ * current filters do not show that posting.
+ *
+ * The absence of the id list is the point of this shape existing. `/places`
+ * used to carry the id of every matching posting so a client could `indexOf` one
+ * of them: a rare click, paid for on every page render, on every filter change
+ * and on every reordering. A position is asked for when it is needed instead,
+ * and a posting outside the current view says so rather than answering a page it
+ * is not on.
+ */
+export const ListingPageOfSchema = z.object({
+  page: z.number().nullable(),
+});
+
+export class ListingPageOf extends createZodDto(ListingPageOfSchema) {}

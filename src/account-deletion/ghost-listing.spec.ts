@@ -107,7 +107,8 @@ describe("detachThirdPartyApplications", () => {
     const result = await detachThirdPartyApplications(client, input);
 
     expect(result.detachedApplications).toBe(2);
-
+    // Read back by the caller, which settles what can no longer be decided.
+    expect(result.applicationIds).toEqual(["application-1", "application-2"]);
     // Two destinations, not one: `application` carries
     // `@@unique([listingId, applicantId])`, so one ghost for the whole account
     // would put the same candidate's two rows on the same pair and be rejected
@@ -175,7 +176,11 @@ describe("detachThirdPartyApplications", () => {
 
     const result = await detachThirdPartyApplications(client, input);
 
-    expect(result).toEqual({ ghostListingIds: [], detachedApplications: 0 });
+    expect(result).toEqual({
+      ghostListingIds: [],
+      applicationIds: [],
+      detachedApplications: 0,
+    });
     expect(writes.upserts).toEqual([]);
     expect(writes.moves).toEqual([]);
   });

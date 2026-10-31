@@ -121,11 +121,9 @@ export function longitudeWindow(centre: number, delta: number): Prisma.Sql {
  * neutralised.
  *
  * A search for `100%` or `a_b` has to match those characters, not everything.
- *
- * Note the divergence this creates with the non-geographic branch, which uses
- * Prisma's `contains` and therefore does *not* neutralise them: `?name=%` lists
- * every practice there and `?name=%` with coordinates will not. Neither path has a
- * caller yet; when one does, the other has to move with it.
+ * PostgreSQL takes the backslash as LIKE's default escape character, and the
+ * non-geographic branch stays consistent with that: the term it hands to
+ * Prisma's `contains` is escaped the same way (`practices.service.ts`).
  */
 export function containsInsensitive(
   column: '"name"' | '"city"',
@@ -134,7 +132,7 @@ export function containsInsensitive(
   return Prisma.sql`p.${Prisma.raw(column)} ILIKE ${`%${escapeLike(term)}%`} ESCAPE ${Prisma.raw(BACKSLASH_ESCAPE_LITERAL)}`;
 }
 
-function escapeLike(term: string): string {
+export function escapeLike(term: string): string {
   return term.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 

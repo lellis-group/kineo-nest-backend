@@ -1,7 +1,12 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
   "files": {
-    "includes": ["src/**/*.ts", "!src/generated/**", "prisma/**/*.ts"]
+    "includes": [
+      "src/**/*.ts",
+      "!src/generated/**",
+      "prisma/**/*.ts",
+      "scripts/**/*.ts"
+    ]
   },
   "linter": {
     "enabled": true,

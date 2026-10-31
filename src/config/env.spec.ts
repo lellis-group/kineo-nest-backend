@@ -177,9 +177,14 @@ describe("gates close by default", () => {
     // The windows are unset in every ordinary deployment and the factory holds
     // the defaults. `z.coerce.number()` turns an absent variable into NaN rather
     // than undefined, so an unbounded schema here would refuse to boot.
+    //
+    // NODE_ENV is left unset on purpose: it defaults to the hardened one, which
+    // now also means a pepper — that is the shape a bare production host boots
+    // in.
     const parsed = envValidationSchema.safeParse({
       DATABASE_URL: "postgresql://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "s".repeat(64),
+      DELETION_PEPPER: "p".repeat(64),
     });
     expect(parsed.success).toBe(true);
   });
@@ -188,9 +193,52 @@ describe("gates close by default", () => {
     const parsed = envValidationSchema.safeParse({
       DATABASE_URL: "postgresql://u:p@localhost:5432/db",
       BETTER_AUTH_SECRET: "s".repeat(64),
+      DELETION_PEPPER: "p".repeat(64),
       THROTTLE_LONG_TTL: String(2_147_483_648),
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("the trusted proxy list", () => {
+  const schema = envValidationSchema.shape.TRUST_PROXY_IPS;
+
+  it("is empty by default, so a deployment behind one proxy needs none", () => {
+    expect(schema.parse(undefined)).toBe("");
+    expect(schema.parse("")).toBe("");
+  });
+
+  it("accepts the addresses and ranges better-auth walks by", () => {
+    const proxyEntries = ["10.0.0.0/8", "192.0.2.10", "2001:db8::/32"].join(
+      ",",
+    );
+    expect(schema.parse(proxyEntries)).toBe(proxyEntries);
+  });
+
+  it("refuses an entry better-auth would only warn about, once, at request time", () => {
+    // A typo here has no second line of defence: better-auth ignores entries it
+    // cannot parse and answers no client IP, which is the failure this list
+    // exists to prevent. The schema makes it a boot failure instead.
+    for (const raw of [
+      "10.0.0.0/8, not-an-address",
+      "300.0.0.1",
+      "10.0.0.0/99",
+      "example.com",
+    ]) {
+      expect(schema.safeParse(raw).success).toBe(false);
+    }
+  });
+
+  it("shows up in the configuration as a list, blanks dropped", () => {
+    withEnv({ TRUST_PROXY_IPS: "10.0.0.0/8, ,192.0.2.10" }, () => {
+      expect(configuration().trustProxyIps).toEqual([
+        "10.0.0.0/8",
+        "192.0.2.10",
+      ]);
+    });
+    withEnv({ TRUST_PROXY_IPS: undefined }, () => {
+      expect(configuration().trustProxyIps).toEqual([]);
+    });
   });
 });
 
@@ -261,5 +309,166 @@ describe("the pending erasure horizon has a floor", () => {
   it("refuses a horizon shorter than the link it belongs to", () => {
     expect(() => retentionFor("1")).toThrow(/PENDING_DELETION_REQUEST/);
     expect(() => retentionFor("0")).toThrow(/PENDING_DELETION_REQUEST/);
+  });
+});
+
+/**
+ * Whether the parse refused for a *named* reason, rather than a wrong value
+ * elsewhere in the environment — the helper the pepper and lifecycle-knob
+ * suites share.
+ */
+function hasNamedIssue(
+  parsed: {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[] }[] };
+  },
+  key: PropertyKey,
+) {
+  return (
+    !parsed.success &&
+    (parsed.error?.issues ?? []).some((issue) => issue.path.includes(key))
+  );
+}
+
+describe("the erasure pepper is required where it is needed", () => {
+  /**
+   * The pepper is what keeps an HMAC of an email from being reversible from the
+   * same database's other tables, so a hardened environment is refused at boot
+   * rather than at the first confirmation link. Development, test and CI keep
+   * theirs optional: erasure is not reachable there by a real caller, and a
+   * secret that cannot leave the deployer's control is better absent than
+   * committed.
+   *
+   * `NODE_ENV` unset defaults to the hardened one, so the bare parse below is
+   * the shape of a production host that never set it.
+   */
+  const base = {
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    BETTER_AUTH_SECRET: "s".repeat(64),
+  };
+
+  function hasPepperIssue(parsed: {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[] }[] };
+  }) {
+    return hasNamedIssue(parsed, "DELETION_PEPPER");
+  }
+
+  it("refuses a hardened environment that has no pepper", () => {
+    expect(hasPepperIssue(envValidationSchema.safeParse(base))).toBe(true);
+    expect(
+      hasPepperIssue(
+        envValidationSchema.safeParse({ ...base, NODE_ENV: "production" }),
+      ),
+    ).toBe(true);
+    expect(
+      hasPepperIssue(
+        envValidationSchema.safeParse({ ...base, NODE_ENV: "provision" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a hardened environment that has one", () => {
+    expect(
+      envValidationSchema.safeParse({
+        ...base,
+        DELETION_PEPPER: "p".repeat(64),
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts a test environment without one", () => {
+    expect(
+      envValidationSchema.safeParse({ ...base, NODE_ENV: "test" }).success,
+    ).toBe(true);
+    expect(
+      envValidationSchema.safeParse({ ...base, NODE_ENV: "development" })
+        .success,
+    ).toBe(true);
+  });
+
+  it("holds an existing pepper to the same floor as the auth secret", () => {
+    // An eight-character pepper would be as guessable as the four-character
+    // "secret" this floor exists for.
+    const pepper = envValidationSchema.shape.DELETION_PEPPER;
+
+    expect(pepper.safeParse("p").success).toBe(false);
+    expect(pepper.safeParse("p".repeat(31)).success).toBe(false);
+    expect(pepper.safeParse("p".repeat(32)).success).toBe(true);
+    expect(pepper.safeParse(undefined).success).toBe(true);
+  });
+});
+
+describe("the lifecycle knobs fail in the same boot-time document", () => {
+  /**
+   * Three lifecycle variables used to be validated later, in three readers with
+   * three different error shapes — one of the validation fails at the schema,
+   * one at the factory read, one only when the first consumer resolved it. The
+   * schema now carries them, so a bad value is one named issue at boot, and the
+   * pending floor lives here too rather than in a function that only ran when
+   * the configuration happened to be resolved.
+   */
+  const base = {
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    BETTER_AUTH_SECRET: "s".repeat(64),
+    DELETION_PEPPER: "p".repeat(64),
+  };
+
+  it("accepts every knob at its sane value", () => {
+    expect(
+      envValidationSchema.safeParse({
+        ...base,
+        DATABASE_POOL_MAX: "20",
+        ACCOUNT_PURGE_GRACE_DAYS: "30",
+        PENDING_DELETION_REQUEST_RETENTION_DAYS: "30",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses a pool ceiling that cannot hold a connection", () => {
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({ ...base, DATABASE_POOL_MAX: "0" }),
+        "DATABASE_POOL_MAX",
+      ),
+    ).toBe(true);
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({ ...base, DATABASE_POOL_MAX: "abc" }),
+        "DATABASE_POOL_MAX",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a purge grace of less than a day", () => {
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({
+          ...base,
+          ACCOUNT_PURGE_GRACE_DAYS: "0",
+        }),
+        "ACCOUNT_PURGE_GRACE_DAYS",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a pending erasure horizon that outruns its own link", () => {
+    // The floor the factory applied under the same reasoning: a one-day
+    // horizon sweeps the request while its confirmation link is still live.
+    expect(
+      hasNamedIssue(
+        envValidationSchema.safeParse({
+          ...base,
+          PENDING_DELETION_REQUEST_RETENTION_DAYS: "1",
+        }),
+        "PENDING_DELETION_REQUEST_RETENTION_DAYS",
+      ),
+    ).toBe(true);
+    expect(
+      envValidationSchema.safeParse({
+        ...base,
+        PENDING_DELETION_REQUEST_RETENTION_DAYS: "2",
+      }).success,
+    ).toBe(true);
   });
 });

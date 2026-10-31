@@ -3,6 +3,7 @@ import { DEFAULT_NODE_ENV, isHardenedEnv } from "../../config/env";
 import {
   type ConfigGetter,
   createAuth,
+  createStandaloneAuth,
   readAuthEnv,
   readAuthEnvFromConfig,
 } from "./index";
@@ -61,6 +62,38 @@ describe("readAuthEnv", () => {
         TRUSTED_ORIGINS: "http://a.test, ,http://b.test",
       }).trustedOrigins,
     ).toEqual(["http://a.test", "http://b.test"]);
+  });
+
+  it("splits the trusted proxy list and drops the blanks, on both paths", () => {
+    const env = readAuthEnv({
+      ...REQUIRED_ENV,
+      TRUST_PROXY_IPS: "10.0.0.0/8, ,192.0.2.10",
+    });
+
+    expect(env.trustedProxyIps).toEqual(["10.0.0.0/8", "192.0.2.10"]);
+    expect(readAuthEnv({ ...REQUIRED_ENV }).trustedProxyIps).toEqual([]);
+    expect(
+      readAuthEnvFromConfig(
+        configWith({ trustProxyIps: ["10.0.0.0/8", "192.0.2.10"] }),
+      ).trustedProxyIps,
+    ).toEqual(["10.0.0.0/8", "192.0.2.10"]);
+    expect(readAuthEnvFromConfig(configWith()).trustedProxyIps).toEqual([]);
+  });
+
+  it("reads the shared-redis URL, on both paths, and nothing else when blank", () => {
+    expect(
+      readAuthEnv({
+        ...REQUIRED_ENV,
+        REDIS_URL: " redis://cache.internal:6379 ",
+      }).redisUrl,
+    ).toBe("redis://cache.internal:6379");
+    expect(readAuthEnv({ ...REQUIRED_ENV }).redisUrl).toBeUndefined();
+    expect(
+      readAuthEnvFromConfig(
+        configWith({ redisUrl: "redis://cache.internal:6379" }),
+      ).redisUrl,
+    ).toBe("redis://cache.internal:6379");
+    expect(readAuthEnvFromConfig(configWith()).redisUrl).toBeUndefined();
   });
 
   it("reads durations with a suffix", () => {
@@ -227,21 +260,65 @@ describe("readAuthEnvFromConfig", () => {
     expect(env.jwtEnabled).toBe(false);
   });
 
-  it("falls back to the process env when the secret is not published", () => {
-    const previous = process.env.BETTER_AUTH_SECRET;
-    process.env.BETTER_AUTH_SECRET = "from-process-env";
+  it("fails loudly when the configuration publishes no secret", () => {
+    // It used to fall back to process.env: two sources of truth, and the
+    // factory's validated configuration silently overruled by whatever the
+    // environment happened to carry at import time. The double that forgets
+    // the key the real ConfigService always publishes now names its mistake.
+    expect(() => readAuthEnvFromConfig(configWith({ auth: {} }))).toThrow(
+      /auth\.secret/,
+    );
+  });
+});
 
-    try {
-      const env = readAuthEnvFromConfig(configWith({ auth: {} }));
+describe("the jwt plugin", () => {
+  function jwtExpirationTime(env: Record<string, string>): unknown {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
 
-      expect(env.secret).toBe("from-process-env");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.BETTER_AUTH_SECRET;
-      } else {
-        process.env.BETTER_AUTH_SECRET = previous;
-      }
+    const plugin = createAuth(
+      readAuthEnv({ ...REQUIRED_ENV, ...env }),
+      prismaStub,
+    ).options.plugins?.find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "id" in entry &&
+        (entry as { id?: string }).id === "jwt",
+    );
+    if (typeof plugin !== "object" || plugin === null) {
+      throw new Error("the jwt plugin is not mounted");
     }
+    const options = (
+      plugin as { options?: { jwt?: { expirationTime?: unknown } } }
+    ).options;
+    return options?.jwt?.expirationTime;
+  }
+
+  it("feeds the plugin a number of seconds, whatever shape the env named", () => {
+    // "3600" passes the environment's own duration validation and the
+    // application's, and used to pass through to the plugin's parser — which
+    // demands a unit — so every token issuance threw in production. The
+    // conversion happens where the value is handed over: one parse, the
+    // repository's, at boot.
+    expect(
+      jwtExpirationTime({ JWT_ENABLED: "true", JWT_EXPIRATION_TIME: "3600" }),
+    ).toBe(3600);
+    expect(
+      jwtExpirationTime({ JWT_ENABLED: "true", JWT_EXPIRATION_TIME: "15m" }),
+    ).toBe(900);
+  });
+
+  it("refuses what no duration meant, at boot instead of at issuing", () => {
+    expect(() =>
+      createAuth(
+        readAuthEnv({
+          ...REQUIRED_ENV,
+          JWT_ENABLED: "true",
+          JWT_EXPIRATION_TIME: "quarter",
+        }),
+        {} as unknown as Parameters<typeof createAuth>[1],
+      ),
+    ).toThrow();
   });
 });
 
@@ -290,10 +367,10 @@ describe("the auth reference plugin", () => {
   });
 
   it("keeps the other plugins either way", () => {
+    // The one plugin that is mounted on both paths whatever the environment:
+    // the reference gating above is the only one conditional on it.
     for (const nodeEnv of ["production", "development"]) {
       const ids = pluginIds(nodeEnv);
-      expect(ids.length).toBeGreaterThan(1);
-      expect(ids).toContain("next-cookies");
       expect(ids).toContain("email-verification-status");
     }
   });
@@ -350,5 +427,67 @@ describe("the secure cookie flag", () => {
   it("is not asked for in development and test, where there is no TLS", () => {
     expect(secureCookies("development")).toBe(false);
     expect(secureCookies("test")).toBe(false);
+  });
+});
+
+describe("advanced.ipAddress.trustedProxies", () => {
+  function trustedProxies(extraEnv: Record<string, string>): unknown {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    return createAuth(readAuthEnv({ ...REQUIRED_ENV, ...extraEnv }), prismaStub)
+      .options.advanced?.ipAddress?.trustedProxies;
+  }
+
+  it("reaches better-auth when the deployment names its proxies", () => {
+    expect(
+      trustedProxies({ TRUST_PROXY_IPS: "10.0.0.0/8, 192.0.2.10" }),
+    ).toEqual(["10.0.0.0/8", "192.0.2.10"]);
+  });
+
+  it("stays off otherwise, leaving better-auth's single-header default", () => {
+    expect(trustedProxies({})).toBeUndefined();
+  });
+});
+
+describe("the rate-limit custom storage", () => {
+  function customStorage(extraEnv: Record<string, string>): unknown {
+    const prismaStub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    return createAuth(readAuthEnv({ ...REQUIRED_ENV, ...extraEnv }), prismaStub)
+      .options.rateLimit?.customStorage;
+  }
+
+  it("counts the buckets in Redis when REDIS_URL is set", () => {
+    // Claimed here as an option-shaped fact; the counting itself (atomicity,
+    // shared budgets, fail-open) is rate-limit-redis.spec.ts's business.
+    expect(
+      customStorage({ REDIS_URL: "redis://cache.internal:6379" }),
+    ).toHaveProperty("consume");
+  });
+
+  it("stays in the process's memory when it is not", () => {
+    // Development and CI run with no Redis; better-auth's own Map is then the
+    // whole story, as it always has been.
+    expect(customStorage({})).toBeUndefined();
+  });
+});
+
+describe("createStandaloneAuth", () => {
+  it("answers one instance from every caller instead of building on every ask", () => {
+    const secret = process.env.BETTER_AUTH_SECRET;
+    // The path used to run at import, where a missing secret was a module-load
+    // failure for everything with a helper to read; it now runs on ask, and the
+    // ask still needs the secret — set the way a script that wants this sets it.
+    process.env.BETTER_AUTH_SECRET = "s".repeat(64);
+    const stub = {} as unknown as Parameters<typeof createAuth>[1];
+
+    try {
+      const first = createStandaloneAuth(stub);
+      const second = createStandaloneAuth(stub);
+
+      expect(second).toBe(first);
+    } finally {
+      process.env.BETTER_AUTH_SECRET = secret;
+    }
   });
 });
