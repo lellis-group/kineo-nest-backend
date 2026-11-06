@@ -29,10 +29,6 @@ export class AccountDeletionController {
     summary: "Confirm account anonymization with the email link token",
   })
   @ApiResponse({
-    status: 200,
-    description: "Account anonymized and its sessions ended",
-  })
-  @ApiResponse({
     status: 404,
     description: "Invalid or already used confirmation link",
   })
@@ -43,6 +39,11 @@ export class AccountDeletionController {
   @ApiResponse({
     status: 503,
     description: "DELETION_PEPPER is not configured",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The erasure summary, with the counts of what was anonymized",
+    type: AccountDeletionResult,
   })
   @ZodSerializerDto(AccountDeletionResult)
   async confirmDeletion(@Body() dto: ConfirmAccountDeletionDto) {

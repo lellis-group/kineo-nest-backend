@@ -34,8 +34,12 @@ export class ApplicationsController {
   @Post()
   @ThrottleWithConfig("medium")
   @ApiOperation({ summary: "Apply to a replacement listing" })
-  @ApiResponse({ status: 201, description: "Application submitted" })
   @ApiResponse({ status: 409, description: "Already applied to this listing" })
+  @ApiResponse({
+    status: 201,
+    description: "The application, as submitted",
+    type: Application,
+  })
   @ZodSerializerDto(Application)
   create(
     @Session() session: UserSession,
@@ -49,6 +53,11 @@ export class ApplicationsController {
 
   @Get("mine")
   @ApiOperation({ summary: "List the current user's own applications" })
+  @ApiResponse({
+    status: 200,
+    description: "A page of the caller's applications",
+    type: PaginatedApplications,
+  })
   @ZodSerializerDto(PaginatedApplications)
   findMine(
     @Session() session: UserSession,
@@ -60,6 +69,11 @@ export class ApplicationsController {
   @Get("listing/:listingId")
   @ApiOperation({ summary: "List applications received for a listing you own" })
   @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 200,
+    description: "A page of applications received for the listing",
+    type: PaginatedApplications,
+  })
   @ZodSerializerDto(PaginatedApplications)
   findForListing(
     @Session() session: UserSession,
@@ -79,6 +93,11 @@ export class ApplicationsController {
     status: 404,
     description: "Application not found or no access",
   })
+  @ApiResponse({
+    status: 200,
+    description: "The application, as visible to the caller",
+    type: Application,
+  })
   @ZodSerializerDto(Application)
   findOne(@Session() session: UserSession, @Param("id") id: string) {
     return this.applicationsService.findOne(id, session.user.id);
@@ -87,6 +106,11 @@ export class ApplicationsController {
   @Patch(":id/view")
   @ApiOperation({ summary: "Mark an application as viewed" })
   @ApiResponse({ status: 403, description: "Not the owner of the listing" })
+  @ApiResponse({
+    status: 200,
+    description: "The application, now marked as viewed",
+    type: Application,
+  })
   @ZodSerializerDto(Application)
   markAsViewed(@Session() session: UserSession, @Param("id") id: string) {
     return this.applicationsService.markAsViewed(id, session.user.id);
@@ -95,6 +119,11 @@ export class ApplicationsController {
   @Patch(":id/shortlist")
   @ApiOperation({ summary: "Shortlist a pending application" })
   @ApiResponse({ status: 400, description: "Application is not pending" })
+  @ApiResponse({
+    status: 200,
+    description: "The application, now shortlisted",
+    type: Application,
+  })
   @ZodSerializerDto(Application)
   shortlist(@Session() session: UserSession, @Param("id") id: string) {
     return this.applicationsService.shortlist(id, session.user.id);
@@ -109,6 +138,11 @@ export class ApplicationsController {
     status: 400,
     description: "Application cannot be accepted in its current status",
   })
+  @ApiResponse({
+    status: 200,
+    description: "The application, now accepted",
+    type: Application,
+  })
   @ZodSerializerDto(Application)
   accept(@Session() session: UserSession, @Param("id") id: string) {
     return this.applicationsService.accept(id, session.user.id);
@@ -119,6 +153,11 @@ export class ApplicationsController {
   @ApiResponse({
     status: 400,
     description: "Application cannot be rejected in its current status",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The application, now rejected",
+    type: Application,
   })
   @ZodSerializerDto(Application)
   reject(
@@ -135,6 +174,11 @@ export class ApplicationsController {
     status: 400,
     description: "Application cannot be withdrawn in its current status",
   })
+  @ApiResponse({
+    status: 200,
+    description: "The application, now withdrawn",
+    type: Application,
+  })
   @ZodSerializerDto(Application)
   withdraw(
     @Session() session: UserSession,
@@ -149,6 +193,11 @@ export class ApplicationsController {
   @ApiResponse({
     status: 400,
     description: "Only pending applications can be edited",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The application, with its edited message",
+    type: Application,
   })
   @ZodSerializerDto(Application)
   update(
