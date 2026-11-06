@@ -1,5 +1,5 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
+import { createZodDto } from "../../common/zod-dto";
 import { tokenSchema } from "../../lib/auth/schemas";
 
 export const ConfirmAccountDeletionSchema = z

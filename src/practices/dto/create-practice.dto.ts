@@ -1,7 +1,7 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import { latLongsPaired } from "../../common/validation/lat-long";
 import { CITY_REGEX, textField } from "../../common/validation/text";
+import { createZodDto } from "../../common/zod-dto";
 
 export const CreatePracticeObjectSchema = z
   .object({

@@ -1,7 +1,7 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import { latLongsPaired } from "../../common/validation/lat-long";
 import { CITY_REGEX } from "../../common/validation/text";
+import { createZodDto } from "../../common/zod-dto";
 import { ProfileType, Specialty } from "../../generated/prisma/enums";
 
 export const CreateProfileObjectSchema = z

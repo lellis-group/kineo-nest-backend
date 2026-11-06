@@ -1,10 +1,10 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import {
   paginationBoundsRefine,
   paginationQueryShape,
   paginationWithinBounds,
 } from "../../common/pagination";
+import { createZodDto } from "../../common/zod-dto";
 
 export const FindPracticesSchema = z
   .object({

@@ -1,6 +1,6 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import { PaginationMetaSchema } from "../../common/pagination";
+import { createZodDto } from "../../common/zod-dto";
 import { ProfileType, Specialty } from "../../generated/prisma/enums";
 
 export const ProfileSchema = z.object({
