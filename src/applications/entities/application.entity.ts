@@ -2,6 +2,7 @@ import { z } from "zod";
 import { PaginationMetaSchema } from "../../common/pagination";
 import { createZodDto } from "../../common/zod-dto";
 import {
+  DecisionSource,
   ApplicationStatus,
   ListingStatus,
   ProfileType,
@@ -34,6 +35,12 @@ export const ApplicationListingSchema = z.object({
 
 /**
  * Applicant profile embedded in application responses (public display data).
+ *
+ * `anonymized` is the trustworthy signal of an erased account (art. 17 GDPR):
+ * the backend blanks `user.name` and `user.image`, and a blank name alone is
+ * what an applicant with no name looks like otherwise, so the flag is what has
+ * to carry the meaning — the client greets the row with a fixed label rather
+ * than rehearsed blankness.
  */
 export const ApplicationApplicantSchema = z.object({
   id: z.string(),
@@ -41,6 +48,7 @@ export const ApplicationApplicantSchema = z.object({
   profileType: z.enum(ProfileType),
   city: z.string().nullable(),
   verified: z.boolean(),
+  anonymized: z.boolean(),
   user: z.object({
     name: z.string().nullable(),
     image: z.string().nullable(),
@@ -52,6 +60,16 @@ export const ApplicationSchema = z.object({
   listingId: z.string(),
   applicantId: z.string(),
   status: z.enum(ApplicationStatus),
+  /**
+   * Who ended the application, when one did — null while it is open.
+   *
+   * `rejectionBucket` names *which situation* a rejection is, derived from what
+   * the row already stores; this is stored, and it is the field the labels
+   * branch on: « Refusée par le cabinet » and « retirée par le candidat » —
+   * both `REJECTED` — read nothing alike, and the client must not re-derive
+   * either from the status.
+   */
+  decisionSource: z.enum(DecisionSource).nullable(),
   message: z.string().nullable(),
   rejectionReason: z.string().nullable(),
   /**

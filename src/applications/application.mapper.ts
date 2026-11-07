@@ -30,7 +30,7 @@ type EmbeddedApplicant = {
   profileType: ProfileType;
   city: string | null;
   verified: boolean;
-  user: { name: string | null; image: string | null };
+  user: { name: string | null; image: string | null; deletedAt: Date | null };
 };
 
 function toEmbeddedListingDto(listing: EmbeddedListing) {
@@ -54,7 +54,18 @@ function toEmbeddedApplicantDto(applicant: EmbeddedApplicant) {
     profileType: applicant.profileType,
     city: applicant.city,
     verified: applicant.verified,
-    user: { ...applicant.user },
+    /**
+     * A closed account (deletedAt, art. 17 GDPR) is named by the flag, not by
+     * the blankness of its fields: writing an applicant with no name is what
+     * many a live profile looks like, and the reader deserves to know which of
+     * the two they are seeing. `deletedAt` stays off the wire — a timestamp of
+     * erasure is a fact about the person, not about the application.
+     */
+    anonymized: applicant.user.deletedAt != null,
+    user: {
+      name: applicant.user.name,
+      image: applicant.user.image,
+    },
   };
 }
 

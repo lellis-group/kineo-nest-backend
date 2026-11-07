@@ -36,8 +36,9 @@ import { PLATFORM_REJECTION_REASONS } from "./rejection-reasons";
 
 // The mapper publishes name and image and nothing else, so a paginated list
 // does not need the email, the verification flag and the timestamps that
-// `include: { user: true }` pulled in on every row.
-const USER_CARD_SELECT = { name: true, image: true } as const;
+// `include: { user: true }` pulled in on every row. `deletedAt` is fetched
+// because it names an anonymized applicant (see the mapper), never sent.
+const USER_CARD_SELECT = { name: true, image: true, deletedAt: true } as const;
 
 @Injectable()
 export class ApplicationsService {
