@@ -12,6 +12,7 @@ import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
+import { ApiBadRequest, ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
 import { ApplicationsService } from "./applications.service";
@@ -34,7 +35,11 @@ export class ApplicationsController {
   @Post()
   @ThrottleWithConfig("medium")
   @ApiOperation({ summary: "Apply to a replacement listing" })
-  @ApiResponse({ status: 409, description: "Already applied to this listing" })
+  @ApiResponse({
+    status: 409,
+    description: "Already applied to this listing",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 201,
     description: "The application, as submitted",
@@ -68,7 +73,11 @@ export class ApplicationsController {
 
   @Get("listing/:listingId")
   @ApiOperation({ summary: "List applications received for a listing you own" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 200,
     description: "A page of applications received for the listing",
@@ -92,6 +101,7 @@ export class ApplicationsController {
   @ApiResponse({
     status: 404,
     description: "Application not found or no access",
+    type: ApiError,
   })
   @ApiResponse({
     status: 200,
@@ -105,7 +115,11 @@ export class ApplicationsController {
 
   @Patch(":id/view")
   @ApiOperation({ summary: "Mark an application as viewed" })
-  @ApiResponse({ status: 403, description: "Not the owner of the listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of the listing",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 200,
     description: "The application, now marked as viewed",
@@ -118,7 +132,7 @@ export class ApplicationsController {
 
   @Patch(":id/shortlist")
   @ApiOperation({ summary: "Shortlist a pending application" })
-  @ApiResponse({ status: 400, description: "Application is not pending" })
+  @ApiBadRequest("Application is not pending")
   @ApiResponse({
     status: 200,
     description: "The application, now shortlisted",
@@ -134,10 +148,7 @@ export class ApplicationsController {
     summary:
       "Accept an application, filling the listing and rejecting other candidates",
   })
-  @ApiResponse({
-    status: 400,
-    description: "Application cannot be accepted in its current status",
-  })
+  @ApiBadRequest("Application cannot be accepted in its current status")
   @ApiResponse({
     status: 200,
     description: "The application, now accepted",
@@ -150,10 +161,7 @@ export class ApplicationsController {
 
   @Patch(":id/reject")
   @ApiOperation({ summary: "Reject an application" })
-  @ApiResponse({
-    status: 400,
-    description: "Application cannot be rejected in its current status",
-  })
+  @ApiBadRequest("Application cannot be rejected in its current status")
   @ApiResponse({
     status: 200,
     description: "The application, now rejected",
@@ -170,10 +178,7 @@ export class ApplicationsController {
 
   @Patch(":id/withdraw")
   @ApiOperation({ summary: "Withdraw your own application" })
-  @ApiResponse({
-    status: 400,
-    description: "Application cannot be withdrawn in its current status",
-  })
+  @ApiBadRequest("Application cannot be withdrawn in its current status")
   @ApiResponse({
     status: 200,
     description: "The application, now withdrawn",
@@ -190,10 +195,7 @@ export class ApplicationsController {
 
   @Patch(":id")
   @ApiOperation({ summary: "Edit the message of a pending application" })
-  @ApiResponse({
-    status: 400,
-    description: "Only pending applications can be edited",
-  })
+  @ApiBadRequest("Only pending applications can be edited")
   @ApiResponse({
     status: 200,
     description: "The application, with its edited message",

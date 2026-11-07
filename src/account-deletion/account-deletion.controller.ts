@@ -2,6 +2,7 @@ import { Body, Controller, HttpCode, Post } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
+import { ApiError } from "../common/api-errors";
 import { ThrottleDeletion } from "../common/throttle";
 import { AccountDeletionService } from "./account-deletion.service";
 import { ConfirmAccountDeletionDto } from "./dto/confirm-account-deletion.dto";
@@ -31,14 +32,17 @@ export class AccountDeletionController {
   @ApiResponse({
     status: 404,
     description: "Invalid or already used confirmation link",
+    type: ApiError,
   })
   @ApiResponse({
     status: 410,
     description: "Expired link, or the account was already erased",
+    type: ApiError,
   })
   @ApiResponse({
     status: 503,
     description: "DELETION_PEPPER is not configured",
+    type: ApiError,
   })
   @ApiResponse({
     status: 200,

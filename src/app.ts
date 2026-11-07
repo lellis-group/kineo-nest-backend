@@ -9,6 +9,7 @@ import helmet from "helmet";
 import { cleanupOpenApiDoc } from "nestjs-zod";
 
 import { AppModule } from "./app.module";
+import { ApiError, ApiValidationError } from "./common/api-errors";
 import { compressionFilter } from "./common/compression-filter";
 import { contentSecurityPolicy } from "./common/security-headers";
 import { isHardenedEnv } from "./config/env";
@@ -68,7 +69,14 @@ export async function createApp(): Promise<NestExpressApplication> {
 
   if (!isHardenedEnv(configService.get<string>("nodeEnv"))) {
     const documentFactory = () =>
-      cleanupOpenApiDoc(SwaggerModule.createDocument(app, swaggerConfig));
+      // `ApiBadRequest` documents a 400 as a union of these two, and a route
+      // whose only error is that union carries no `type` of its own: the models
+      // must be in `components` for its `$ref`s to resolve.
+      cleanupOpenApiDoc(
+        SwaggerModule.createDocument(app, swaggerConfig, {
+          extraModels: [ApiError, ApiValidationError],
+        }),
+      );
     SwaggerModule.setup("api", app, documentFactory);
   }
 

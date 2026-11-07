@@ -101,6 +101,15 @@ function patch(dto: DtoWithFactory): void {
  * Drop this wrapper and go back to `createZodDto` from `nestjs-zod` once the
  * upstream bug is fixed — check `Practice.latitude` in `/api-json` after the
  * upgrade: it must be `{ "type": "number", "nullable": true }`, not an array.
+ *
+ * Response schemas are published from the DTO class itself (io `input`), not
+ * from `.Output`: zod keeps `nullable()` in the input schema of every schema
+ * this codebase uses (no `.default()`, `.pipe()`, or `preprocess()` narrowing
+ * it to the output), and the class carries its declared name while `.Output`
+ * derives `${name}_Output` — two entries in `components` for the same wire
+ * shape. When a DTO someday diverges between `input` and `output`, publish the
+ * endpoint with `ApiResponse({ type: Dto.Output })` and this wrapper's
+ * `Output` getter already patches the derived class.
  */
 export const createZodDto: typeof createZodDtoBase = ((schema, options) => {
   const dto = createZodDtoBase(schema, options);

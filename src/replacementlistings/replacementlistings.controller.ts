@@ -19,6 +19,7 @@ import {
   Session,
 } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
+import { ApiBadRequest, ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
 import { MAX_BROWSE_MAP_PLACES } from "../replacementlistings/browse";
@@ -75,6 +76,7 @@ export class ReplacementlistingsController {
   @ApiResponse({
     status: 403,
     description: "You do not own this practice or email not verified",
+    type: ApiError,
   })
   @ApiResponse({
     status: 201,
@@ -192,7 +194,11 @@ export class ReplacementlistingsController {
   @Get(":id")
   @OptionalAuth()
   @ApiOperation({ summary: "Get a listing by id" })
-  @ApiResponse({ status: 404, description: "Listing not found or not open" })
+  @ApiResponse({
+    status: 404,
+    description: "Listing not found or not open",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 200,
     description: "The listing, as visible to the caller",
@@ -210,8 +216,12 @@ export class ReplacementlistingsController {
   @ApiOperation({
     summary: "Publish a draft listing, making it publicly visible",
   })
-  @ApiResponse({ status: 400, description: "Listing is not a draft" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiBadRequest("Listing is not a draft")
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 200,
     description: "The listing, now open",
@@ -224,7 +234,11 @@ export class ReplacementlistingsController {
 
   @Patch(":id")
   @ApiOperation({ summary: "Update a listing" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 200,
     description: "The listing, as updated",
@@ -251,7 +265,11 @@ export class ReplacementlistingsController {
   })
   @ZodSerializerDto(ReplacementListing)
   @ApiOperation({ summary: "Delete a listing" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing",
+    type: ApiError,
+  })
   remove(@Session() session: UserSession, @Param("id") id: string) {
     return this.replacementlistingsService.remove(id, session.user.id);
   }
@@ -260,8 +278,12 @@ export class ReplacementlistingsController {
   @ApiOperation({
     summary: "Close a listing once the replacement is completed",
   })
-  @ApiResponse({ status: 400, description: "Listing is not open or filled" })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
+  @ApiBadRequest("Listing is not open or filled")
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this listing",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 200,
     description: "The listing, now closed",
@@ -274,11 +296,12 @@ export class ReplacementlistingsController {
 
   @Patch(":id/cancel")
   @ApiOperation({ summary: "Cancel a listing before it is filled" })
+  @ApiBadRequest("Listing is already closed or cancelled")
   @ApiResponse({
-    status: 400,
-    description: "Listing is already closed or cancelled",
+    status: 403,
+    description: "Not the owner of this listing",
+    type: ApiError,
   })
-  @ApiResponse({ status: 403, description: "Not the owner of this listing" })
   @ApiResponse({
     status: 200,
     description: "The listing, now cancelled",
