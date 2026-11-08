@@ -1,6 +1,6 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import { PaginationMetaSchema } from "../../common/pagination";
+import { createZodDto } from "../../common/zod-dto";
 
 export const PracticeSchema = z.object({
   id: z.string(),

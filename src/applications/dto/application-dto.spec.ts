@@ -16,6 +16,9 @@ const validApplication = {
   listingId: "clh8zq6w70000wqf4vlonix5a",
   applicantId: "clh8zq6w70000wqf4vlonix5c",
   status: "PENDING",
+  // Stored by the backend, null while the application is open — the labels the
+  // client shows branch on it, so it is on the wire by contract.
+  decisionSource: null,
   message: null,
   rejectionReason: null,
   // Derived by the mapper, so every hand-built fixture has to say which bucket it
@@ -61,10 +64,33 @@ describe("Application DTO security", () => {
           profileType: "REPLACEMENT",
           city: "Paris",
           verified: true,
+          // A live account: the anonymized flag is how an erased one says so.
+          anonymized: false,
           user: { name: "Alice Martin", image: null },
         },
       });
       expect(result.success).toBe(true);
+    });
+
+    it("requires an explicit applicant anonymized flag", () => {
+      const result = ApplicationSchema.safeParse({
+        ...validApplication,
+        applicant: {
+          id: "clh8zq6w70000wqf4vlonix5c",
+          specialty: "DENTIST",
+          profileType: "REPLACEMENT",
+          city: "Paris",
+          verified: true,
+          user: { name: "Alice Martin", image: null },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("requires decision source to be declared, not dropped", () => {
+      const without = { ...validApplication } as Record<string, unknown>;
+      delete without.decisionSource;
+      expect(ApplicationSchema.safeParse(without).success).toBe(false);
     });
   });
 

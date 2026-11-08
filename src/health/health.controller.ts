@@ -8,8 +8,11 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
+import { ZodSerializerDto } from "nestjs-zod";
+import { ApiError } from "../common/api-errors";
 import { logError } from "../lib/log";
 import { PrismaService } from "../prisma.service";
+import { Health } from "./entities/health.entity";
 
 @ApiTags("Health")
 @Controller("health")
@@ -31,12 +34,22 @@ export class HealthController {
   @Get()
   @AllowAnonymous()
   @ApiOperation({ summary: "Liveness probe, and readiness with ?deep=1" })
-  @ApiResponse({ status: 200, description: "The process is answering" })
+  @ApiResponse({
+    status: 200,
+    description: "The process is answering",
+    type: Health,
+  })
   @ApiResponse({
     status: 401,
     description: "Missing or wrong deep probe token",
+    type: ApiError,
   })
-  @ApiResponse({ status: 503, description: "The database does not answer" })
+  @ApiResponse({
+    status: 503,
+    description: "The database does not answer",
+    type: ApiError,
+  })
+  @ZodSerializerDto(Health)
   async check(@Query("deep") deep?: string, @Query("token") token?: string) {
     if (deep !== "1") {
       return { status: "ok" };

@@ -2,6 +2,7 @@ import { Body, Controller, HttpCode, Post } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
+import { ApiError } from "../common/api-errors";
 import { ThrottleDeletion } from "../common/throttle";
 import { AccountDeletionService } from "./account-deletion.service";
 import { ConfirmAccountDeletionDto } from "./dto/confirm-account-deletion.dto";
@@ -29,20 +30,24 @@ export class AccountDeletionController {
     summary: "Confirm account anonymization with the email link token",
   })
   @ApiResponse({
-    status: 200,
-    description: "Account anonymized and its sessions ended",
-  })
-  @ApiResponse({
     status: 404,
     description: "Invalid or already used confirmation link",
+    type: ApiError,
   })
   @ApiResponse({
     status: 410,
     description: "Expired link, or the account was already erased",
+    type: ApiError,
   })
   @ApiResponse({
     status: 503,
     description: "DELETION_PEPPER is not configured",
+    type: ApiError,
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The erasure summary, with the counts of what was anonymized",
+    type: AccountDeletionResult,
   })
   @ZodSerializerDto(AccountDeletionResult)
   async confirmDeletion(@Body() dto: ConfirmAccountDeletionDto) {

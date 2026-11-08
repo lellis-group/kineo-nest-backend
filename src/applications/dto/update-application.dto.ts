@@ -1,6 +1,6 @@
-import { createZodDto } from "nestjs-zod";
 import { z } from "zod";
 import { textField } from "../../common/validation/text";
+import { createZodDto } from "../../common/zod-dto";
 
 export const UpdateApplicationSchema = z
   .object({

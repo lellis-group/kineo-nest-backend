@@ -1,4 +1,4 @@
-import { createZodDto } from "nestjs-zod";
+import { createZodDto } from "../../common/zod-dto";
 import { ReplacementListingObjectSchema } from "./create-replacementlisting.dto";
 
 /**

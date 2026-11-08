@@ -17,6 +17,7 @@ import {
   Session,
 } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
+import { ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
 import { CreateProfileDto } from "./dto/create-profile.dto";
@@ -40,11 +41,20 @@ export class ProfileController {
   @ApiOperation({
     summary: "Create a professional profile for the current user",
   })
-  @ApiResponse({ status: 201, description: "Profile created" })
-  @ApiResponse({ status: 403, description: "Email not verified" })
+  @ApiResponse({
+    status: 403,
+    description: "Email not verified",
+    type: ApiError,
+  })
   @ApiResponse({
     status: 409,
     description: "Profile already exists or RPPS number already in use",
+    type: ApiError,
+  })
+  @ApiResponse({
+    status: 201,
+    description: "The profile, as created",
+    type: Profile,
   })
   @ZodSerializerDto(Profile)
   create(
@@ -57,6 +67,11 @@ export class ProfileController {
   @Get()
   @AllowAnonymous()
   @ApiOperation({ summary: "Search public profiles" })
+  @ApiResponse({
+    status: 200,
+    description: "A page of public profiles",
+    type: PaginatedPublicProfiles,
+  })
   @ZodSerializerDto(PaginatedPublicProfiles)
   findAll(@Query() query: FindProfilesDto) {
     return this.profileService.findAll(query);
@@ -64,7 +79,16 @@ export class ProfileController {
 
   @Get("me")
   @ApiOperation({ summary: "Get the current user's own profile" })
-  @ApiResponse({ status: 404, description: "No profile found for this user" })
+  @ApiResponse({
+    status: 404,
+    description: "No profile found for this user",
+    type: ApiError,
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The caller's own profile",
+    type: Profile,
+  })
   @ZodSerializerDto(Profile)
   findMe(@Session() session: UserSession) {
     return this.profileService.findByUserId(session.user.id);
@@ -73,7 +97,16 @@ export class ProfileController {
   @Get(":id")
   @OptionalAuth()
   @ApiOperation({ summary: "Get a profile by id" })
-  @ApiResponse({ status: 404, description: "Profile not found or not public" })
+  @ApiResponse({
+    status: 404,
+    description: "Profile not found or not public",
+    type: ApiError,
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The profile, as visible to the caller",
+    type: PublicProfile,
+  })
   @ZodSerializerDto(PublicProfile)
   findOne(
     @Session() session: UserSession | undefined,
@@ -84,7 +117,16 @@ export class ProfileController {
 
   @Patch(":id")
   @ApiOperation({ summary: "Update a profile" })
-  @ApiResponse({ status: 403, description: "Not the owner of this profile" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this profile",
+    type: ApiError,
+  })
+  @ApiResponse({
+    status: 200,
+    description: "The profile, as updated",
+    type: Profile,
+  })
   @ZodSerializerDto(Profile)
   update(
     @Session() session: UserSession,
@@ -95,9 +137,18 @@ export class ProfileController {
   }
 
   @Delete(":id")
+  @ApiResponse({
+    status: 200,
+    description: "The profile, as deleted",
+    type: Profile,
+  })
   @ZodSerializerDto(Profile)
   @ApiOperation({ summary: "Delete a profile" })
-  @ApiResponse({ status: 403, description: "Not the owner of this profile" })
+  @ApiResponse({
+    status: 403,
+    description: "Not the owner of this profile",
+    type: ApiError,
+  })
   remove(@Session() session: UserSession, @Param("id") id: string) {
     return this.profileService.remove(id, session.user.id);
   }

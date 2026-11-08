@@ -1,5 +1,5 @@
-import { createZodDto } from "nestjs-zod";
 import { latLongsPaired } from "../../common/validation/lat-long";
+import { createZodDto } from "../../common/zod-dto";
 import { CreateProfileObjectSchema } from "./create-profile.dto";
 
 export const UpdateProfileSchema = CreateProfileObjectSchema.partial().refine(
