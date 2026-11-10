@@ -93,6 +93,31 @@ export const ApplicationSchema = z.object({
 export class Application extends createZodDto(ApplicationSchema) {}
 
 /**
+ * The listing as a list row embeds it: the card's fields, nothing more.
+ *
+ * A row of `GET /applications/mine` shows the title, the period, the status and
+ * « practice · city »; the paragraph and the practice's street address and
+ * coordinates are the detail read's (`GET /applications/:id`), and sending them
+ * on every row of every page was most of the payload. Derived with `omit` and
+ * `pick` so the summary cannot drift from the full snapshot. The serializer
+ * strips whatever the schema does not name.
+ */
+export const ApplicationListingSummarySchema = ApplicationListingSchema.omit({
+  description: true,
+}).extend({
+  practice: ApplicationListingSchema.shape.practice.pick({
+    id: true,
+    name: true,
+    city: true,
+  }),
+});
+
+/** An application as a list publishes it — see `ApplicationListingSummarySchema`. */
+export const ApplicationSummarySchema = ApplicationSchema.extend({
+  listing: ApplicationListingSummarySchema.optional(),
+});
+
+/**
  * Server-computed totals for the whole collection, independent of any
  * applied filter; `total` backs the "all" tab.
  */
@@ -119,7 +144,7 @@ export const ApplicationBucketCountsSchema = z.object({
 });
 
 export const PaginatedApplicationsSchema = z.object({
-  data: z.array(ApplicationSchema),
+  data: z.array(ApplicationSummarySchema),
   meta: PaginationMetaSchema.extend({
     counts: ApplicationStatusCountsSchema,
     bucketCounts: ApplicationBucketCountsSchema.optional(),

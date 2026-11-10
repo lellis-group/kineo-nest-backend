@@ -220,6 +220,24 @@ beforeEach(async () => {
 });
 
 describe("GET /applications/mine", () => {
+  it("embeds each listing as a list row draws it, nothing more", async () => {
+    const { cookies } = await seed();
+    const response = await request(fx.baseUrl)
+      .get("/applications/mine")
+      .set("Cookie", cookies);
+
+    expect(response.status).toBe(200);
+    for (const row of response.body.data) {
+      // The paragraph and the street address belong to the detail read.
+      expect(row.listing).not.toHaveProperty("description");
+      expect(Object.keys(row.listing.practice).sort()).toEqual([
+        "city",
+        "id",
+        "name",
+      ]);
+    }
+  });
+
   it("counts each situation over the whole collection", async () => {
     const { cookies, rows } = await seed();
     const body = await mine(cookies);

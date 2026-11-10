@@ -258,6 +258,8 @@ describe("the owner-side lifecycle of a listing", () => {
     expect(mineBefore.status).toBe(200);
     expect(mineBefore.body.meta.total).toBe(1);
     expect(mineBefore.body.meta.counts.DRAFT).toBe(1);
+    // A row of the owner's board: the paragraph is the detail read's.
+    expect(mineBefore.body.data[0]).not.toHaveProperty("description");
 
     // Publish: now the feed carries it, JSON-shaped for the wire.
     const published = await request(fx.baseUrl)
