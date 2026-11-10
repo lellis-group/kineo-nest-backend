@@ -241,6 +241,27 @@ describe("ProfileService", () => {
       expect(result.meta).toMatchObject({ total: 1, page: 1, totalPages: 1 });
       expect(where).toMatchObject({ isPublic: true, city: "Lyon" });
     });
+
+    it("rounds each public profile's coordinates to about a kilometre", async () => {
+      const prisma = {
+        profile: {
+          findMany: async () => [
+            { ...owned, latitude: 45.764043, longitude: 4.835659 },
+          ],
+          count: async () => 1,
+        },
+      } as unknown as PrismaService;
+
+      const result = await new ProfileService(prisma).findAll({
+        page: 1,
+        limit: 20,
+      } as never);
+
+      expect(result.data[0]).toMatchObject({
+        latitude: 45.76,
+        longitude: 4.84,
+      });
+    });
   });
 
   describe("findOne and findByUserId", () => {
@@ -275,6 +296,34 @@ describe("ProfileService", () => {
       );
 
       expect(result.id).toBe("profile-1");
+    });
+
+    it("blurs the coordinates and keeps a missing pair missing", async () => {
+      const located = {
+        profile: {
+          findUnique: async () => ({
+            ...owned,
+            latitude: 48.856614,
+            longitude: 2.352222,
+          }),
+        },
+      } as unknown as PrismaService;
+      const unlocated = {
+        profile: {
+          findUnique: async () => ({
+            ...owned,
+            latitude: null,
+            longitude: null,
+          }),
+        },
+      } as unknown as PrismaService;
+
+      expect(
+        await new ProfileService(located).findOne("profile-1", "user-2"),
+      ).toMatchObject({ latitude: 48.86, longitude: 2.35 });
+      expect(
+        await new ProfileService(unlocated).findOne("profile-1", "user-2"),
+      ).toMatchObject({ latitude: null, longitude: null });
     });
 
     it("answers 404 when no profile belongs to the user", async () => {

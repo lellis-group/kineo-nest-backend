@@ -895,11 +895,10 @@ export class ReplacementlistingsService {
       throw new NotFoundException(`Replacement listing ${id} not found`);
     }
 
-    // Anonymous readers reach the applicable set, and nothing beyond it: a
-    // listing the feed shows must answer its direct link too, and the link the
-    // feed's first candidate produced used to answer 404 with the OPEN-only
-    // gate. Everyone else — owner or not — still needs to identify themselves
-    // to read a listing outside that set.
+    // Any member reaches the applicable set — a listing the feed shows must
+    // answer its direct link too — and only the owner reaches beyond it. The
+    // route requires a session; the requester stays optional here so an
+    // internal caller without one gets the applicable set and nothing more.
     if (!APPLICABLE_LISTING_STATUSES.includes(listing.status)) {
       if (!requesterUserId) {
         throw new NotFoundException(`Replacement listing ${id} not found`);

@@ -13,11 +13,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
-import {
-  AllowAnonymous,
-  OptionalAuth,
-  Session,
-} from "@thallesp/nestjs-better-auth";
+import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
 import { ApiBadRequest, ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
@@ -40,24 +36,19 @@ import {
 import { ReplacementlistingsService } from "./replacementlistings.service";
 
 /**
- * What a public read of the feed may be cached for, by whoever holds it.
+ * How long a browser may keep a read of the feed.
  *
- * The browse endpoints answer the same collection to every reader: the feed is
- * OPEN listings under public practices, with nothing scoped to a caller, which
- * is what makes the cacheability a property of the response rather than a
- * per-route decision. Before this, none of the three carried any header, so a
- * browser re-downloaded a 142 kB `/places` on every visit and the Next.js proxy
- * paid its own hop for it each time.
+ * The browse endpoints require a session, so the answer is `private`: a shared
+ * cache (CDN, corporate proxy) must never store it and hand it to a reader who
+ * has none. The content is the same for every member — OPEN listings under
+ * public practices, nothing scoped to a caller — so the reader's own browser may
+ * reuse it briefly, which is what spares a 142 kB `/places` on every visit.
  *
  * The window is deliberately short. The collection changes the moment somebody
- * publishes or closes a posting, and a reader who is told 42 results for a
- * minute after there are 41 sees a count that is stale by one; a reader who is
- * told that for an hour sees a feed that is quietly lying. 60 s shared, 15 s
- * private, with a stale answer served while a fresh one is fetched behind it —
- * so the cost of a cold cache is paid once and not by the reader who caused it.
+ * publishes or closes a posting, and a count that is stale for fifteen seconds
+ * is one a reader will not notice; stale for an hour, the feed is quietly lying.
  */
-const BROWSE_CACHE_CONTROL =
-  "public, max-age=15, s-maxage=60, stale-while-revalidate=300";
+const BROWSE_CACHE_CONTROL = "private, max-age=15, stale-while-revalidate=60";
 
 @ApiTags("Replacement Listings")
 @UseGuards(EmailVerifiedGuard)
@@ -95,7 +86,6 @@ export class ReplacementlistingsController {
   }
 
   @Get()
-  @AllowAnonymous()
   @Header("Cache-Control", BROWSE_CACHE_CONTROL)
   @ApiOperation({ summary: "Search open replacement listings" })
   @ApiResponse({
@@ -113,7 +103,6 @@ export class ReplacementlistingsController {
   // reached — the `:id` route would answer to the literal string "facets" and
   // look for a listing with that id.
   @Get("facets")
-  @AllowAnonymous()
   @Header("Cache-Control", BROWSE_CACHE_CONTROL)
   @ApiOperation({
     summary:
@@ -134,7 +123,6 @@ export class ReplacementlistingsController {
   // `:id` route would answer to the literal string "places" and look for a
   // listing with that id.
   @Get("places")
-  @AllowAnonymous()
   @Header("Cache-Control", BROWSE_CACHE_CONTROL)
   @ApiOperation({
     summary:
@@ -157,7 +145,6 @@ export class ReplacementlistingsController {
   // in the order they appear in the file, so a handler declared after `:id`
   // would never be reached.
   @Get("page-of")
-  @AllowAnonymous()
   @Header("Cache-Control", BROWSE_CACHE_CONTROL)
   @ApiOperation({
     summary:
@@ -192,7 +179,6 @@ export class ReplacementlistingsController {
   }
 
   @Get(":id")
-  @OptionalAuth()
   @ApiOperation({ summary: "Get a listing by id" })
   @ApiResponse({
     status: 404,
@@ -205,11 +191,8 @@ export class ReplacementlistingsController {
     type: ReplacementListing,
   })
   @ZodSerializerDto(ReplacementListing)
-  findOne(
-    @Session() session: UserSession | undefined,
-    @Param("id") id: string,
-  ) {
-    return this.replacementlistingsService.findOne(id, session?.user.id);
+  findOne(@Session() session: UserSession, @Param("id") id: string) {
+    return this.replacementlistingsService.findOne(id, session.user.id);
   }
 
   @Patch(":id/publish")

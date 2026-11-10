@@ -11,11 +11,7 @@ import {
 } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
-import {
-  AllowAnonymous,
-  OptionalAuth,
-  Session,
-} from "@thallesp/nestjs-better-auth";
+import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
 import { ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
@@ -65,7 +61,6 @@ export class ProfileController {
   }
 
   @Get()
-  @AllowAnonymous()
   @ApiOperation({ summary: "Search public profiles" })
   @ApiResponse({
     status: 200,
@@ -95,7 +90,6 @@ export class ProfileController {
   }
 
   @Get(":id")
-  @OptionalAuth()
   @ApiOperation({ summary: "Get a profile by id" })
   @ApiResponse({
     status: 404,
@@ -108,11 +102,8 @@ export class ProfileController {
     type: PublicProfile,
   })
   @ZodSerializerDto(PublicProfile)
-  findOne(
-    @Session() session: UserSession | undefined,
-    @Param("id") id: string,
-  ) {
-    return this.profileService.findOne(id, session?.user.id);
+  findOne(@Session() session: UserSession, @Param("id") id: string) {
+    return this.profileService.findOne(id, session.user.id);
   }
 
   @Patch(":id")

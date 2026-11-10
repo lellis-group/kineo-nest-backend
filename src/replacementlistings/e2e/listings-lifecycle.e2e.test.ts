@@ -31,6 +31,7 @@ import {
   resetData,
   shutdownApp,
   signIn,
+  signInReader,
 } from "../../common/e2e/harness";
 import { REFUSAL_CODES } from "../../common/refusal";
 import type { ReplacementListing } from "../../generated/prisma/client";
@@ -43,6 +44,8 @@ process.env.MAX_ACTIVE_LISTINGS_PER_PROFILE = "2";
 const PASSWORD = "Password123!";
 
 let fx: E2EFixture;
+/** A signed-in member who owns nothing, re-created after each reset. */
+let reader = "";
 
 interface SeededOwner {
   profileId: string;
@@ -215,6 +218,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(fx.prisma);
+  reader = await signInReader(fx);
 });
 
 describe("the owner-side lifecycle of a listing", () => {
@@ -239,8 +243,12 @@ describe("the owner-side lifecycle of a listing", () => {
     const id: string = created.body.id as string;
 
     // A draft is invisible to the anonymous feed.
-    const feedBefore = await request(fx.baseUrl).get("/replacement-listings");
+    const feedBefore = await request(fx.baseUrl)
+      .get("/replacement-listings")
+      .set("Cookie", reader);
     expect(feedBefore.status).toBe(200);
+    // Members-only, so never a shared cache's to keep and hand to someone else.
+    expect(feedBefore.headers["cache-control"]).toStartWith("private");
     expect(feedBefore.body.data).toHaveLength(0);
 
     // ...but visible in its owner's own list, in the draft bucket.
@@ -259,22 +267,24 @@ describe("the owner-side lifecycle of a listing", () => {
     expect(published.body).toMatchObject({ id, status: "OPEN" });
     expect(typeof published.body.startDate).toBe("string");
 
-    const feed = await request(fx.baseUrl).get("/replacement-listings");
+    const feed = await request(fx.baseUrl)
+      .get("/replacement-listings")
+      .set("Cookie", reader);
     expect(feed.status).toBe(200);
     expect(feed.body.data).toMatchObject([{ id, status: "OPEN" }]);
 
-    const facets = await request(fx.baseUrl).get(
-      "/replacement-listings/facets",
-    );
+    const facets = await request(fx.baseUrl)
+      .get("/replacement-listings/facets")
+      .set("Cookie", reader);
     expect(facets.status).toBe(200);
     expect(facets.body).toMatchObject({ total: 1, urgent: 0 });
     expect(facets.body.bySpecialty.GENERALIST).toBe(1);
 
     // The practice was seeded without coordinates: the population counts one
     // posting, but nothing it can draw.
-    const places = await request(fx.baseUrl).get(
-      "/replacement-listings/places",
-    );
+    const places = await request(fx.baseUrl)
+      .get("/replacement-listings/places")
+      .set("Cookie", reader);
     expect(places.status).toBe(200);
     expect(places.body).toMatchObject({
       places: [],
@@ -285,6 +295,7 @@ describe("the owner-side lifecycle of a listing", () => {
 
     const pageOf = await request(fx.baseUrl)
       .get("/replacement-listings/page-of")
+      .set("Cookie", reader)
       .query({ id, sort: "startDate", limit: 10 });
     expect(pageOf.status).toBe(200);
     expect(pageOf.body).toEqual({ page: 1 });
@@ -316,21 +327,23 @@ describe("the owner-side lifecycle of a listing", () => {
     });
     expect(after?.status).toBe("IN_DISCUSSION");
 
-    const feed = await request(fx.baseUrl).get("/replacement-listings");
+    const feed = await request(fx.baseUrl)
+      .get("/replacement-listings")
+      .set("Cookie", reader);
     expect(feed.status).toBe(200);
     expect(feed.body.data).toMatchObject([
       { id: listing.id, status: "IN_DISCUSSION" },
     ]);
 
-    const facets = await request(fx.baseUrl).get(
-      "/replacement-listings/facets",
-    );
+    const facets = await request(fx.baseUrl)
+      .get("/replacement-listings/facets")
+      .set("Cookie", reader);
     expect(facets.status).toBe(200);
     expect(facets.body).toMatchObject({ total: 1 });
 
-    const direct = await request(fx.baseUrl).get(
-      `/replacement-listings/${listing.id}`,
-    );
+    const direct = await request(fx.baseUrl)
+      .get(`/replacement-listings/${listing.id}`)
+      .set("Cookie", reader);
     expect(direct.status).toBe(200);
     expect(direct.body).toMatchObject({
       id: listing.id,

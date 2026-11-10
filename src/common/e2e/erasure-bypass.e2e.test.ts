@@ -30,11 +30,14 @@ import {
   emailsTo,
   resetData,
   shutdownApp,
+  signInReader,
 } from "./harness";
 
 const PASSWORD = "Password123!";
 
 let fx: E2EFixture;
+/** A signed-in member who owns nothing, re-created after each reset. */
+let reader = "";
 
 /** An owner with an open listing a candidate has applied to. */
 async function seedScenario() {
@@ -174,6 +177,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(fx.prisma);
+  reader = await signInReader(fx);
   clearSentEmails();
 });
 
@@ -343,13 +347,15 @@ describe("POST /account/confirm-deletion", () => {
     });
     expect(practice?.name).not.toBe("Test Practice");
 
-    const listed = await request(fx.baseUrl).get("/practices");
+    const listed = await request(fx.baseUrl)
+      .get("/practices")
+      .set("Cookie", reader);
     expect(listed.status).toBe(200);
     expect(JSON.stringify(listed.body)).not.toContain("Test Practice");
     // And out of the geographic index, since it has no coordinates left.
-    const geo = await request(fx.baseUrl).get(
-      "/practices?lat=45.75&lng=4.85&radiusKm=50",
-    );
+    const geo = await request(fx.baseUrl)
+      .get("/practices?lat=45.75&lng=4.85&radiusKm=50")
+      .set("Cookie", reader);
     expect(geo.status).toBe(200);
     expect(JSON.stringify(geo.body)).not.toContain("Test Practice");
 

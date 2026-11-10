@@ -30,11 +30,14 @@ import {
   resetData,
   shutdownApp,
   signIn,
+  signInReader,
 } from "../../common/e2e/harness";
 
 const PASSWORD = "Password123!";
 
 let fx: E2EFixture;
+/** A signed-in member who owns nothing, re-created after each reset. */
+let reader = "";
 
 interface Seeded {
   userId: string;
@@ -102,6 +105,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(fx.prisma);
+  reader = await signInReader(fx);
 });
 
 describe("creating a profile", () => {
@@ -209,9 +213,9 @@ describe("reading profiles", () => {
       isPublic: true,
     });
 
-    const response = await request(fx.baseUrl).get(
-      `/profile/${seeded.profileId}`,
-    );
+    const response = await request(fx.baseUrl)
+      .get(`/profile/${seeded.profileId}`)
+      .set("Cookie", reader);
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
@@ -246,24 +250,30 @@ describe("reading profiles", () => {
     await seedProfile({ city: "Brest", specialty: "DENTIST", isPublic: true });
     await seedProfile({ city: "Nice", isPublic: false });
 
-    const all = await request(fx.baseUrl).get("/profile");
+    const all = await request(fx.baseUrl).get("/profile").set("Cookie", reader);
     expect(all.status).toBe(200);
     // The private profile is not in the directory at all.
     expect(all.body.data.map((row: { id: string }) => row.id)).toHaveLength(2);
 
-    const inBrest = await request(fx.baseUrl).get("/profile").query({
-      city: "Brest",
-    });
+    const inBrest = await request(fx.baseUrl)
+      .get("/profile")
+      .set("Cookie", reader)
+      .query({
+        city: "Brest",
+      });
     expect(inBrest.body.data).toHaveLength(1);
     expect(inBrest.body.data[0].specialty).toBe("DENTIST");
     expect(inBrest.body.meta.total).toBe(1);
 
     const dentists = await request(fx.baseUrl)
       .get("/profile")
+      .set("Cookie", reader)
       .query({ specialty: "DENTIST" });
     expect(dentists.body.data).toHaveLength(1);
 
-    const unknown = await request(fx.baseUrl).get("/profile/does-not-exist");
+    const unknown = await request(fx.baseUrl)
+      .get("/profile/does-not-exist")
+      .set("Cookie", reader);
     expect(unknown.status).toBe(404);
   });
 });

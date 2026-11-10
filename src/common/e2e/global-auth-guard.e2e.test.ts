@@ -18,6 +18,17 @@ const PROTECTED_ROUTES = [
   "/profile/me",
   "/practices/mine",
   "/replacement-listings/mine",
+  // The browse feed and the directories are members-only too: they scope
+  // nothing to the caller, but nothing in them is meant for an anonymous one.
+  "/replacement-listings",
+  "/replacement-listings/facets",
+  "/replacement-listings/places",
+  "/replacement-listings/page-of",
+  "/replacement-listings/any-id",
+  "/profile",
+  "/profile/any-id",
+  "/practices",
+  "/practices/any-id",
 ];
 
 beforeAll(async () => {
@@ -40,11 +51,9 @@ describe("routes that opted out", () => {
   it("still answer", async () => {
     const ping = await request(fx.baseUrl).get("/ping");
     const health = await request(fx.baseUrl).get("/health");
-    const practice = await request(fx.baseUrl).get("/practices/missing-id");
 
     expect(ping.status).toBe(200);
     // Liveness only: no uptime, no database state, to anyone who asks.
     expect(health.body).toEqual({ status: "ok" });
-    expect(practice.status).toBe(404);
   });
 });

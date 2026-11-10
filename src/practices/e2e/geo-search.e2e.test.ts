@@ -23,10 +23,13 @@ import {
   type E2EFixture,
   resetData,
   shutdownApp,
+  signInReader,
 } from "../../common/e2e/harness";
 import { SYSTEM_SCAFFOLD } from "../../common/system-scaffold";
 
 let fx: E2EFixture;
+/** A signed-in member who owns nothing, re-created after each reset. */
+let reader = "";
 
 async function seedPractice(
   id: string,
@@ -84,6 +87,7 @@ async function search(
 ) {
   const response = await request(fx.baseUrl)
     .get("/practices")
+    .set("Cookie", reader)
     .query({
       lat: String(lat),
       lng: String(lng),
@@ -111,6 +115,7 @@ async function list({
 }> {
   const response = await request(fx.baseUrl)
     .get("/practices")
+    .set("Cookie", reader)
     .query({
       limit: "50",
       page: "1",
@@ -135,6 +140,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(fx.prisma);
+  reader = await signInReader(fx);
 });
 
 describe("GET /practices around the antimeridian", () => {

@@ -452,11 +452,19 @@ WHERE "userIdHash" IS NULL;
   partial unique indexes the erasure's one-`PENDING`-per-fingerprint rule rests
   on. It is production code on a preview flag (Prisma 7.9.1 at the time of
   writing): check the release notes at every upgrade before touching it.
-- The public feed answers the *applicable* set — `OPEN` **and** `IN_DISCUSSION`
+- The browse feed answers the *applicable* set — `OPEN` **and** `IN_DISCUSSION`
   (`src/common/listing-status.ts`), the statuses `applications.create` accepts —
-  and so do the facets, the map and the anonymous link. A `FULL` posting is out
+  and so do the facets, the map and the direct link. A `FULL` posting is out
   by construction, `RECRUITING_LISTING_STATUSES` is the wider console set, and
   the gap between the two is the product's, not an accident.
+- Every read route requires a session — the feed (`/replacement-listings`,
+  `/facets`, `/places`, `/page-of`, `/:id`) and the directories (`/profile`,
+  `/profile/:id`, `/practices`, `/practices/:id`) included; besides better-auth's
+  own `/api/auth/*` routes, only `/`, `/ping`,
+  `/health` and the erasure confirmation opt out. The feed is therefore sent
+  `Cache-Control: private`, so no shared cache stores it, and a public profile's
+  coordinates are rounded to two decimals (~1 km): a profile is a person, and
+  the exact values stay on the owner's `GET /profile/me`.
 
 ## 11. Notes for AI Takeover
 

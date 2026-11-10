@@ -27,6 +27,7 @@ import {
   resetData,
   shutdownApp,
   signIn,
+  signInReader,
 } from "../../common/e2e/harness";
 
 const PASSWORD = "Password123!";
@@ -37,6 +38,8 @@ const PASSWORD = "Password123!";
 process.env.MAX_PRACTICES_PER_PROFILE = "2";
 
 let fx: E2EFixture;
+/** A signed-in member who owns nothing, re-created after each reset. */
+let reader = "";
 
 interface SeededOwner {
   cookies: string;
@@ -97,6 +100,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(fx.prisma);
+  reader = await signInReader(fx);
 });
 
 describe("creating a practice", () => {
@@ -232,9 +236,9 @@ describe("reading practices", () => {
       isPublic: false,
     });
 
-    const opened = await request(fx.baseUrl).get(
-      `/practices/${publicPractice.body.id}`,
-    );
+    const opened = await request(fx.baseUrl)
+      .get(`/practices/${publicPractice.body.id}`)
+      .set("Cookie", reader);
     expect(opened.status).toBe(200);
     expect(opened.body).toMatchObject({
       name: "Cabinet Ouvert",
@@ -299,9 +303,9 @@ describe("editing a practice", () => {
       },
     });
 
-    const before = await request(fx.baseUrl).get(
-      "/replacement-listings/places",
-    );
+    const before = await request(fx.baseUrl)
+      .get("/replacement-listings/places")
+      .set("Cookie", reader);
     expect(before.status).toBe(200);
     expect(before.body).toMatchObject({
       places: [],
@@ -317,7 +321,9 @@ describe("editing a practice", () => {
     // Same practice, same posting, one write apart: the coordinates a practice
     // gains are what make its postings drawable, and only a real read of both
     // halves proves the pairing holds.
-    const after = await request(fx.baseUrl).get("/replacement-listings/places");
+    const after = await request(fx.baseUrl)
+      .get("/replacement-listings/places")
+      .set("Cookie", reader);
     expect(after.status).toBe(200);
     expect(after.body).toMatchObject({
       unlocated: 0,

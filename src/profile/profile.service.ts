@@ -16,7 +16,7 @@ import { PrismaService } from "../prisma.service";
 import { CreateProfileDto } from "./dto/create-profile.dto";
 import { FindProfilesDto } from "./dto/find-profiles.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
-import { toProfileDto } from "./profile.mapper";
+import { toProfileDto, toPublicProfileDto } from "./profile.mapper";
 
 /**
  * The conflict a unique constraint names, translated.
@@ -94,7 +94,7 @@ export class ProfileService {
     ]);
 
     return {
-      data: data.map(toProfileDto),
+      data: data.map(toPublicProfileDto),
       meta: paginationMeta(total, page, limit),
     };
   }
@@ -110,7 +110,7 @@ export class ProfileService {
       throw new NotFoundException(`Profile ${id} not found`);
     }
 
-    return toProfileDto(profile);
+    return toPublicProfileDto(profile);
   }
 
   async findByUserId(userId: string) {

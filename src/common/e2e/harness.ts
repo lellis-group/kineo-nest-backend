@@ -345,3 +345,21 @@ export async function signIn(
 
   return response.headers.get("set-cookie") ?? "";
 }
+
+const READER_PASSWORD = "reader-password-123";
+
+/**
+ * A signed-in member with nothing of their own — no profile, no practice.
+ *
+ * The browse and directory routes require a session but scope nothing to it,
+ * so a suite reading them as "anyone but the owner" signs in as this reader.
+ * Call it after `resetData`, which drops every user.
+ */
+export async function signInReader(
+  fx: E2EFixture,
+  id = "reader",
+): Promise<string> {
+  const email = `${id}@kineo.test`;
+  await createVerifiedUser(fx.prisma, id, email, READER_PASSWORD);
+  return signIn(fx.baseUrl, email, READER_PASSWORD);
+}
