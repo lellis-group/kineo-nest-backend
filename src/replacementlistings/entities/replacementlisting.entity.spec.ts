@@ -177,6 +177,7 @@ describe("ListingFacetsSchema", () => {
         PSYCHIATRIST: 0,
         OTHER: 0,
       },
+      byStartWeek: [{ weekStart: "2026-11-09T00:00:00.000Z", count: 2 }],
     });
 
     expect(parsed.total).toBe(3);

@@ -135,6 +135,18 @@ export const ListingFacetsSchema = z.object({
   /** Of those, the ones flagged urgent. */
   urgent: z.number(),
   bySpecialty: z.record(z.enum(Specialty), z.number()),
+  /**
+   * Of those, how many start in each of the next `FACET_WEEKS` weeks, oldest
+   * first. Weeks run Monday to Sunday in UTC and the first is the current one;
+   * every week is present, so an empty week is a zero bar rather than a gap.
+   */
+  byStartWeek: z.array(
+    z.object({
+      /** Monday 00:00 UTC that opens the week. */
+      weekStart: z.iso.datetime(),
+      count: z.number(),
+    }),
+  ),
 });
 
 export class ListingFacets extends createZodDto(ListingFacetsSchema) {}

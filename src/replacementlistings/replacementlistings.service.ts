@@ -353,6 +353,36 @@ export function orderByFor(
   return [{ createdAt: "desc" }, id];
 }
 
+/** How many weeks ahead `findFacets` counts starts over. */
+export const FACET_WEEKS = 12;
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The Mondays (00:00 UTC) opening the current week and the `FACET_WEEKS - 1`
+ * after it.
+ *
+ * UTC rather than Paris time: a start stored at midnight Paris is 22:00 or
+ * 23:00 UTC the day before, which lands a Monday start in the previous week
+ * for a few hours of the year at most — a bar off by one for an edge nobody
+ * reads at that grain, against a server that would otherwise need a timezone.
+ */
+export function facetWeeks(now: Date): Date[] {
+  const day = now.getUTCDay();
+  const sinceMonday = (day + 6) % 7;
+  const monday = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() - sinceMonday,
+    ),
+  );
+  return Array.from(
+    { length: FACET_WEEKS },
+    (_, index) => new Date(monday.getTime() + index * WEEK_MS),
+  );
+}
+
 @Injectable()
 export class ReplacementlistingsService {
   constructor(
@@ -587,7 +617,11 @@ export class ReplacementlistingsService {
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
-    const [grouped, urgent] = await Promise.all([
+    const weeks = facetWeeks(new Date());
+    const windowStart = weeks[0];
+    const windowEnd = new Date(windowStart.getTime() + FACET_WEEKS * WEEK_MS);
+
+    const [grouped, urgent, upcoming] = await Promise.all([
       this.prisma.replacementListing.groupBy({
         by: ["specialty"],
         where,
@@ -596,7 +630,27 @@ export class ReplacementlistingsService {
       this.prisma.replacementListing.count({
         where: { ...where, urgent: true },
       }),
+      // `AND` rather than a spread: the filters may carry their own
+      // `startDate` bounds, and both have to hold.
+      this.prisma.replacementListing.findMany({
+        where: {
+          AND: [where, { startDate: { gte: windowStart, lt: windowEnd } }],
+        },
+        select: { startDate: true },
+      }),
     ]);
+
+    const perWeek = new Array<number>(FACET_WEEKS).fill(0);
+    for (const { startDate } of upcoming) {
+      const index = Math.floor(
+        (startDate.getTime() - windowStart.getTime()) / WEEK_MS,
+      );
+      if (index >= 0 && index < FACET_WEEKS) perWeek[index] += 1;
+    }
+    const byStartWeek = weeks.map((weekStart, index) => ({
+      weekStart: weekStart.toISOString(),
+      count: perWeek[index],
+    }));
 
     // Seeded with the whole enum so a specialty with no listing reads as a zero
     // the panel draws, not as a row that vanished.
@@ -610,7 +664,7 @@ export class ReplacementlistingsService {
       total += row._count;
     }
 
-    return { total, urgent, bySpecialty };
+    return { total, urgent, bySpecialty, byStartWeek };
   }
 
   /**

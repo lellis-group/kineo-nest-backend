@@ -11,6 +11,8 @@ import type {
   FindReplacementListingsDto,
 } from "./dto/find-replacementlistings.dto";
 import {
+  FACET_WEEKS,
+  facetWeeks,
   orderByFor,
   precedesInOrder,
   ReplacementlistingsService,
@@ -1239,8 +1241,13 @@ describe("ReplacementlistingsService", () => {
     function prismaFor(
       groups: Array<{ specialty: string; _count: number }>,
       urgent: number,
+      starts: Date[] = [],
     ) {
-      const reads: { groupByWhere?: unknown; countWhere?: unknown } = {};
+      const reads: {
+        groupByWhere?: unknown;
+        countWhere?: unknown;
+        findManyWhere?: unknown;
+      } = {};
       const prisma = {
         replacementListing: {
           groupBy: async (args: { where: unknown }) => {
@@ -1250,6 +1257,10 @@ describe("ReplacementlistingsService", () => {
           count: async (args: { where: unknown }) => {
             reads.countWhere = args.where;
             return urgent;
+          },
+          findMany: async (args: { where: unknown }) => {
+            reads.findManyWhere = args.where;
+            return starts.map((startDate) => ({ startDate }));
           },
         },
       };
@@ -1289,12 +1300,39 @@ describe("ReplacementlistingsService", () => {
 
       const result = await service.findFacets({} as FindReplacementListingsDto);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         total: 0,
         urgent: 0,
         bySpecialty: Object.fromEntries(
           Object.values(Specialty).map((specialty) => [specialty, 0]),
         ) as Record<Specialty, number>,
+      });
+      expect(result.byStartWeek).toHaveLength(FACET_WEEKS);
+      expect(result.byStartWeek.every((week) => week.count === 0)).toBe(true);
+    });
+
+    it("counts starts per week from the current Monday, every week present", async () => {
+      const [thisMonday] = facetWeeks(new Date());
+      const day = 24 * 60 * 60 * 1000;
+      const { reads, service } = prismaFor([], 0, [
+        new Date(thisMonday.getTime() + 2 * day),
+        new Date(thisMonday.getTime() + 6 * day),
+        new Date(thisMonday.getTime() + 15 * day),
+      ]);
+
+      const result = await service.findFacets({} as FindReplacementListingsDto);
+
+      expect(result.byStartWeek.map((week) => week.count)).toEqual([
+        2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      ]);
+      expect(result.byStartWeek[0].weekStart).toBe(thisMonday.toISOString());
+      // The window is ANDed with the filters, never spread over them, so a
+      // reader's own date bounds still hold.
+      expect(reads.findManyWhere).toMatchObject({
+        AND: [
+          { status: { in: ["OPEN", "IN_DISCUSSION"] } },
+          { startDate: { gte: thisMonday } },
+        ],
       });
     });
 
