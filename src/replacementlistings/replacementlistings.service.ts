@@ -43,6 +43,13 @@ import {
 } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import type { ListingPlace } from "./entities/replacementlisting.entity";
+import {
+  decodeListingCursor,
+  encodeListingCursor,
+  followsInOrder,
+  type ListingCursorKey,
+  type ListingSort,
+} from "./listing-cursor";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
 
 /**
@@ -203,6 +210,16 @@ export function precedesInOrder(
  * "there is a replacement posting in this town", which is the disclosure
  * `isPublic` exists to prevent. This matches what `GET /practices` already does.
  */
+/** The cursor after a full page, or null when this page was the last. */
+function nextCursorFor(
+  rows: ListingCursorKey[],
+  limit: number,
+  sort: ListingSort,
+): string | null {
+  const last = rows.at(-1);
+  return rows.length === limit && last ? encodeListingCursor(sort, last) : null;
+}
+
 const PRACTICE_INCLUDE = {
   practice: {
     select: {
@@ -569,15 +586,22 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(publicFilters, { publicOnly: true }),
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
+    const sort = filters.sort ?? "recent";
+    const after = filters.cursor
+      ? followsInOrder(decodeListingCursor(filters.cursor, sort), sort)
+      : undefined;
 
     const [data, total] = await Promise.all([
       this.prisma.replacementListing.findMany({
-        where,
-        skip,
+        // `AND` rather than a spread: `where` already carries its own `OR`.
+        where: after ? { AND: [where, after] } : where,
+        skip: after ? undefined : skip,
         take: limit,
-        orderBy: orderByFor(filters.sort),
+        orderBy: orderByFor(sort),
         select: LISTING_SUMMARY_SELECT,
       }),
+      // The count stays over the whole filter: it is the size of the
+      // collection, not of what is left of it.
       this.prisma.replacementListing.count({ where }),
     ]);
 
@@ -590,7 +614,10 @@ export class ReplacementlistingsService {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCountFor(listing, applicationsCount)),
       ),
-      meta: paginationMeta(total, page, limit),
+      meta: {
+        ...paginationMeta(total, page, limit),
+        nextCursor: nextCursorFor(data, limit, sort),
+      },
     };
   }
 
@@ -849,10 +876,15 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(countFilters),
     };
 
+    // The owner's list has one ordering, the `recent` one, whatever `sort` says.
+    const after = filters.cursor
+      ? followsInOrder(decodeListingCursor(filters.cursor, "recent"), "recent")
+      : undefined;
+
     const [data, total, counts, nextRecruiting] = await Promise.all([
       this.prisma.replacementListing.findMany({
-        where,
-        skip,
+        where: after ? { AND: [where, after] } : where,
+        skip: after ? undefined : skip,
         take: limit,
         // createdAt is not unique, so ordering by it alone leaves Postgres free to
         // return two rows in either order between two pages: offset pagination then
@@ -878,6 +910,7 @@ export class ReplacementlistingsService {
         ...paginationMeta(total, page, limit),
         counts,
         nextRecruitingListing: nextRecruiting,
+        nextCursor: nextCursorFor(data, limit, "recent"),
       },
     };
   }
