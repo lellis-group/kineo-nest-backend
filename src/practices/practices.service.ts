@@ -11,6 +11,7 @@ import {
   PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE,
 } from "../common/application-guard";
 import { paginate, paginationMeta } from "../common/pagination";
+import { isRecordNotFound } from "../common/prisma-errors";
 import {
   getOwnedProfileId,
   getOwnedProfileIdSafe,
@@ -180,22 +181,18 @@ export class PracticesService {
       throw new ForbiddenException();
     }
 
-    const updated = await this.prisma.practice.updateMany({
-      where: { id, ownerId },
-      data: updatePracticeDto,
-    });
-
-    if (updated.count === 0) {
-      throw new NotFoundException(`Practice ${id} not found`);
+    try {
+      const saved = await this.prisma.practice.update({
+        where: { id, ownerId },
+        data: updatePracticeDto,
+      });
+      return toPracticeDto(saved);
+    } catch (error) {
+      if (isRecordNotFound(error)) {
+        throw new NotFoundException(`Practice ${id} not found`);
+      }
+      throw error;
     }
-
-    const saved = await this.prisma.practice.findUnique({ where: { id } });
-
-    if (!saved) {
-      throw new NotFoundException(`Practice ${id} not found`);
-    }
-
-    return toPracticeDto(saved);
   }
 
   /**

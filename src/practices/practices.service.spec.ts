@@ -7,6 +7,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 
 import { PRACTICE_HAS_THIRD_PARTY_APPLICATIONS_MESSAGE } from "../common/application-guard";
+import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
 import { PracticesService } from "./practices.service";
 
@@ -44,7 +45,7 @@ describe("PracticesService", () => {
       profile: { findUnique: async () => ({ id: "profile-1" }) },
       practice: {
         findUnique: async () => (writeHappened ? saved : row),
-        updateMany: async (args: {
+        update: async (args: {
           where: { id: string; ownerId: string };
           data: Record<string, unknown>;
         }) => {
@@ -56,13 +57,16 @@ describe("PracticesService", () => {
             saved.ownerId === args.where.ownerId;
 
           if (!matched) {
-            return { count: 0 };
+            throw new Prisma.PrismaClientKnownRequestError("No record found", {
+              code: "P2025",
+              clientVersion: "test",
+            });
           }
 
           writes.push(args.data);
           writeHappened = true;
           saved = { ...saved, ...args.data } as typeof owned;
-          return { count: 1 };
+          return saved;
         },
       },
     } as unknown as PrismaService;

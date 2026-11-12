@@ -848,11 +848,7 @@ describe("ApplicationsService", () => {
         profile: { findUnique: async () => ({ id: profileId }) },
         application: {
           findUnique: async () => views.row,
-          update: async ({ data }: { data: Record<string, unknown> }) => {
-            writes.push(data);
-            return { ...application, ...data };
-          },
-          updateMany: async (args: {
+          update: async (args: {
             where: { id: string; status?: string };
             data: Record<string, unknown>;
           }) => {
@@ -865,7 +861,13 @@ describe("ApplicationsService", () => {
               (!args.where.status || target.status === args.where.status);
 
             if (!matched) {
-              return { count: 0 };
+              throw new Prisma.PrismaClientKnownRequestError(
+                "No record found",
+                {
+                  code: "P2025",
+                  clientVersion: "test",
+                },
+              );
             }
 
             writes.push(args.data);
@@ -874,7 +876,7 @@ describe("ApplicationsService", () => {
               ...views.commit,
               ...args.data,
             } as typeof application;
-            return { count: 1 };
+            return views.commit;
           },
         },
       } as unknown as PrismaService;
@@ -985,7 +987,7 @@ describe("ApplicationsService", () => {
       expect(writes[0]?.respondedAt).toBeInstanceOf(Date);
     });
 
-    // The write is an `updateMany` whose `where` asks for the row it means to
+    // The write is an `update` whose `where` asks for the row it means to
     // move, not a blind overwrite of the row the read happened to see: if
     // anything ever drops the precondition, this fails first.
     it("hands the storage a write that carries the pending status", async () => {
