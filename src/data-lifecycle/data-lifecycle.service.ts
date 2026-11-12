@@ -123,7 +123,15 @@ export class DataLifecycleService {
    */
   private async sweepRetention(sweep: SweepRun) {
     const now = new Date();
-    const purged: Record<string, number> = {};
+    // Every counter starts at zero: two steps add to `deletionRequests`, and
+    // `undefined + n` is NaN — which made the total NaN, `total > 0` false, and
+    // silenced the one line that shows the sweep did its job.
+    const purged = {
+      sessions: 0,
+      verifications: 0,
+      anonymizedAccounts: 0,
+      deletionRequests: 0,
+    };
 
     await this.step("session", async () => {
       purged.sessions = await this.deleteInBatches(

@@ -262,3 +262,26 @@ describe("DataLifecycleService ghost listings", () => {
     expect(deletedLists).toHaveLength(0);
   });
 });
+
+describe("DataLifecycleService sweep report", () => {
+  it("reports what it purged, the trail included", async () => {
+    const { prisma } = makePrisma({ counts: { session: 2, trail: 1 } });
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line: unknown) => {
+      lines.push(String(line));
+    };
+
+    try {
+      await new DataLifecycleService(prisma).purgeExpired();
+    } finally {
+      console.log = original;
+    }
+
+    const report = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.message === "data_lifecycle.sweep");
+
+    expect(report).toMatchObject({ sessions: 2, deletionRequests: 2 });
+  });
+});
