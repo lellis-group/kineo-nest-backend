@@ -340,6 +340,25 @@ import would not fix it: `moduleResolution: Bundler` is a bundler-style ESM
 configuration, so `tsc` emits bare specifiers, and the generated Prisma client
 emits its own bare specifiers too. Bun resolves both.
 
+### Deploying the image
+
+The `Dockerfile` builds two images, and a release runs them in this order:
+
+```sh
+docker build --target migrate -t kineo-migrate .   # prisma migrate deploy, nothing else
+docker build -t kineo-api .                        # the server (default target)
+
+docker run --rm -e DATABASE_URL=… kineo-migrate    # once per release, before the servers
+docker run -e DATABASE_URL=… … kineo-api           # every replica
+```
+
+The server no longer migrates at boot. Prisma's deployment guide puts
+`migrate deploy` in the release pipeline: at startup every replica queued on the
+migration lock, a long or failing migration held back every instance (a plain
+restart included), and the server image had to carry the Prisma CLI. The server
+image now holds production dependencies only, peers omitted, which drops the
+CLI, Studio and `typescript` with them — about half the image.
+
 `bun run db:seed` **wipes every table** and recreates 40 accounts that share one
 password which is in this repository, so it refuses to run outside development
 and test unless `ALLOW_DESTRUCTIVE_SEED=true` is set. It is not a deploy step:
