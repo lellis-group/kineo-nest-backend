@@ -32,6 +32,7 @@ import {
   ListingStatus as LISTING_STATUSES,
   Specialty,
 } from "../generated/prisma/enums";
+import { escapeLike } from "../practices/geo-query";
 import { PrismaService } from "../prisma.service";
 import { PLACE_PREVIEW_LIMIT } from "./browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
@@ -495,9 +496,15 @@ export class ReplacementlistingsService {
     >,
     options: { publicOnly?: boolean } = {},
   ) {
+    // `contains` is a LIKE, and Prisma passes the term as it is: unescaped, `%`
+    // and `_` are wildcards and `?q=%` matched every posting. Escaped the way
+    // the practice search escapes them (`geo-query.ts`), so they name
+    // themselves on both.
+    const q = filters.q ? escapeLike(filters.q) : undefined;
+
     const practice: Prisma.PracticeWhereInput = {
       ...(filters.city
-        ? { city: { contains: filters.city, mode: "insensitive" } }
+        ? { city: { contains: escapeLike(filters.city), mode: "insensitive" } }
         : {}),
       ...(options.publicOnly ? { isPublic: true } : {}),
     };
@@ -517,13 +524,13 @@ export class ReplacementlistingsService {
       // visible around 14k rows, where a GIN index cut the places read from
       // 139 ms to 53 ms (the feed's from 42 ms to 23 ms). The index costs
       // ~1.7 MB and taxes writes, so it waits for the corpus to get there.
-      ...(filters.q
+      ...(q
         ? {
             OR: [
-              { title: { contains: filters.q, mode: "insensitive" as const } },
+              { title: { contains: q, mode: "insensitive" as const } },
               {
                 description: {
-                  contains: filters.q,
+                  contains: q,
                   mode: "insensitive" as const,
                 },
               },

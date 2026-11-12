@@ -540,3 +540,28 @@ describe("the owner-side lifecycle of a listing", () => {
     ).toBe(0);
   });
 });
+
+describe("the feed's free-text filters", () => {
+  // `contains` is a LIKE: unescaped, `%` matched every posting and `_` any
+  // character, while the practice search already read them as themselves.
+  it("reads a LIKE wildcard as a literal character", async () => {
+    const owner = await seedOwner();
+    await seedListingRow(owner.profileId, owner.practiceId);
+
+    for (const query of [{ q: "%" }, { q: "_" }, { city: "%" }]) {
+      const feed = await request(fx.baseUrl)
+        .get("/replacement-listings")
+        .query(query)
+        .set("Cookie", reader);
+
+      expect(feed.status).toBe(200);
+      expect(feed.body.meta.total).toBe(0);
+    }
+
+    const literal = await request(fx.baseUrl)
+      .get("/replacement-listings")
+      .query({ q: "Seeded" })
+      .set("Cookie", reader);
+    expect(literal.body.meta.total).toBe(1);
+  });
+});
