@@ -54,7 +54,7 @@ Les axes d'amélioration, du plus urgent au moins urgent :
 | 2 | ✅ Corrigé : compteurs initialisés à 0 ; test unitaire sur le log | `3c60928` |
 | 4 | ✅ Fait : `update` + P2025 (`src/common/prisma-errors.ts`) | `6a52699` |
 | 5 | ✅ Corrigé : `escapeLike` sur `q` et `city` ; test e2e | `2b7292b` |
-| 6 | ✅ Fait, sans casser l'API : `cursor` optionnel et `meta.nextCursor` sur `/replacement-listings` et `/mine` ; `page` fonctionne toujours | `13df6ff` |
+| 6 | ✅ Fait, sans casser l'API : `cursor` optionnel (id de la dernière ligne) et `meta.nextCursor` sur `/replacement-listings` et `/mine`, avec le `cursor` + `skip: 1` natif de Prisma ; `page` fonctionne toujours | `13df6ff`, simplifié ensuite |
 | 7, 8 | ✅ Fait : cible Docker `migrate` séparée, image serveur limitée aux dépendances de production (719 Mo → 352 Mo) | `bf60bf2` |
 | 9 → 14 | À faire | — |
 

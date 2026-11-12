@@ -43,13 +43,6 @@ import {
 } from "./dto/find-replacementlistings.dto";
 import type { UpdateReplacementListingDto } from "./dto/update-replacementlisting.dto";
 import type { ListingPlace } from "./entities/replacementlisting.entity";
-import {
-  decodeListingCursor,
-  encodeListingCursor,
-  followsInOrder,
-  type ListingCursorKey,
-  type ListingSort,
-} from "./listing-cursor";
 import { toReplacementListingDto } from "./replacementlisting.mapper";
 
 /**
@@ -201,6 +194,30 @@ export function precedesInOrder(
 }
 
 /**
+ * Where a page starts: after the `cursor` row when there is one, at `skip`
+ * otherwise.
+ *
+ * Prisma's cursor-based pagination, as its guide writes it: `cursor` on the
+ * last row's id, `skip: 1` to step past that row, the same `take` and
+ * `orderBy`. Prisma reads the cursor row's sort keys itself, so the existing
+ * (sort key, id) indexes serve the seek and no row is skipped or repeated
+ * when postings are published between two pages. `page` still works for a
+ * reader who jumps to a numbered page, which is what the guide keeps offset
+ * pagination for.
+ */
+function pageStart(
+  cursor: string | undefined,
+  skip: number,
+): Pick<Prisma.ReplacementListingFindManyArgs, "cursor" | "skip"> {
+  return cursor ? { cursor: { id: cursor }, skip: 1 } : { skip };
+}
+
+/** The id to resume after, or null when this page was the last. */
+function nextCursorFor(rows: { id: string }[], limit: number): string | null {
+  return rows.length === limit ? (rows.at(-1)?.id ?? null) : null;
+}
+
+/**
  * The practice, reduced to what the listing DTO publishes.
  *
  * `isPublic` is not selected because it is enforced in the `where` clause
@@ -210,15 +227,6 @@ export function precedesInOrder(
  * "there is a replacement posting in this town", which is the disclosure
  * `isPublic` exists to prevent. This matches what `GET /practices` already does.
  */
-/** The cursor after a full page, or null when this page was the last. */
-function nextCursorFor(
-  rows: ListingCursorKey[],
-  limit: number,
-  sort: ListingSort,
-): string | null {
-  const last = rows.at(-1);
-  return rows.length === limit && last ? encodeListingCursor(sort, last) : null;
-}
 
 const PRACTICE_INCLUDE = {
   practice: {
@@ -586,18 +594,13 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(publicFilters, { publicOnly: true }),
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
-    const sort = filters.sort ?? "recent";
-    const after = filters.cursor
-      ? followsInOrder(decodeListingCursor(filters.cursor, sort), sort)
-      : undefined;
 
     const [data, total] = await Promise.all([
       this.prisma.replacementListing.findMany({
-        // `AND` rather than a spread: `where` already carries its own `OR`.
-        where: after ? { AND: [where, after] } : where,
-        skip: after ? undefined : skip,
+        where,
+        ...pageStart(filters.cursor, skip),
         take: limit,
-        orderBy: orderByFor(sort),
+        orderBy: orderByFor(filters.sort),
         select: LISTING_SUMMARY_SELECT,
       }),
       // The count stays over the whole filter: it is the size of the
@@ -616,7 +619,7 @@ export class ReplacementlistingsService {
       ),
       meta: {
         ...paginationMeta(total, page, limit),
-        nextCursor: nextCursorFor(data, limit, sort),
+        nextCursor: nextCursorFor(data, limit),
       },
     };
   }
@@ -876,15 +879,10 @@ export class ReplacementlistingsService {
       ...this.buildListingsWhere(countFilters),
     };
 
-    // The owner's list has one ordering, the `recent` one, whatever `sort` says.
-    const after = filters.cursor
-      ? followsInOrder(decodeListingCursor(filters.cursor, "recent"), "recent")
-      : undefined;
-
     const [data, total, counts, nextRecruiting] = await Promise.all([
       this.prisma.replacementListing.findMany({
-        where: after ? { AND: [where, after] } : where,
-        skip: after ? undefined : skip,
+        where,
+        ...pageStart(filters.cursor, skip),
         take: limit,
         // createdAt is not unique, so ordering by it alone leaves Postgres free to
         // return two rows in either order between two pages: offset pagination then
@@ -910,7 +908,7 @@ export class ReplacementlistingsService {
         ...paginationMeta(total, page, limit),
         counts,
         nextRecruitingListing: nextRecruiting,
-        nextCursor: nextCursorFor(data, limit, "recent"),
+        nextCursor: nextCursorFor(data, limit),
       },
     };
   }

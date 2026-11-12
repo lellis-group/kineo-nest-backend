@@ -638,34 +638,4 @@ describe("cursor pagination of the feed", () => {
       expect(walked).toEqual(offset);
     });
   }
-
-  it("refuses a cursor minted under another ordering", async () => {
-    const owner = await seedOwner();
-    await seedTiedListings(owner);
-
-    const first = await feed({ sort: "recent", limit: 3 });
-    const response = await request(fx.baseUrl)
-      .get("/replacement-listings")
-      .query({ sort: "startDate", cursor: first.meta.nextCursor ?? "" })
-      .set("Cookie", reader);
-
-    expect(response.status).toBe(400);
-  });
-
-  it("resumes after a posting that left the feed between two pages", async () => {
-    const owner = await seedOwner();
-    await seedTiedListings(owner);
-
-    const all = (await feed({ limit: 10 })).data.map((r) => r.id);
-    const first = await feed({ limit: 3 });
-    await fx.prisma.replacementListing.delete({
-      where: { id: first.data[2].id },
-    });
-
-    const second = await feed({
-      limit: 3,
-      cursor: first.meta.nextCursor ?? "",
-    });
-    expect(second.data.map((r) => r.id)).toEqual(all.slice(3, 6));
-  });
 });

@@ -108,7 +108,7 @@ export const PaginatedReplacementListingsSchema = z.object({
     counts: ListingStatusCountsSchema.optional(),
     nextRecruitingListing: NextRecruitingListingSchema.nullable().optional(),
     /**
-     * The token for the next page, to send back as `cursor`; null on the last
+     * Id of this page's last row, to send back as `cursor`; null on the last
      * page. Cheaper than `page` on a deep page, and stable while postings are
      * published in between.
      */

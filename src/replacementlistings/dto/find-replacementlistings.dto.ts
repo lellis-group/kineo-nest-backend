@@ -78,7 +78,7 @@ export const FindReplacementListingsSchema = z
       .max(512)
       .optional()
       .describe(
-        "Resume after the last row of a previous page: the `meta.nextCursor` that page returned, under the same filters and `sort`. Takes the place of `page`, which is then ignored.",
+        "Id of the last row of the previous page (its `meta.nextCursor`), to resume after it under the same filters and `sort`. Takes the place of `page`, which is then ignored.",
       ),
   })
   .strict()
