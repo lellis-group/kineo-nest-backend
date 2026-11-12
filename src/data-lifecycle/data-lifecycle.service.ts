@@ -94,44 +94,54 @@ export class DataLifecycleService {
 
   @Cron(CronExpression.EVERY_HOUR)
   async purgeExpired() {
-    await this.withAdvisoryLock(ACCOUNT_SWEEP_LOCK, (tx) => this.runSweep(tx));
+    const sweep: SweepRun = { skipped: false };
+
+    await this.sweepRetention(sweep);
+
+    // The account sweep and the ghost collection fail independently: a transient
+    // error on the cascade used to skip the collection entirely, leaving orphans
+    // accumulating silently for a day.
+    await this.step("ghost listings", async () => {
+      await this.inLockedTransaction(sweep, (tx) =>
+        this.collectOrphanGhostListings(tx),
+      );
+    });
   }
 
   /**
-   * The account sweep and the ghost collection fail independently: a transient
-   * error on the cascade used to skip the collection entirely, leaving orphans
-   * accumulating silently for a day.
-   */
-  private async runSweep(tx: Prisma.TransactionClient) {
-    await this.sweepRetention(tx);
-    await this.collectOrphanGhostListings(tx);
-  }
-
-  /**
-   * One step per table, each isolated.
+   * One step per table, each isolated — and isolated in the database too.
    *
    * They used to share a single try: a transient error deleting sessions skipped
    * the account purge and the trail sweep with it, so a failure anywhere left the
    * most sensitive rows behind for another hour — silently, since the sweep
    * logged one line.
+   *
+   * Catching per step was not enough while every step ran in one transaction: on
+   * PostgreSQL a failed statement aborts the transaction it belongs to, so the
+   * steps after it were refused with `25P02` and the error swallowed by their own
+   * catch. Each batch now commits on its own (see `inLockedTransaction`).
    */
-  private async sweepRetention(tx: Prisma.TransactionClient) {
+  private async sweepRetention(sweep: SweepRun) {
     const now = new Date();
     const purged: Record<string, number> = {};
 
     await this.step("session", async () => {
-      purged.sessions = await this.deleteInBatches("session", (limit) =>
-        tx.session.deleteMany({
-          where: { expiresAt: { lt: now } },
-          limit,
-        }),
+      purged.sessions = await this.deleteInBatches(
+        sweep,
+        "session",
+        (tx, limit) =>
+          tx.session.deleteMany({
+            where: { expiresAt: { lt: now } },
+            limit,
+          }),
       );
     });
 
     await this.step("verification", async () => {
       purged.verifications = await this.deleteInBatches(
+        sweep,
         "verification",
-        (limit) =>
+        (tx, limit) =>
           tx.verification.deleteMany({
             where: { expiresAt: { lt: now } },
             limit,
@@ -141,8 +151,9 @@ export class DataLifecycleService {
 
     await this.step("anonymized account", async () => {
       purged.anonymizedAccounts = await this.deleteInBatches(
+        sweep,
         "anonymized account",
-        (limit) =>
+        (tx, limit) =>
           tx.user.deleteMany({
             where: {
               deletedAt: {
@@ -174,8 +185,9 @@ export class DataLifecycleService {
         now.getTime() - this.pendingDeletionRequestRetentionDays * 86_400_000,
       );
       purged.deletionRequests += await this.deleteInBatches(
+        sweep,
         "deletion request never confirmed",
-        (limit) =>
+        (tx, limit) =>
           tx.dataDeletionRequest.deleteMany({
             where: {
               status: { in: ["PENDING", "SUPERSEDED"] },
@@ -191,8 +203,9 @@ export class DataLifecycleService {
         now.getTime() - this.deletionRequestRetentionDays * 86_400_000,
       );
       purged.deletionRequests += await this.deleteInBatches(
+        sweep,
         "deletion request executed",
-        (limit) =>
+        (tx, limit) =>
           tx.dataDeletionRequest.deleteMany({
             where: {
               status: "ANONYMIZED",
@@ -222,17 +235,36 @@ export class DataLifecycleService {
     }
   }
 
+  /**
+   * Deletes in batches of `PURGE_BATCH_SIZE`, each batch in its own transaction.
+   *
+   * A batch that commits releases its row locks and its connection; the batches
+   * used to run inside one transaction for the whole sweep, so the locks they
+   * took were all held until the last step committed, and batching bounded the
+   * statements without bounding the lock window it was meant to.
+   */
   private async deleteInBatches(
+    sweep: SweepRun,
     label: string,
-    run: (take: number) => Promise<{ count: number }>,
+    run: (
+      tx: Prisma.TransactionClient,
+      take: number,
+    ) => Promise<{ count: number }>,
   ): Promise<number> {
     let total: number = 0;
 
     for (;;) {
-      const { count } = await run(PURGE_BATCH_SIZE);
-      total += count;
+      const result = await this.inLockedTransaction(sweep, (tx) =>
+        run(tx, PURGE_BATCH_SIZE),
+      );
 
-      if (count < PURGE_BATCH_SIZE) {
+      if (!result) {
+        return total;
+      }
+
+      total += result.count;
+
+      if (result.count < PURGE_BATCH_SIZE) {
         return total;
       }
 
@@ -275,8 +307,9 @@ export class DataLifecycleService {
   }
 
   /**
-   * Runs `work` under a transaction-scoped advisory lock, or returns immediately
-   * when another replica holds it.
+   * Runs `work` in a short transaction under a transaction-scoped advisory
+   * lock, or skips it — and the rest of the sweep — when another replica holds
+   * the lock.
    *
    * Every replica runs the same crons, so with two of them an hourly sweep ran
    * twice and the second one waited on the first one's locks for no reason.
@@ -289,28 +322,48 @@ export class DataLifecycleService {
    * email and the erasure trail then kept their retention window indefinitely.
    * A transaction-scoped lock is released by PostgreSQL itself, on the connection
    * that took it, so the pair cannot come apart.
+   *
+   * Taken per transaction rather than once for the sweep: one transaction around
+   * the whole sweep is what let a single failed statement abort every step after
+   * it, and kept a pooled connection and its row locks for up to ten minutes.
+   * Prisma's guidance is the same — keep interactive transactions short.
    */
-  private async withAdvisoryLock(
-    lockId: number,
-    work: (tx: Prisma.TransactionClient) => Promise<void>,
-  ): Promise<void> {
-    await this.prisma.$transaction(
+  private async inLockedTransaction<T>(
+    sweep: SweepRun,
+    work: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T | undefined> {
+    if (sweep.skipped) {
+      return undefined;
+    }
+
+    return this.prisma.$transaction(
       async (tx) => {
         const [locked] = await tx.$queryRaw<{ locked: boolean }[]>`
-          SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
+          SELECT pg_try_advisory_xact_lock(${ACCOUNT_SWEEP_LOCK}) AS locked`;
 
         if (!locked?.locked) {
-          logEvent("data_lifecycle.sweep_skipped", { lockId });
-          return;
+          sweep.skipped = true;
+          logEvent("data_lifecycle.sweep_skipped", {
+            lockId: ACCOUNT_SWEEP_LOCK,
+          });
+          return undefined;
         }
 
-        await work(tx);
+        return work(tx);
       },
       {
         maxWait: 5_000,
-        timeout: 600_000,
+        timeout: 30_000,
         isolationLevel: "ReadCommitted",
       },
     );
   }
+}
+
+/**
+ * One run of the sweep. Once a transaction finds the lock held by another
+ * replica, that replica owns the sweep and this run stops asking.
+ */
+interface SweepRun {
+  skipped: boolean;
 }

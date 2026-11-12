@@ -196,6 +196,26 @@ describe("DataLifecycleService retention sweep", () => {
     expect(sessionCalls).toBe(3);
   });
 
+  it("commits each batch in its own transaction", async () => {
+    let transactions = 0;
+    const { prisma } = makePrisma({ counts: { session: 0 } });
+    const counting = {
+      ...prisma,
+      $transaction: async function (
+        this: unknown,
+        operation: (tx: unknown) => Promise<unknown>,
+      ) {
+        transactions += 1;
+        return operation(this);
+      },
+    } as unknown as PrismaService;
+
+    await new DataLifecycleService(counting).purgeExpired();
+
+    // session, verification, anonymized account, two trail horizons, ghosts.
+    expect(transactions).toBe(6);
+  });
+
   it("returns immediately when another replica holds the lock", async () => {
     const { prisma, calls } = makePrisma({ lockHeld: true });
 
