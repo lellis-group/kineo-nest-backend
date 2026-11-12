@@ -46,6 +46,18 @@ Les axes d'amélioration, du plus urgent au moins urgent :
 | 13 | Basse | `getOwnedProfile` lit la ligne entière alors que la plupart des appels n'utilisent que l'`id` | `src/common/profile-lookup.ts` |
 | 14 | Info | Adaptateur créé dès l'import de `lib/prisma` même quand `PrismaService` le remplace | `src/lib/prisma.ts:80` |
 
+### Suivi
+
+| # | Statut | Commit |
+|---|--------|--------|
+| 1, 3 | ✅ Corrigé : une transaction courte par lot, chacune prend le verrou consultatif ; test e2e avec un trigger qui fait échouer `session` | `7c6f403` |
+| 2 | ✅ Corrigé : compteurs initialisés à 0 ; test unitaire sur le log | `3c60928` |
+| 4 | ✅ Fait : `update` + P2025 (`src/common/prisma-errors.ts`) | `6a52699` |
+| 5 | ✅ Corrigé : `escapeLike` sur `q` et `city` ; test e2e | `2b7292b` |
+| 6 | ✅ Fait, sans casser l'API : `cursor` optionnel et `meta.nextCursor` sur `/replacement-listings` et `/mine` ; `page` fonctionne toujours | `13df6ff` |
+| 7, 8 | ✅ Fait : cible Docker `migrate` séparée, image serveur limitée aux dépendances de production (719 Mo → 352 Mo) | `bf60bf2` |
+| 9 → 14 | À faire | — |
+
 ---
 
 ## 1. Le sweep de rétention : des étapes pas vraiment isolées (bug)
