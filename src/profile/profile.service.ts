@@ -10,6 +10,7 @@ import {
   ownedListingsFilter,
 } from "../common/application-guard";
 import { paginate, paginationMeta } from "../common/pagination";
+import { isRecordNotFound } from "../common/prisma-errors";
 import { runSerializableTransaction } from "../common/serializable-transaction";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma.service";
@@ -139,23 +140,16 @@ export class ProfileService {
     }
 
     try {
-      const updated = await this.prisma.profile.updateMany({
+      const saved = await this.prisma.profile.update({
         where: { id, userId },
         data: updateProfileDto,
       });
 
-      if (updated.count === 0) {
-        throw new NotFoundException(`Profile ${id} not found`);
-      }
-
-      const saved = await this.prisma.profile.findUnique({ where: { id } });
-
-      if (!saved) {
-        throw new NotFoundException(`Profile ${id} not found`);
-      }
-
       return toProfileDto(saved);
     } catch (error) {
+      if (isRecordNotFound(error)) {
+        throw new NotFoundException(`Profile ${id} not found`);
+      }
       const message = p2002Message(error);
       if (message) {
         throw new ConflictException(message);

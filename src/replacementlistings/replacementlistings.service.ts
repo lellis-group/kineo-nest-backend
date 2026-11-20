@@ -32,6 +32,7 @@ import {
   ListingStatus as LISTING_STATUSES,
   Specialty,
 } from "../generated/prisma/enums";
+import { escapeLike } from "../practices/geo-query";
 import { PrismaService } from "../prisma.service";
 import { PLACE_PREVIEW_LIMIT } from "./browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
@@ -193,6 +194,30 @@ export function precedesInOrder(
 }
 
 /**
+ * Where a page starts: after the `cursor` row when there is one, at `skip`
+ * otherwise.
+ *
+ * Prisma's cursor-based pagination, as its guide writes it: `cursor` on the
+ * last row's id, `skip: 1` to step past that row, the same `take` and
+ * `orderBy`. Prisma reads the cursor row's sort keys itself, so the existing
+ * (sort key, id) indexes serve the seek and no row is skipped or repeated
+ * when postings are published between two pages. `page` still works for a
+ * reader who jumps to a numbered page, which is what the guide keeps offset
+ * pagination for.
+ */
+function pageStart(
+  cursor: string | undefined,
+  skip: number,
+): Pick<Prisma.ReplacementListingFindManyArgs, "cursor" | "skip"> {
+  return cursor ? { cursor: { id: cursor }, skip: 1 } : { skip };
+}
+
+/** The id to resume after, or null when this page was the last. */
+function nextCursorFor(rows: { id: string }[], limit: number): string | null {
+  return rows.length === limit ? (rows.at(-1)?.id ?? null) : null;
+}
+
+/**
  * The practice, reduced to what the listing DTO publishes.
  *
  * `isPublic` is not selected because it is enforced in the `where` clause
@@ -202,6 +227,7 @@ export function precedesInOrder(
  * "there is a replacement posting in this town", which is the disclosure
  * `isPublic` exists to prevent. This matches what `GET /practices` already does.
  */
+
 const PRACTICE_INCLUDE = {
   practice: {
     select: {
@@ -495,9 +521,15 @@ export class ReplacementlistingsService {
     >,
     options: { publicOnly?: boolean } = {},
   ) {
+    // `contains` is a LIKE, and Prisma passes the term as it is: unescaped, `%`
+    // and `_` are wildcards and `?q=%` matched every posting. Escaped the way
+    // the practice search escapes them (`geo-query.ts`), so they name
+    // themselves on both.
+    const q = filters.q ? escapeLike(filters.q) : undefined;
+
     const practice: Prisma.PracticeWhereInput = {
       ...(filters.city
-        ? { city: { contains: filters.city, mode: "insensitive" } }
+        ? { city: { contains: escapeLike(filters.city), mode: "insensitive" } }
         : {}),
       ...(options.publicOnly ? { isPublic: true } : {}),
     };
@@ -517,13 +549,13 @@ export class ReplacementlistingsService {
       // visible around 14k rows, where a GIN index cut the places read from
       // 139 ms to 53 ms (the feed's from 42 ms to 23 ms). The index costs
       // ~1.7 MB and taxes writes, so it waits for the corpus to get there.
-      ...(filters.q
+      ...(q
         ? {
             OR: [
-              { title: { contains: filters.q, mode: "insensitive" as const } },
+              { title: { contains: q, mode: "insensitive" as const } },
               {
                 description: {
-                  contains: filters.q,
+                  contains: q,
                   mode: "insensitive" as const,
                 },
               },
@@ -566,11 +598,13 @@ export class ReplacementlistingsService {
     const [data, total] = await Promise.all([
       this.prisma.replacementListing.findMany({
         where,
-        skip,
+        ...pageStart(filters.cursor, skip),
         take: limit,
         orderBy: orderByFor(filters.sort),
         select: LISTING_SUMMARY_SELECT,
       }),
+      // The count stays over the whole filter: it is the size of the
+      // collection, not of what is left of it.
       this.prisma.replacementListing.count({ where }),
     ]);
 
@@ -583,7 +617,10 @@ export class ReplacementlistingsService {
       data: data.map((listing) =>
         toReplacementListingDto(this.withCountFor(listing, applicationsCount)),
       ),
-      meta: paginationMeta(total, page, limit),
+      meta: {
+        ...paginationMeta(total, page, limit),
+        nextCursor: nextCursorFor(data, limit),
+      },
     };
   }
 
@@ -845,7 +882,7 @@ export class ReplacementlistingsService {
     const [data, total, counts, nextRecruiting] = await Promise.all([
       this.prisma.replacementListing.findMany({
         where,
-        skip,
+        ...pageStart(filters.cursor, skip),
         take: limit,
         // createdAt is not unique, so ordering by it alone leaves Postgres free to
         // return two rows in either order between two pages: offset pagination then
@@ -871,6 +908,7 @@ export class ReplacementlistingsService {
         ...paginationMeta(total, page, limit),
         counts,
         nextRecruitingListing: nextRecruiting,
+        nextCursor: nextCursorFor(data, limit),
       },
     };
   }

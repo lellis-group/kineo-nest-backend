@@ -68,7 +68,19 @@ const listingFilterShape = {
 };
 
 export const FindReplacementListingsSchema = z
-  .object({ ...listingFilterShape, ...paginationQueryShape })
+  .object({
+    ...listingFilterShape,
+    ...paginationQueryShape,
+    cursor: z
+      .string()
+      .trim()
+      .min(1)
+      .max(512)
+      .optional()
+      .describe(
+        "Id of the last row of the previous page (its `meta.nextCursor`), to resume after it under the same filters and `sort`. Takes the place of `page`, which is then ignored.",
+      ),
+  })
   .strict()
   .superRefine((data, ctx) => {
     if (

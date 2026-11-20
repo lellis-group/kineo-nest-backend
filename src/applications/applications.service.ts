@@ -14,6 +14,7 @@ import {
   recalcListingStatus,
 } from "../common/listing-status";
 import { paginate, paginationMeta } from "../common/pagination";
+import { isRecordNotFound } from "../common/prisma-errors";
 import { getOwnedProfile, getOwnedProfileId } from "../common/profile-lookup";
 import { REFUSAL_CODES, refusal } from "../common/refusal";
 import { runSerializableTransaction } from "../common/serializable-transaction";
@@ -393,8 +394,8 @@ export class ApplicationsService {
    *
    * The check on the row's status answers for the ordinary case, but it answers
    * from a read that happened before the write: between the two, the practice
-   * on the other side may have already answered the application. `updateMany`
-   * lets the write carry the check itself, so the condition is evaluated over
+   * on the other side may have already answered the application. The status in
+   * the `update`'s `where` lets the write carry the check itself, so the condition is evaluated over
    * the row at commit time — a late edit cannot land on a decision, and a
    * candidate whose application was answered while they typed gets the refusal
    * rather than a message nobody will read.
@@ -413,27 +414,21 @@ export class ApplicationsService {
       );
     }
 
-    const edited = await this.prisma.application.updateMany({
-      where: { id, status: "PENDING" },
-      data: { message: dto.message },
-    });
-
-    if (edited.count === 0) {
-      throw refusal(
-        REFUSAL_CODES.applicationNotPending,
-        "Only pending applications can be edited",
-      );
+    try {
+      const updated = await this.prisma.application.update({
+        where: { id, status: "PENDING" },
+        data: { message: dto.message },
+      });
+      return toApplicationDto(updated);
+    } catch (error) {
+      if (isRecordNotFound(error)) {
+        throw refusal(
+          REFUSAL_CODES.applicationNotPending,
+          "Only pending applications can be edited",
+        );
+      }
+      throw error;
     }
-
-    const updated = await this.prisma.application.findUnique({ where: { id } });
-
-    // The write matched one row and nothing here deletes one between the write
-    // and this read; the compiler cannot see it, so the guard is for it.
-    if (!updated) {
-      throw new NotFoundException(`Application ${id} not found`);
-    }
-
-    return toApplicationDto(updated);
   }
 
   /**
@@ -464,27 +459,21 @@ export class ApplicationsService {
       );
     }
 
-    const shortlisted = await this.prisma.application.updateMany({
-      where: { id, status: "PENDING" },
-      data: { status: "SHORTLISTED", respondedAt: new Date() },
-    });
-
-    if (shortlisted.count === 0) {
-      throw refusal(
-        REFUSAL_CODES.applicationNotShortlistable,
-        "Only pending applications can be shortlisted",
-      );
+    try {
+      const updated = await this.prisma.application.update({
+        where: { id, status: "PENDING" },
+        data: { status: "SHORTLISTED", respondedAt: new Date() },
+      });
+      return toApplicationDto(updated);
+    } catch (error) {
+      if (isRecordNotFound(error)) {
+        throw refusal(
+          REFUSAL_CODES.applicationNotShortlistable,
+          "Only pending applications can be shortlisted",
+        );
+      }
+      throw error;
     }
-
-    const updated = await this.prisma.application.findUnique({ where: { id } });
-
-    // The same reasoning as the edit above: the write matched a row that
-    // nothing here can delete before this read answers.
-    if (!updated) {
-      throw new NotFoundException(`Application ${id} not found`);
-    }
-
-    return toApplicationDto(updated);
   }
 
   /**

@@ -39,7 +39,7 @@ describe("ProfileService", () => {
     const prisma = {
       profile: {
         findUnique: async () => (writeHappened ? saved : row),
-        updateMany: async (args: {
+        update: async (args: {
           where: { id: string; userId: string };
           data: Record<string, unknown>;
         }) => {
@@ -51,13 +51,16 @@ describe("ProfileService", () => {
             saved.userId === args.where.userId;
 
           if (!matched) {
-            return { count: 0 };
+            throw new Prisma.PrismaClientKnownRequestError("No record found", {
+              code: "P2025",
+              clientVersion: "test",
+            });
           }
 
           writes.push(args.data);
           writeHappened = true;
           saved = { ...saved, ...args.data } as typeof owned;
-          return { count: 1 };
+          return saved;
         },
       },
     } as unknown as PrismaService;
@@ -122,7 +125,7 @@ describe("ProfileService", () => {
       const prisma = {
         profile: {
           findUnique: async () => owned,
-          updateMany: async () => {
+          update: async () => {
             throw new Prisma.PrismaClientKnownRequestError(
               "Unique constraint failed",
               { code: "P2002", clientVersion: "test" },

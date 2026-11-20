@@ -540,3 +540,102 @@ describe("the owner-side lifecycle of a listing", () => {
     ).toBe(0);
   });
 });
+
+describe("the feed's free-text filters", () => {
+  // `contains` is a LIKE: unescaped, `%` matched every posting and `_` any
+  // character, while the practice search already read them as themselves.
+  it("reads a LIKE wildcard as a literal character", async () => {
+    const owner = await seedOwner();
+    await seedListingRow(owner.profileId, owner.practiceId);
+
+    for (const query of [{ q: "%" }, { q: "_" }, { city: "%" }]) {
+      const feed = await request(fx.baseUrl)
+        .get("/replacement-listings")
+        .query(query)
+        .set("Cookie", reader);
+
+      expect(feed.status).toBe(200);
+      expect(feed.body.meta.total).toBe(0);
+    }
+
+    const literal = await request(fx.baseUrl)
+      .get("/replacement-listings")
+      .query({ q: "Seeded" })
+      .set("Cookie", reader);
+    expect(literal.body.meta.total).toBe(1);
+  });
+});
+
+describe("cursor pagination of the feed", () => {
+  /**
+   * Ten postings, with ties on every sort key: three share a start date, the
+   * urgent flag splits them unevenly, and they share two creation instants.
+   * Ties are where a keyset that forgets its tiebreaker skips or repeats a row.
+   */
+  async function seedTiedListings(owner: SeededOwner) {
+    const created = [
+      new Date("2026-10-01T10:00:00Z"),
+      new Date("2026-10-02T10:00:00Z"),
+    ];
+    const starts = [
+      new Date("2026-12-01T00:00:00Z"),
+      new Date("2026-12-08T00:00:00Z"),
+      new Date("2026-12-15T00:00:00Z"),
+    ];
+
+    for (let i = 0; i < 10; i++) {
+      await fx.prisma.replacementListing.create({
+        data: {
+          practiceId: owner.practiceId,
+          createdById: owner.profileId,
+          title: `Tied cover ${i}`,
+          startDate: starts[i % 3],
+          endDate: new Date("2027-01-31T00:00:00Z"),
+          specialty: "GENERALIST",
+          status: "OPEN",
+          urgent: i % 4 === 0,
+          createdAt: created[i % 2],
+          updatedAt: created[i % 2],
+        },
+      });
+    }
+  }
+
+  async function feed(query: Record<string, string | number>) {
+    const response = await request(fx.baseUrl)
+      .get("/replacement-listings")
+      .query(query)
+      .set("Cookie", reader);
+    expect(response.status).toBe(200);
+    return response.body as {
+      data: Array<{ id: string }>;
+      meta: { nextCursor: string | null; total: number };
+    };
+  }
+
+  for (const sort of ["recent", "startDate", "urgent"] as const) {
+    it(`walks the ${sort} ordering in the same order as the pages`, async () => {
+      const owner = await seedOwner();
+      await seedTiedListings(owner);
+
+      const offset = (await feed({ sort, limit: 10 })).data.map((r) => r.id);
+      expect(offset).toHaveLength(10);
+
+      const walked: string[] = [];
+      let cursor: string | null = null;
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await feed({
+          sort,
+          limit: 3,
+          ...(cursor ? { cursor } : {}),
+        });
+        expect(page.meta.total).toBe(10);
+        walked.push(...page.data.map((r) => r.id));
+        cursor = page.meta.nextCursor;
+        if (!cursor) break;
+      }
+
+      expect(walked).toEqual(offset);
+    });
+  }
+});
