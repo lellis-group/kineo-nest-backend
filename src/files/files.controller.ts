@@ -111,7 +111,7 @@ export class FilesController {
   @ApiBody(MULTIPLE_FILES_BODY)
   @ApiOperation({ summary: "Add photos to a listing you own" })
   @ApiResponse({ status: 403, description: "Not the owner", type: ApiError })
-  @ApiResponse({ status: 201, type: StoredFileListDto })
+  @ApiResponse({ status: 201, type: [StoredFileDto] })
   @ZodSerializerDto(StoredFileListDto)
   uploadListingImages(
     @Session() session: UserSession,
@@ -127,6 +127,7 @@ export class FilesController {
 
   @Get("mine")
   @ApiOperation({ summary: "List the files uploaded by the caller" })
+  @ApiResponse({ status: 200, type: [StoredFileDto] })
   @ZodSerializerDto(StoredFileListDto)
   listMine(@Session() session: UserSession) {
     return this.filesService.listMine(session.user.id);
@@ -136,6 +137,7 @@ export class FilesController {
   // Public photos, but keep the session when the owner reads a closed listing.
   @OptionalAuth()
   @ApiOperation({ summary: "List the photos of a visible listing" })
+  @ApiResponse({ status: 200, type: [StoredFileDto] })
   @ApiResponse({
     status: 404,
     description: "Listing not found",
