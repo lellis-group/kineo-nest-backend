@@ -1,12 +1,5 @@
 import { basename } from "node:path";
-import {
-  FileTypeValidator,
-  HttpStatus,
-  Injectable,
-  MaxFileSizeValidator,
-  type ParseFilePipe,
-  ParseFilePipeBuilder,
-} from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 
 export type UploadKind = "AVATAR" | "LISTING_IMAGE" | "CV";
@@ -14,26 +7,19 @@ export type UploadKind = "AVATAR" | "LISTING_IMAGE" | "CV";
 export interface UploadRule {
   maxBytes: number;
   maxCount: number;
-  /** Matched against the MIME detected from magic numbers, not the client header. */
-  fileType: RegExp;
+  /** Passed to `uploadToDisk`, which matches the type detected from the bytes. */
+  contentTypes: string[];
 }
 
-const IMAGE_TYPES = /^image\/(jpeg|png|webp)$/;
-
-/** Extensions are derived from the detected MIME, never from `originalname`. */
-const EXTENSIONS: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-  "application/pdf": ".pdf",
-};
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 /**
- * The single place where per-kind upload limits live.
+ * The single place where per-kind upload rules live.
  *
- * Both halves matter: `limits.fileSize` makes Multer stop writing an oversized
- * part as soon as it crosses the ceiling, while the validators below inspect the
- * completed buffer (including its magic number) before the handler runs.
+ * Both halves are enforced by Multer before the handler runs: `limits.fileSize`
+ * stops an oversized part as soon as it crosses the ceiling, and
+ * `uploadToDisk()` refuses a type it cannot detect in `contentTypes` with a 415
+ * before a single byte is committed.
  */
 @Injectable()
 export class FileRules {
@@ -47,7 +33,7 @@ export class FileRules {
           2 * 1024 * 1024,
         ),
         maxCount: 1,
-        fileType: IMAGE_TYPES,
+        contentTypes: IMAGE_TYPES,
       },
       LISTING_IMAGE: {
         maxBytes: config.get<number>(
@@ -55,12 +41,12 @@ export class FileRules {
           5 * 1024 * 1024,
         ),
         maxCount: config.get<number>("files.limits.imagesPerListing", 5),
-        fileType: IMAGE_TYPES,
+        contentTypes: IMAGE_TYPES,
       },
       CV: {
         maxBytes: config.get<number>("files.limits.cvBytes", 10 * 1024 * 1024),
         maxCount: 1,
-        fileType: /^application\/pdf$/,
+        contentTypes: ["application/pdf"],
       },
     };
   }
@@ -69,26 +55,10 @@ export class FileRules {
     return this.rules[kind];
   }
 
-  /** Multer's early-rejection limit for a route. */
+  /** Multer's early-rejection limits for a route. */
   limitsFor(kind: UploadKind): { fileSize: number; files: number } {
     const rule = this.rules[kind];
     return { fileSize: rule.maxBytes, files: rule.maxCount };
-  }
-
-  pipeFor(kind: UploadKind): ParseFilePipe {
-    const rule = this.rules[kind];
-    return new ParseFilePipeBuilder()
-      .addMaxSizeValidator({ maxSize: rule.maxBytes })
-      .addFileTypeValidator({
-        fileType: rule.fileType,
-        // The detected type, not the client's `mimetype`, is what gets stored.
-        overrideMimeType: true,
-      })
-      .build({ errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY });
-  }
-
-  extensionFor(mimeType: string): string {
-    return EXTENSIONS[mimeType] ?? "";
   }
 
   /** A safe basename for `Content-Disposition`, capped in length. */
@@ -103,7 +73,3 @@ export class FileRules {
     return name.slice(0, 200);
   }
 }
-
-// Re-exported so a single import serves both the builder and direct validators
-// in tests.
-export { FileTypeValidator, MaxFileSizeValidator };
