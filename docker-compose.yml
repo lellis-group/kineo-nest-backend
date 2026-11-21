@@ -29,10 +29,10 @@ services:
     ports:
       - "6379:6379"
 
-  # S3-compatible object storage for avatars, listing images and CVs. The API
-  # reads the same credentials from FILES_S3_* in .env, so there is one pair to
-  # rotate. The named volume needs no bind-mount permission setup: RustFS's
-  # non-root user (10001) owns the volume's /data.
+  # S3-compatible object storage for avatars, listing images and CVs, used when
+  # STORAGE_DRIVER=s3. The API reads the same S3_* credentials, so there is one
+  # pair to rotate. The named volume needs no bind-mount permission setup:
+  # RustFS's non-root user (10001) owns the volume's /data.
   rustfs:
     image: rustfs/rustfs:latest
     container_name: my-rustfs
@@ -43,8 +43,8 @@ services:
     volumes:
       - rustfs-data:/data
     environment:
-      RUSTFS_ACCESS_KEY: ${FILES_S3_ACCESS_KEY:?set FILES_S3_ACCESS_KEY in .env}
-      RUSTFS_SECRET_KEY: ${FILES_S3_SECRET_KEY:?set FILES_S3_SECRET_KEY in .env}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
       RUSTFS_ADDRESS: ":9000"
       RUSTFS_CONSOLE_ADDRESS: ":9001"
       RUSTFS_CONSOLE_ENABLE: "true"
@@ -54,6 +54,9 @@ services:
       # this project keeps the single named volume instead.
       RUSTFS_OBS_LOG_DIRECTORY: "/data/logs/"
     command: /data
+
+  # @nestjs/storage's S3Disk expects the bucket to exist. Create it once with
+  # `bun run files:bucket` after starting RustFS; that script is idempotent.
 
 volumes:
   postgres_data:
