@@ -65,6 +65,16 @@ export async function createApp(): Promise<NestExpressApplication> {
     )
     .setVersion(configService.get<string>("swagger.version", "1.0"))
     .addTag(configService.get<string>("swagger.tag", "Kineo"))
+    // better-auth's `bearer()` plugin accepts the session token in this header,
+    // so the "Authorize" button can actually authenticate a "Try it out" call.
+    // The token is returned in `set-auth-token` by POST /api/auth/sign-in/email.
+    .addBearerAuth({
+      type: "http",
+      scheme: "bearer",
+      bearerFormat: "Session token",
+      description:
+        "Session token from the `set-auth-token` header of POST /api/auth/sign-in/email",
+    })
     .build();
 
   if (!isHardenedEnv(configService.get<string>("nodeEnv"))) {
