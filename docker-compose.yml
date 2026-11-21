@@ -36,6 +36,9 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     container_name: my-rustfs
+    # Opt-in: `STORAGE_DRIVER=local` needs no object store, so a plain
+    # `docker compose up -d` must not require S3 credentials.
+    profiles: ["s3"]
     restart: unless-stopped
     ports:
       - "9000:9000" # S3 API
@@ -43,8 +46,8 @@ services:
     volumes:
       - rustfs-data:/data
     environment:
-      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
-      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-}
       RUSTFS_ADDRESS: ":9000"
       RUSTFS_CONSOLE_ADDRESS: ":9001"
       RUSTFS_CONSOLE_ENABLE: "true"
