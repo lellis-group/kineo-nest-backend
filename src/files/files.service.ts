@@ -360,15 +360,15 @@ export class FilesService {
   }
 
   private async discard(keys: string[], context: string): Promise<void> {
-    await Promise.all(
-      keys.map((key) =>
-        this.disk.delete(key).catch((error: unknown) => {
-          // The row is already gone; a leaked object is better than a failed
-          // upload. It is logged so the cleanup sweep can find it later.
-          logError("files.object.remove_failed", error, { context, key });
-        }),
-      ),
-    );
+    if (keys.length === 0) return;
+    try {
+      // StorageDisk.delete accepts several keys; missing ones are ignored.
+      await this.disk.delete(keys);
+    } catch (error) {
+      // The rows are already gone; a leaked object is better than a failed
+      // upload. It is logged so the cleanup sweep can find it later.
+      logError("files.object.remove_failed", error, { context, keys });
+    }
   }
 }
 
