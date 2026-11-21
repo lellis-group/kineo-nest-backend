@@ -344,7 +344,10 @@ two read routes use `@OptionalAuth()`: avatars and a public listing's photos
 stream to anonymous readers, while CVs — and private or closed listings — still
 answer 404 without the owner's session. Every other route keeps the global
 AuthGuard. Use an object store in production: a container's local disk vanishes
-when the task is replaced.
+when the task is replaced, and `STORAGE_DRIVER=local` now refuses to boot in a
+hardened environment. Give the app only `s3:GetObject`, `s3:PutObject`,
+`s3:DeleteObject` and `s3:ListBucket` on that bucket — without `ListBucket`, a
+missing key answers `403` instead of `404`.
 
 Bun is the only runtime: it runs the TypeScript sources directly in development,
 `tsc` is driven through `bun x`, and the tests, the Prisma CLI and the image all

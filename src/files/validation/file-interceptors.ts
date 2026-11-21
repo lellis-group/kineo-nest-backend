@@ -1,38 +1,37 @@
 import { randomUUID } from "node:crypto";
 import {
-  BadRequestException,
   type CallHandler,
   type ExecutionContext,
-  HttpException,
   Injectable,
   type NestInterceptor,
-  PayloadTooLargeException,
+  type Type,
 } from "@nestjs/common";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { uploadToDisk } from "@nestjs/storage";
-import multer, { type Options } from "multer";
 import { FileRules, type UploadKind } from "./file-rules";
 
+type MulterOptions = NonNullable<Parameters<typeof FileInterceptor>[1]>;
+
 /**
- * Multer interceptors whose rules come from configuration at construction time.
+ * DI-friendly wrappers around Nest's own `FileInterceptor`/`FilesInterceptor`.
  *
- * Nest's `FileInterceptor` takes its options as a decorator argument, evaluated
- * before DI exists. These classes take `FileRules` through the constructor, so
- * the ceilings in `.env` actually bound the parser rather than only a later
- * validator. The storage engine is the one `@nestjs/storage` ships: it detects
- * the real type from the bytes and streams the upload onto the configured disk.
+ * The docs build those interceptors in a decorator, where options are fixed at
+ * module-load time. Our ceilings come from `ConfigService`, so the wrapper
+ * injects `FileRules` and instantiates the official interceptor mixin with the
+ * resolved options. The storage engine is still the documented `uploadToDisk`.
  */
 function configureInterceptor(
+  kind: UploadKind,
   fieldName: string,
   mode: "single" | "array",
-  kind: UploadKind,
 ) {
   @Injectable()
   class ConfiguredUploadInterceptor implements NestInterceptor {
-    private readonly upload: multer.Multer;
+    private readonly delegate: NestInterceptor;
 
     constructor(rules: FileRules) {
       const rule = rules.for(kind);
-      const options: Options = {
+      const options: MulterOptions = {
         storage: uploadToDisk({
           disk: "files",
           contentTypes: rule.contentTypes,
@@ -41,39 +40,16 @@ function configureInterceptor(
         }),
         limits: rules.limitsFor(kind),
       };
-      this.upload = multer(options);
+
+      const Interceptor: Type<NestInterceptor> =
+        mode === "single"
+          ? FileInterceptor(fieldName, options)
+          : FilesInterceptor(fieldName, rule.maxCount, options);
+      this.delegate = new Interceptor();
     }
 
-    async intercept(context: ExecutionContext, next: CallHandler) {
-      const http = context.switchToHttp();
-      const request = http.getRequest();
-      const response = http.getResponse();
-      const handler =
-        mode === "single"
-          ? this.upload.single(fieldName)
-          : this.upload.array(fieldName);
-
-      await new Promise<void>((resolve, reject) => {
-        handler(request, response, (error: unknown) => {
-          if (!error) {
-            resolve();
-            return;
-          }
-          // uploadToDisk already answers 415 for a type it cannot detect.
-          if (error instanceof HttpException) {
-            reject(error);
-            return;
-          }
-          const code = (error as { code?: string }).code;
-          if (code === "LIMIT_FILE_SIZE") {
-            reject(new PayloadTooLargeException("File too large"));
-            return;
-          }
-          reject(new BadRequestException("Invalid multipart request"));
-        });
-      });
-
-      return next.handle();
+    intercept(context: ExecutionContext, next: CallHandler) {
+      return this.delegate.intercept(context, next);
     }
   }
 
@@ -81,19 +57,19 @@ function configureInterceptor(
 }
 
 export const AvatarFileInterceptor = configureInterceptor(
+  "AVATAR",
   "file",
   "single",
-  "AVATAR",
 );
 
 export const ProfileCvFileInterceptor = configureInterceptor(
+  "CV",
   "file",
   "single",
-  "CV",
 );
 
 export const ListingImagesInterceptor = configureInterceptor(
+  "LISTING_IMAGE",
   "images",
   "array",
-  "LISTING_IMAGE",
 );

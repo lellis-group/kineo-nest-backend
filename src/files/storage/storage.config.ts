@@ -26,16 +26,24 @@ interface StorageSettings {
 export function createStorageOptions(
   config: ConfigService,
 ): StorageModuleOptions {
-  const settings = config.get<StorageSettings>("storage");
-  if (!settings) {
-    throw new Error("Missing file storage configuration (storage)");
-  }
+  const settings = config.getOrThrow<StorageSettings>("storage");
+  const nodeEnv = config.getOrThrow<string>("nodeEnv");
 
   if (settings.driver === "local") {
+    // The package only warns about this. A container's local disk disappears
+    // with the task and other replicas cannot read it, so a deployment must
+    // fail here instead of starting on a disk it cannot keep.
+    if (isHardenedEnv(nodeEnv)) {
+      throw new Error(
+        "STORAGE_DRIVER=local is not allowed in a hardened environment",
+      );
+    }
     return {
       default: "files",
       disks: {
-        files: new LocalDisk({ root: join(process.cwd(), settings.root) }),
+        files: new LocalDisk({
+          root: join(process.cwd(), config.getOrThrow<string>("storage.root")),
+        }),
       },
     };
   }
@@ -45,10 +53,16 @@ export function createStorageOptions(
   }
 
   const { s3 } = settings;
+  if (!s3.bucket) {
+    throw new Error("S3_BUCKET is required when STORAGE_DRIVER=s3");
+  }
+  if (!s3.endpoint) {
+    throw new Error("S3_ENDPOINT is required when STORAGE_DRIVER=s3");
+  }
   // The fallback pair exists so a fresh checkout can talk to compose's RustFS.
   // It must never reach a deployed environment.
   if (
-    isHardenedEnv(config.get<string>("nodeEnv")) &&
+    isHardenedEnv(nodeEnv) &&
     (s3.accessKeyId === "kineolocal" || s3.secretAccessKey === "kineolocal")
   ) {
     throw new Error(
