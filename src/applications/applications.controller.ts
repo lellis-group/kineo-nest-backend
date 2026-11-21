@@ -8,13 +8,20 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
 import { ApiBadRequest, ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
+import { StoredFileDto } from "../files/entities/file.entity";
+import { FilesService } from "../files/files.service";
 import { ApplicationsService } from "./applications.service";
 import { CreateApplicationDto } from "./dto/create-application.dto";
 import { FindApplicationsDto } from "./dto/find-applications.dto";
@@ -27,10 +34,14 @@ import {
 } from "./entities/application.entity";
 
 @ApiTags("Applications")
+@ApiBearerAuth()
 @UseGuards(EmailVerifiedGuard)
 @Controller("applications")
 export class ApplicationsController {
-  constructor(private readonly applicationsService: ApplicationsService) {}
+  constructor(
+    private readonly applicationsService: ApplicationsService,
+    private readonly filesService: FilesService,
+  ) {}
 
   @Post()
   @ThrottleWithConfig("medium")
@@ -54,6 +65,29 @@ export class ApplicationsController {
       session.user.id,
       createApplicationDto,
     );
+  }
+
+  @Post(":id/cv")
+  @ThrottleWithConfig("medium")
+  @ApiOperation({
+    summary: "Attach a snapshot of your profile CV to your application",
+    description:
+      "No file to upload: the CV is copied from the one on your profile (POST /files/cv). Upload one there first.",
+  })
+  @ApiResponse({
+    status: 403,
+    description: "Not the applicant",
+    type: ApiError,
+  })
+  @ApiResponse({
+    status: 404,
+    description: "Application or profile CV not found",
+    type: ApiError,
+  })
+  @ApiResponse({ status: 201, type: StoredFileDto })
+  @ZodSerializerDto(StoredFileDto)
+  attachCv(@Session() session: UserSession, @Param("id") id: string) {
+    return this.filesService.attachCvToApplication(session.user.id, id);
   }
 
   @Get("mine")
