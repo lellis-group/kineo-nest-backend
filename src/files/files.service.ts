@@ -1,21 +1,22 @@
 import { randomUUID } from "node:crypto";
+import { extname } from "node:path";
 import {
   ForbiddenException,
-  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import {
+  InjectDisk,
+  StorageDisk,
+  StorageFileNotFoundError,
+  type StoredUpload,
+} from "@nestjs/storage";
 import { getOwnedProfileId } from "../common/profile-lookup";
 import type { StoredFile } from "../generated/prisma/client";
 import { logError } from "../lib/log";
 import { PrismaService } from "../prisma.service";
 import type { StoredFileDto } from "./entities/file.entity";
 import { canReadFile } from "./file-access";
-import {
-  FILE_STORAGE,
-  type FileStorage,
-  type StoredObject,
-} from "./storage/file-storage";
 import { FileRules, type UploadKind } from "./validation/file-rules";
 
 function toDto(file: StoredFile): StoredFileDto {
@@ -31,104 +32,71 @@ function toDto(file: StoredFile): StoredFileDto {
   };
 }
 
-function discardFromStorage(
-  storage: FileStorage,
-  keys: string[],
-  context: string,
-): Promise<void> {
-  return Promise.all(
-    keys.map((key) =>
-      storage.remove(key).catch((error: unknown) => {
-        // The row is already gone; a leaked object is better than a failed
-        // upload. It is logged so a cleanup sweep can find it later.
-        logError("files.object.remove_failed", error, { context, key });
-      }),
-    ),
-  ).then(() => undefined);
-}
-
 @Injectable()
 export class FilesService {
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(FILE_STORAGE) private readonly storage: FileStorage,
+    @InjectDisk("files") private readonly disk: StorageDisk,
     private readonly rules: FileRules,
   ) {}
 
   async uploadAvatar(
     userId: string,
-    file: Express.Multer.File,
+    file: StoredUpload,
   ): Promise<StoredFileDto> {
-    const uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
-    const key = `avatars/${uploaderProfileId}/${randomUUID()}${this.rules.extensionFor(file.mimetype)}`;
-    return this.replaceSingle(
-      {
-        kind: "AVATAR",
-        uploaderId: uploaderProfileId,
-        profileId: uploaderProfileId,
-      },
-      key,
-      file,
-    );
+    return this.replaceSingle(userId, "AVATAR", file);
   }
 
   async uploadProfileCv(
     userId: string,
-    file: Express.Multer.File,
+    file: StoredUpload,
   ): Promise<StoredFileDto> {
-    const uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
-    const key = `cv-profiles/${uploaderProfileId}/${randomUUID()}${this.rules.extensionFor(file.mimetype)}`;
-    return this.replaceSingle(
-      {
-        kind: "CV",
-        uploaderId: uploaderProfileId,
-        profileId: uploaderProfileId,
-      },
-      key,
-      file,
-    );
+    return this.replaceSingle(userId, "CV", file);
   }
 
   /**
    * Copies the caller's current profile CV into a snapshot for one application.
    *
-   * S3's CopyObject keeps the binary out of Node and makes the application's CV
-   * immutable: editing or deleting the profile copy never rewrites what the
-   * practice owner was sent.
+   * `StorageDisk.copy()` keeps the binary inside the store and makes the
+   * application's CV immutable: editing or deleting the profile copy never
+   * rewrites what the practice owner was sent.
    */
   async attachCvToApplication(
     userId: string,
     applicationId: string,
   ): Promise<StoredFileDto> {
-    const uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
-    const application = await this.prisma.application.findUnique({
-      where: { id: applicationId },
-      select: { applicantId: true },
-    });
-    if (!application) {
-      throw new NotFoundException(`Application ${applicationId} not found`);
-    }
-    if (application.applicantId !== uploaderProfileId) {
-      throw new ForbiddenException();
-    }
-
-    const source = await this.prisma.storedFile.findFirst({
-      where: { kind: "CV", profileId: uploaderProfileId },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!source) {
-      throw new NotFoundException("No CV found on your profile");
-    }
-
-    const key = `cv-applications/${applicationId}/${randomUUID()}${this.rules.extensionFor(source.mimeType)}`;
-    await this.storage.copy(source.storageKey, key);
-
-    const previous = await this.prisma.storedFile.findMany({
-      where: { kind: "CV", applicationId },
-      select: { storageKey: true },
-    });
+    let snapshotKey: string | undefined;
 
     try {
+      const uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
+      const application = await this.prisma.application.findUnique({
+        where: { id: applicationId },
+        select: { applicantId: true },
+      });
+      if (!application) {
+        throw new NotFoundException(`Application ${applicationId} not found`);
+      }
+      if (application.applicantId !== uploaderProfileId) {
+        throw new ForbiddenException();
+      }
+
+      const source = await this.prisma.storedFile.findFirst({
+        where: { kind: "CV", profileId: uploaderProfileId },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!source) {
+        throw new NotFoundException("No CV found on your profile");
+      }
+
+      snapshotKey = `cv-applications/${applicationId}/${randomUUID()}${extname(source.storageKey)}`;
+      await this.disk.copy(source.storageKey, snapshotKey);
+      const storedKey = snapshotKey;
+
+      const previous = await this.prisma.storedFile.findMany({
+        where: { kind: "CV", applicationId },
+        select: { storageKey: true },
+      });
+
       const created = await this.prisma.$transaction(async (tx) => {
         await tx.storedFile.deleteMany({
           where: { kind: "CV", applicationId },
@@ -136,7 +104,7 @@ export class FilesService {
         return tx.storedFile.create({
           data: {
             kind: "CV",
-            storageKey: key,
+            storageKey: storedKey,
             originalName: source.originalName,
             mimeType: source.mimeType,
             size: source.size,
@@ -147,15 +115,16 @@ export class FilesService {
         });
       });
 
-      await discardFromStorage(
-        this.storage,
+      await this.discard(
         previous.map((row) => row.storageKey),
         "application-cv-replace",
       );
-
       return toDto(created);
     } catch (error) {
-      await discardFromStorage(this.storage, [key], "application-cv-rollback");
+      // The engine stores before the handler runs; nothing may be left behind.
+      if (snapshotKey) {
+        await this.discard([snapshotKey], "application-cv-rollback");
+      }
       throw error;
     }
   }
@@ -163,45 +132,41 @@ export class FilesService {
   async uploadListingImages(
     userId: string,
     listingId: string,
-    files: Express.Multer.File[],
+    files: StoredUpload[],
   ): Promise<StoredFileDto[]> {
-    const uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
-    const listing = await this.prisma.replacementListing.findUnique({
-      where: { id: listingId },
-      select: {
-        createdById: true,
-        practice: { select: { ownerId: true } },
-      },
-    });
-    if (!listing) {
-      throw new NotFoundException(`Replacement listing ${listingId} not found`);
-    }
-    if (
-      uploaderProfileId !== listing.createdById &&
-      uploaderProfileId !== listing.practice.ownerId
-    ) {
-      throw new ForbiddenException();
-    }
-
-    const existing = await this.prisma.storedFile.count({
-      where: { kind: "LISTING_IMAGE", listingId },
-    });
-    const prepared = files.map((file, index) => ({
-      key: `listings/${listingId}/${randomUUID()}${this.rules.extensionFor(file.mimetype)}`,
-      originalName: this.rules.displayName(file.originalname),
-      mimeType: file.mimetype,
-      size: file.size,
-      position: existing + index,
-      file,
-    }));
-
-    await Promise.all(
-      prepared.map((item) =>
-        this.storage.save(item.key, item.file.buffer, item.mimeType),
-      ),
-    );
-
+    const keys = files.map((file) => file.key);
     try {
+      const uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
+      const listing = await this.prisma.replacementListing.findUnique({
+        where: { id: listingId },
+        select: {
+          createdById: true,
+          practice: { select: { ownerId: true } },
+        },
+      });
+      if (!listing) {
+        throw new NotFoundException(
+          `Replacement listing ${listingId} not found`,
+        );
+      }
+      if (
+        uploaderProfileId !== listing.createdById &&
+        uploaderProfileId !== listing.practice.ownerId
+      ) {
+        throw new ForbiddenException();
+      }
+
+      const existing = await this.prisma.storedFile.count({
+        where: { kind: "LISTING_IMAGE", listingId },
+      });
+      const prepared = files.map((file, index) => ({
+        key: file.key,
+        originalName: this.rules.displayName(file.originalname),
+        mimeType: file.contentType,
+        size: file.size,
+        position: existing + index,
+      }));
+
       const created = await this.prisma.storedFile.createManyAndReturn({
         data: prepared.map((item) => ({
           kind: "LISTING_IMAGE" as const,
@@ -216,29 +181,32 @@ export class FilesService {
       });
       return created.sort((a, b) => a.position - b.position).map(toDto);
     } catch (error) {
-      await discardFromStorage(
-        this.storage,
-        prepared.map((item) => item.key),
-        "listing-images-rollback",
-      );
+      await this.discard(keys, "listing-images-rollback");
       throw error;
     }
   }
 
+  /**
+   * Resolves the row and checks that its object still exists. `stat()` is used
+   * rather than `get()`: `serveFile()` opens the stream itself, and an unread
+   * stream here would leak a file handle.
+   */
   async read(
     id: string,
     userId?: string,
-  ): Promise<{ file: StoredFileDto; object: StoredObject }> {
+  ): Promise<{ file: StoredFileDto; key: string }> {
     const file = await this.prisma.storedFile.findUnique({ where: { id } });
     if (!file || !(await canReadFile(this.prisma, file, userId))) {
       throw new NotFoundException(`File ${id} not found`);
     }
 
     try {
-      const object = await this.storage.open(file.storageKey);
-      return { file: toDto(file), object };
+      await this.disk.stat(file.storageKey);
+      return { file: toDto(file), key: file.storageKey };
     } catch (error) {
-      logError("files.open_failed", error, { id });
+      if (!(error instanceof StorageFileNotFoundError)) {
+        logError("files.open_failed", error, { id });
+      }
       throw new NotFoundException(`File ${id} not found`);
     }
   }
@@ -252,7 +220,7 @@ export class FilesService {
   async readApplicationCv(
     applicationId: string,
     userId: string,
-  ): Promise<{ file: StoredFileDto; object: StoredObject }> {
+  ): Promise<{ file: StoredFileDto; key: string }> {
     const subject = {
       kind: "CV" as const,
       profileId: null,
@@ -274,12 +242,12 @@ export class FilesService {
     }
 
     try {
-      return {
-        file: toDto(file),
-        object: await this.storage.open(file.storageKey),
-      };
+      await this.disk.stat(file.storageKey);
+      return { file: toDto(file), key: file.storageKey };
     } catch (error) {
-      logError("files.open_failed", error, { applicationId });
+      if (!(error instanceof StorageFileNotFoundError)) {
+        logError("files.open_failed", error, { applicationId });
+      }
       throw new NotFoundException(
         `No CV attached to application ${applicationId}`,
       );
@@ -301,7 +269,7 @@ export class FilesService {
     }
 
     await this.prisma.storedFile.delete({ where: { id } });
-    await discardFromStorage(this.storage, [file.storageKey], "file-delete");
+    await this.discard([file.storageKey], "file-delete");
   }
 
   async listForListing(listingId: string, userId?: string) {
@@ -341,53 +309,68 @@ export class FilesService {
   }
 
   private async replaceSingle(
-    scope: {
-      kind: UploadKind;
-      uploaderId: string;
-      profileId: string;
-    },
-    key: string,
-    file: Express.Multer.File,
+    userId: string,
+    kind: "AVATAR" | "CV",
+    file: StoredUpload,
   ): Promise<StoredFileDto> {
-    await this.storage.save(key, file.buffer, file.mimetype);
-
-    // The old row has to go before the new one is inserted: the partial unique
-    // index forbids two avatars (or two reusable CVs) per profile. Doing both in
-    // one transaction keeps the old row if the insert fails for any other reason.
-    const previous = await this.prisma.storedFile.findMany({
-      where: { kind: scope.kind, profileId: scope.profileId },
-      select: { storageKey: true },
-    });
+    let uploaderProfileId: string;
+    let previous: string[];
 
     try {
+      uploaderProfileId = await getOwnedProfileId(this.prisma, userId);
+      previous = (
+        await this.prisma.storedFile.findMany({
+          where: { kind, profileId: uploaderProfileId },
+          select: { storageKey: true },
+        })
+      ).map((row) => row.storageKey);
+    } catch (error) {
+      await this.discard([file.key], "profile-file-precheck-rollback");
+      throw error;
+    }
+
+    try {
+      // The partial unique index forbids two avatars (or two reusable CVs) per
+      // profile; delete and create share one transaction so the old row stays
+      // if the insert fails.
       const created = await this.prisma.$transaction(async (tx) => {
         await tx.storedFile.deleteMany({
-          where: { kind: scope.kind, profileId: scope.profileId },
+          where: { kind, profileId: uploaderProfileId },
         });
         return tx.storedFile.create({
           data: {
-            kind: scope.kind,
-            storageKey: key,
+            kind,
+            storageKey: file.key,
             originalName: this.rules.displayName(file.originalname),
-            mimeType: file.mimetype,
+            mimeType: file.contentType,
             size: file.size,
             position: 0,
-            uploaderId: scope.uploaderId,
-            profileId: scope.profileId,
+            uploaderId: uploaderProfileId,
+            profileId: uploaderProfileId,
           },
         });
       });
 
-      await discardFromStorage(
-        this.storage,
-        previous.map((row) => row.storageKey),
-        "profile-file-replace",
-      );
-
+      await this.discard(previous, "profile-file-replace");
       return toDto(created);
     } catch (error) {
-      await discardFromStorage(this.storage, [key], "profile-file-rollback");
+      await this.discard([file.key], "profile-file-rollback");
       throw error;
     }
   }
+
+  private async discard(keys: string[], context: string): Promise<void> {
+    await Promise.all(
+      keys.map((key) =>
+        this.disk.delete(key).catch((error: unknown) => {
+          // The row is already gone; a leaked object is better than a failed
+          // upload. It is logged so the cleanup sweep can find it later.
+          logError("files.object.remove_failed", error, { context, key });
+        }),
+      ),
+    );
+  }
 }
+
+// Kept for the specs, which build uploads by kind.
+export type { UploadKind };

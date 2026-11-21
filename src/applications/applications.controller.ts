@@ -6,9 +6,11 @@ import {
   Patch,
   Post,
   Query,
-  StreamableFile,
+  Req,
+  Res,
   UseGuards,
 } from "@nestjs/common";
+import { InjectDisk, StorageDisk, serveFile } from "@nestjs/storage";
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -17,6 +19,7 @@ import {
 } from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import { Session } from "@thallesp/nestjs-better-auth";
+import type { Request, Response } from "express";
 import { ZodSerializerDto } from "nestjs-zod";
 import { ApiBadRequest, ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
@@ -42,6 +45,7 @@ export class ApplicationsController {
   constructor(
     private readonly applicationsService: ApplicationsService,
     private readonly filesService: FilesService,
+    @InjectDisk("files") private readonly disk: StorageDisk,
   ) {}
 
   @Post()
@@ -101,16 +105,19 @@ export class ApplicationsController {
   async readCv(
     @Session() session: UserSession,
     @Param("id") id: string,
-  ): Promise<StreamableFile> {
-    const { file, object } = await this.filesService.readApplicationCv(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { file, key } = await this.filesService.readApplicationCv(
       id,
       session.user.id,
     );
 
-    return new StreamableFile(object.body, {
-      type: file.mimeType,
-      length: object.contentLength ?? file.size,
-      disposition: `attachment; filename="${file.originalName}"`,
+    return serveFile(this.disk, key, {
+      req,
+      res,
+      disposition: "attachment",
+      filename: file.originalName,
     });
   }
 
