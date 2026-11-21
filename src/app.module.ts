@@ -19,6 +19,7 @@ import { TokenAwareThrottlerGuard } from "./common/guards/token-aware-throttler.
 import { throttlerModuleOptions } from "./common/throttle";
 import configuration, { envValidationSchema } from "./config/configuration";
 import { DataLifecycleModule } from "./data-lifecycle/data-lifecycle.module";
+import { FilesModule } from "./files/files.module";
 import { HealthModule } from "./health/health.module";
 import {
   type ConfigGetter,
@@ -95,6 +96,7 @@ class AuthRateLimitShutdown implements OnApplicationShutdown {
     ReplacementlistingsModule,
     ApplicationsModule,
     DataLifecycleModule,
+    FilesModule,
     HealthModule,
   ],
   controllers: [AppController],
