@@ -29,5 +29,32 @@ services:
     ports:
       - "6379:6379"
 
+  # S3-compatible object storage for avatars, listing images and CVs. The API
+  # reads the same credentials from FILES_S3_* in .env, so there is one pair to
+  # rotate. The named volume needs no bind-mount permission setup: RustFS's
+  # non-root user (10001) owns the volume's /data.
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: my-rustfs
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Console
+    volumes:
+      - rustfs-data:/data
+    environment:
+      RUSTFS_ACCESS_KEY: ${FILES_S3_ACCESS_KEY:?set FILES_S3_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${FILES_S3_SECRET_KEY:?set FILES_S3_SECRET_KEY in .env}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+      # Under /data so the non-root container user (10001) owns it. The docs'
+      # /var/log/rustfs/ path needs a separate permission-fixing init container;
+      # this project keeps the single named volume instead.
+      RUSTFS_OBS_LOG_DIRECTORY: "/data/logs/"
+    command: /data
+
 volumes:
   postgres_data:
+  rustfs-data:

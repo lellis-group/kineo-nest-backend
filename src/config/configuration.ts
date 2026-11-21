@@ -423,6 +423,49 @@ function configuration() {
     // the same rule for the clients built outside Nest.
     prismaLogQueries: envBoolean(process.env.PRISMA_LOG_QUERIES, false),
 
+    // ---- File storage (RustFS, S3-compatible) ----
+    // RustFS serves path-style URLs by default and calls its root credentials
+    // `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY`, which are handed the same values
+    // from docker-compose. The fallback pair is for development and tests only:
+    // a hardened environment must supply its own (checked in the schema below),
+    // so a deployment cannot accidentally ship the well-known local credentials.
+    files: {
+      s3: {
+        endpoint:
+          (process.env.FILES_S3_ENDPOINT ?? "").trim() ||
+          "http://localhost:9000",
+        region: (process.env.FILES_S3_REGION ?? "").trim() || "us-east-1",
+        bucket: (process.env.FILES_S3_BUCKET ?? "").trim() || "kineo-files",
+        forcePathStyle: envBoolean(process.env.FILES_S3_FORCE_PATH_STYLE, true),
+        accessKeyId:
+          (process.env.FILES_S3_ACCESS_KEY ?? "").trim() || "kineolocal",
+        secretAccessKey:
+          (process.env.FILES_S3_SECRET_KEY ?? "").trim() || "kineolocal",
+      },
+      limits: {
+        avatarBytes: positiveInteger(
+          process.env.FILES_MAX_AVATAR_BYTES,
+          2 * 1024 * 1024,
+          "FILES_MAX_AVATAR_BYTES",
+        ),
+        imageBytes: positiveInteger(
+          process.env.FILES_MAX_IMAGE_BYTES,
+          5 * 1024 * 1024,
+          "FILES_MAX_IMAGE_BYTES",
+        ),
+        imagesPerListing: positiveInteger(
+          process.env.FILES_MAX_IMAGES_PER_LISTING,
+          5,
+          "FILES_MAX_IMAGES_PER_LISTING",
+        ),
+        cvBytes: positiveInteger(
+          process.env.FILES_MAX_CV_BYTES,
+          10 * 1024 * 1024,
+          "FILES_MAX_CV_BYTES",
+        ),
+      },
+    },
+
     // ---- Swagger (can be overridden via env if needed) ----
     swagger: {
       title: "Kineo API",
@@ -638,6 +681,18 @@ export const envValidationSchema = z
 
     // Unset means there is no deep health probe.
     HEALTH_DEEP_TOKEN: z.string().min(16).optional(),
+
+    // ---- File storage (RustFS / S3-compatible) ----
+    FILES_S3_ENDPOINT: z.string().url().default("http://localhost:9000"),
+    FILES_S3_REGION: z.string().min(1).default("us-east-1"),
+    FILES_S3_BUCKET: z.string().min(1).default("kineo-files"),
+    FILES_S3_ACCESS_KEY: z.string().min(1).optional(),
+    FILES_S3_SECRET_KEY: z.string().min(1).optional(),
+    FILES_S3_FORCE_PATH_STYLE: BoolEnum.optional(),
+    FILES_MAX_AVATAR_BYTES: z.coerce.number().int().positive().optional(),
+    FILES_MAX_IMAGE_BYTES: z.coerce.number().int().positive().optional(),
+    FILES_MAX_IMAGES_PER_LISTING: z.coerce.number().int().positive().optional(),
+    FILES_MAX_CV_BYTES: z.coerce.number().int().positive().optional(),
   })
   .superRefine((env, ctx) => {
     // SMTP auth is all-or-nothing: a user without password (or vice versa)
