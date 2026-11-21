@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { runSerializableTransaction } from "../common/serializable-transaction";
+import { FilesLifecycleService } from "../files/files-lifecycle.service";
 import { deletionHash, deletionPepper } from "../lib/hash";
 import { logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
@@ -31,7 +32,10 @@ export interface ErasureResult extends ErasureOutcome {
  */
 @Injectable()
 export class AccountDeletionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly filesLifecycle: FilesLifecycleService,
+  ) {}
 
   async confirmDeletion(token: string): Promise<ErasureResult> {
     const trimmed = token.trim();
@@ -46,6 +50,7 @@ export class AccountDeletionService {
     // leaking a Prisma error to an anonymous caller holding a confirmation link.
     // Called with a plain `$transaction` this had neither, so the one write that
     // erases an account was the one least protected against a concurrent one.
+    let erasedUserId: string | undefined;
     const outcome = await runSerializableTransaction(
       this.prisma,
       async (tx) => {
@@ -73,6 +78,7 @@ export class AccountDeletionService {
         }
 
         const userId = verification.value;
+        erasedUserId = userId;
         const user = await tx.user.findUnique({ where: { id: userId } });
 
         if (!user) {
@@ -129,6 +135,12 @@ export class AccountDeletionService {
         return { ...erasure, anonymizedAt: new Date().toISOString() };
       },
     );
+
+    // Outside the transaction: an S3 delete cannot be rolled back, so it must
+    // only happen once the anonymization has committed.
+    if (erasedUserId) {
+      await this.filesLifecycle.eraseForUser(erasedUserId);
+    }
 
     logEvent("account.deletion.anonymized", {
       anonymizedListings: outcome.anonymizedListings,

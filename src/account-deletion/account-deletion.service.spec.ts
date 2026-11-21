@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { SYSTEM_SCAFFOLD } from "../common/system-scaffold";
+import type { FilesLifecycleService } from "../files/files-lifecycle.service";
 import type { PrismaService } from "../prisma.service";
 import { AccountDeletionService } from "./account-deletion.service";
 import { ANONYMIZED_DESCRIPTION, ANONYMIZED_LISTING_TITLE } from "./anonymize";
@@ -168,7 +169,9 @@ function makeService(scenario: Scenario) {
   } as unknown as PrismaService;
 
   return {
-    service: new AccountDeletionService(prisma),
+    service: new AccountDeletionService(prisma, {
+      eraseForUser: async () => undefined,
+    } as unknown as FilesLifecycleService),
     calls,
     writes,
     // Exposed so a test can assert how the erasure transaction is configured —
