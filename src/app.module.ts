@@ -8,6 +8,7 @@ import {
   Reflector,
 } from "@nestjs/core";
 import { ScheduleModule } from "@nestjs/schedule";
+import { StorageModule } from "@nestjs/storage";
 import { ThrottlerModule } from "@nestjs/throttler";
 import { AuthModule } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerInterceptor, ZodValidationPipe } from "nestjs-zod";
@@ -19,6 +20,8 @@ import { TokenAwareThrottlerGuard } from "./common/guards/token-aware-throttler.
 import { throttlerModuleOptions } from "./common/throttle";
 import configuration, { envValidationSchema } from "./config/configuration";
 import { DataLifecycleModule } from "./data-lifecycle/data-lifecycle.module";
+import { FilesModule } from "./files/files.module";
+import { createStorageOptions } from "./files/storage/storage.config";
 import { HealthModule } from "./health/health.module";
 import {
   type ConfigGetter,
@@ -58,6 +61,10 @@ class AuthRateLimitShutdown implements OnApplicationShutdown {
       validationSchema: envValidationSchema,
     }),
     ScheduleModule.forRoot(),
+    StorageModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: createStorageOptions,
+    }),
     PrismaModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
@@ -95,6 +102,7 @@ class AuthRateLimitShutdown implements OnApplicationShutdown {
     ReplacementlistingsModule,
     ApplicationsModule,
     DataLifecycleModule,
+    FilesModule,
     HealthModule,
   ],
   controllers: [AppController],

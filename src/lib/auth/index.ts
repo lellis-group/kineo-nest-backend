@@ -1,6 +1,6 @@
 import { APIError, betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { jwt, openAPI } from "better-auth/plugins";
+import { bearer, jwt, openAPI } from "better-auth/plugins";
 import { Redis } from "ioredis";
 import { countThirdPartyApplications } from "../../common/application-guard";
 import { durationSeconds } from "../../config/configuration";
@@ -257,6 +257,11 @@ export function createAuth(
       // Read at module scope, which is fine here and wrong everywhere else:
       // `NODE_ENV` does not change between the import and the request.
       ...(isHardenedEnv(authEnv.nodeEnv) ? [] : [openAPI()]),
+      // Turns `Authorization: Bearer <session token>` into the session cookie
+      // the global AuthGuard reads. Without it a client — Swagger's "Authorize"
+      // in particular — has no way to authenticate that isn't a browser cookie.
+      // It also exposes the raw token in `set-auth-token` on sign-in.
+      bearer(),
       emailVerificationStatusPlugin(),
       ...(authEnv.jwtEnabled
         ? [

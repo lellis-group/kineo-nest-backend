@@ -43,6 +43,7 @@ Out of MVP scope: contract generation, payment, real-time RPPS API verification,
 - **Validation**: Zod via `nestjs-zod` (DTOs, response serialization, auto-generated OpenAPI schemas)
 - **Email**: Nodemailer (SMTP), Mailpit for local dev
 - **Database**: PostgreSQL
+- **File storage**: official `@nestjs/storage` disks (local folder or S3-compatible RustFS) for avatars, listing photos and CVs — objects stay private, served through authenticated routes
 - **Security**: Helmet, `@nestjs/throttler` (multi-tier rate limiting), CORS, serializable transactions for concurrency-sensitive writes
 - **Frontend**: TanStack Router + React (early scaffolding only, not covered by this document)
 
@@ -108,6 +109,23 @@ erDiagram
     Profile ||--o{ ReplacementListing : "creates"
     ReplacementListing ||--o{ Application : "receives"
     Profile ||--o{ Application : "applies"
+    Profile ||--o{ StoredFile : "avatar / reusable CV"
+    ReplacementListing ||--o{ StoredFile : "photos"
+    Application ||--o{ StoredFile : "CV snapshot"
+
+    StoredFile {
+        string id PK
+        enum kind "AVATAR LISTING_IMAGE CV"
+        string storageKey "Storage disk key, unique"
+        string originalName
+        string mimeType
+        int size
+        int position
+        string uploaderId FK
+        string profileId FK "optional"
+        string listingId FK "optional"
+        string applicationId FK "optional"
+    }
 
     Profile {
         string id PK
@@ -310,7 +328,26 @@ Still open: email notifications on status changes are written (templates + maile
 
 ## 8. Running it
 
-Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`.
+Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`. File
+storage uses the official `@nestjs/storage` package with one switch:
+`STORAGE_DRIVER=local` writes to `STORAGE_ROOT` (development and every test
+suite), `STORAGE_DRIVER=s3` points `S3Disk` at RustFS or any S3-compatible store
+with path-style addressing. To try RustFS locally, set the `S3_*` variables from
+`.env.example`, run `docker compose --profile s3 up -d rustfs` (S3 API on 9000,
+console on 9001), then run `bun run files:bucket` once — the disk expects the
+bucket to exist, and the script creates it idempotently. Uploads are validated by
+magic number in `uploadToDisk()` before a byte is committed, bounded by the
+per-kind ceilings, and served only through `GET /files/:id` via `serveFile()`;
+the CV attached to an application is a `StorageDisk.copy()` snapshot, so editing
+the candidate's reusable CV never changes what a practice owner received. The
+two read routes use `@OptionalAuth()`: avatars and a public listing's photos
+stream to anonymous readers, while CVs — and private or closed listings — still
+answer 404 without the owner's session. Every other route keeps the global
+AuthGuard. Use an object store in production: a container's local disk vanishes
+when the task is replaced, and `STORAGE_DRIVER=local` now refuses to boot in a
+hardened environment. Give the app only `s3:GetObject`, `s3:PutObject`,
+`s3:DeleteObject` and `s3:ListBucket` on that bucket — without `ListBucket`, a
+missing key answers `403` instead of `404`.
 
 Bun is the only runtime: it runs the TypeScript sources directly in development,
 `tsc` is driven through `bun x`, and the tests, the Prisma CLI and the image all
@@ -323,7 +360,9 @@ go through it too. Nothing in the chain spawns node.
 | `bun run typecheck` | `tsc` over `src/` **and** `prisma/`, specs and e2e included |
 | `bun run lint` | Biome, formatting + correctness rules |
 | `bun run test` | Unit suites, excluding `**/e2e/**` |
-| `bun run test:e2e` | The four e2e suites, each on its own throwaway database |
+| `bun run test:e2e` | Every e2e suite, discovered under `src/`, each on its own throwaway database |
+| `bun run test:e2e:files` | Only the upload/streaming suite (uses a local disk, no RustFS needed) |
+| `bun run files:bucket` | Create the `S3_BUCKET` bucket once on the configured S3-compatible store |
 | `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
 | `bun run db:seed` | **Wipe and repopulate.** Development fixtures only: it refuses to run outside development and test |
 | `bun run db:check` | Replay the migration history and diff it against the schema |
@@ -339,6 +378,12 @@ into `dist/`.
 import would not fix it: `moduleResolution: Bundler` is a bundler-style ESM
 configuration, so `tsc` emits bare specifiers, and the generated Prisma client
 emits its own bare specifiers too. Bun resolves both.
+
+Swagger (`/api`, development and test only) now declares a bearer scheme. Sign in
+with `POST /api/auth/sign-in/email`, take the token from the `set-auth-token`
+response header, and paste it into **Authorize** to use *Try it out* on protected
+routes. The token is accepted because better-auth runs its `bearer()` plugin;
+without it the global `AuthGuard` only reads the session cookie.
 
 `bun run db:seed` **wipes every table** and recreates 40 accounts that share one
 password which is in this repository, so it refuses to run outside development

@@ -9,7 +9,12 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
@@ -23,6 +28,7 @@ import { PaginatedPractices, Practice } from "./entities/practice.entity";
 import { PracticesService } from "./practices.service";
 
 @ApiTags("Practices")
+@ApiBearerAuth()
 @UseGuards(EmailVerifiedGuard)
 @Controller("practices")
 export class PracticesController {

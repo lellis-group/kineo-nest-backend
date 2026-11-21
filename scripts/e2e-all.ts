@@ -86,8 +86,12 @@ function suiteNameFor(file: string, taken: Map<string, string>): string {
  * 18 after `openapi` — the document swagger mounts only outside a hardened
  * environment, which is where the frontend reads it; nothing else would notice
  * a schema the generator refuses.
+ *
+ * 19 after `files` — uploads are the only multipart path in the API. Multer,
+ * magic-number validation, `StreamableFile` and the RustFS client cannot be
+ * exercised by a service spec with a fake storage.
  */
-const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 18);
+const MIN_E2E_SUITES = Number(process.env.MIN_E2E_SUITES ?? 19);
 
 const suites = suitesIn(SRC).sort();
 if (suites.length === 0) {

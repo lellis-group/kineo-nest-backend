@@ -9,7 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import request from "supertest";
-import { bootApp, type E2EFixture, shutdownApp } from "./harness";
+import { bootApp, type E2EFixture, shutdownApp, signInReader } from "./harness";
 
 let fx: E2EFixture;
 
@@ -27,6 +27,7 @@ const PROTECTED_ROUTES = [
   "/replacement-listings/any-id",
   "/profile",
   "/profile/any-id",
+  "/files/mine",
   "/practices",
   "/practices/any-id",
 ];
@@ -43,6 +44,43 @@ describe.each(PROTECTED_ROUTES)("GET %s without a cookie", (route) => {
   it("is refused", async () => {
     const response = await request(fx.baseUrl).get(route);
 
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("GET file routes that opt out with @OptionalAuth", () => {
+  it.each(["/files/any-id", "/files/listings/any-id/images"])(
+    "answers 404 for %s instead of 401",
+    async (route) => {
+      // The guard let the anonymous caller through; the file access policy then
+      // finds no readable subject and answers as if the file did not exist.
+      const response = await request(fx.baseUrl).get(route);
+      expect(response.status).toBe(404);
+    },
+  );
+});
+
+describe("Bearer authentication", () => {
+  it("accepts a session token in the Authorization header", async () => {
+    // better-auth's `bearer()` plugin turns this header into the session cookie
+    // the global AuthGuard reads. This is what Swagger's Authorize uses.
+    const cookies = await signInReader(fx, "bearer-reader");
+    const token = /better-auth\.session_token=([^;]+)/.exec(cookies)?.[1];
+    expect(token).toBeTruthy();
+
+    // /files/mine answers an empty list to a member without a profile, so the
+    // status proves the session was resolved rather than the fixture's shape.
+    const response = await request(fx.baseUrl)
+      .get("/files/mine")
+      .set("Authorization", `Bearer ${token}`);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+  });
+
+  it("refuses a token that signs no session", async () => {
+    const response = await request(fx.baseUrl)
+      .get("/profile/me")
+      .set("Authorization", "Bearer not-a-session-token");
     expect(response.status).toBe(401);
   });
 });

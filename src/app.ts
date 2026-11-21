@@ -29,6 +29,19 @@ export async function createApp(): Promise<NestExpressApplication> {
     logger: nestLogger,
   });
 
+  return configureApp(app);
+}
+
+/**
+ * Applies the middleware and Swagger setup to an application instance.
+ *
+ * Kept separate from `createApp()` so e2e suites can build the app through
+ * `Test.createTestingModule()` — and override providers such as
+ * `STORAGE_MODULE_OPTIONS` — while still exercising the real HTTP stack.
+ */
+export function configureApp(
+  app: NestExpressApplication,
+): NestExpressApplication {
   app.use(compression({ filter: compressionFilter }));
 
   const configService = app.get(ConfigService);
@@ -65,6 +78,16 @@ export async function createApp(): Promise<NestExpressApplication> {
     )
     .setVersion(configService.get<string>("swagger.version", "1.0"))
     .addTag(configService.get<string>("swagger.tag", "Kineo"))
+    // better-auth's `bearer()` plugin accepts the session token in this header,
+    // so the "Authorize" button can actually authenticate a "Try it out" call.
+    // The token is returned in `set-auth-token` by POST /api/auth/sign-in/email.
+    .addBearerAuth({
+      type: "http",
+      scheme: "bearer",
+      bearerFormat: "Session token",
+      description:
+        "Session token from the `set-auth-token` header of POST /api/auth/sign-in/email",
+    })
     .build();
 
   if (!isHardenedEnv(configService.get<string>("nodeEnv"))) {

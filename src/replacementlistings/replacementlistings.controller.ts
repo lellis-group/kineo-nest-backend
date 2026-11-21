@@ -11,7 +11,12 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from "@nestjs/swagger";
 import type { UserSession } from "@thallesp/nestjs-better-auth";
 import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
@@ -51,6 +56,7 @@ import { ReplacementlistingsService } from "./replacementlistings.service";
 const BROWSE_CACHE_CONTROL = "private, max-age=15, stale-while-revalidate=60";
 
 @ApiTags("Replacement Listings")
+@ApiBearerAuth()
 @UseGuards(EmailVerifiedGuard)
 @Controller("replacement-listings")
 export class ReplacementlistingsController {
