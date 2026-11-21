@@ -4,12 +4,19 @@ import {
   Get,
   Param,
   Post,
-  StreamableFile,
+  Req,
+  Res,
   UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from "@nestjs/common";
+import {
+  InjectDisk,
+  StorageDisk,
+  type StoredUpload,
+  serveFile,
+} from "@nestjs/storage";
 import {
   ApiBearerAuth,
   ApiBody,
@@ -24,6 +31,7 @@ import {
   Session,
   type UserSession,
 } from "@thallesp/nestjs-better-auth";
+import type { Request, Response } from "express";
 import { ZodSerializerDto } from "nestjs-zod";
 import { ApiError } from "../common/api-errors";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
@@ -35,11 +43,6 @@ import {
   ListingImagesInterceptor,
   ProfileCvFileInterceptor,
 } from "./validation/file-interceptors";
-import {
-  AvatarFilePipe,
-  ListingImageFilePipe,
-  ProfileCvFilePipe,
-} from "./validation/file-pipes";
 
 /**
  * Swagger UI only renders a file picker for a body property declared with
@@ -72,7 +75,10 @@ const MULTIPLE_FILES_BODY: ApiBodyOptions = {
 @UseGuards(EmailVerifiedGuard)
 @Controller("files")
 export class FilesController {
-  constructor(private readonly filesService: FilesService) {}
+  constructor(
+    private readonly filesService: FilesService,
+    @InjectDisk("files") private readonly disk: StorageDisk,
+  ) {}
 
   @Post("avatar")
   @ThrottleWithConfig("medium")
@@ -84,7 +90,7 @@ export class FilesController {
   @ZodSerializerDto(StoredFileDto)
   uploadAvatar(
     @Session() session: UserSession,
-    @UploadedFile(AvatarFilePipe) file: Express.Multer.File,
+    @UploadedFile() file: StoredUpload,
   ) {
     return this.filesService.uploadAvatar(session.user.id, file);
   }
@@ -99,7 +105,7 @@ export class FilesController {
   @ZodSerializerDto(StoredFileDto)
   uploadProfileCv(
     @Session() session: UserSession,
-    @UploadedFile(ProfileCvFilePipe) file: Express.Multer.File,
+    @UploadedFile() file: StoredUpload,
   ) {
     return this.filesService.uploadProfileCv(session.user.id, file);
   }
@@ -116,7 +122,7 @@ export class FilesController {
   uploadListingImages(
     @Session() session: UserSession,
     @Param("listingId") listingId: string,
-    @UploadedFiles(ListingImageFilePipe) files: Express.Multer.File[],
+    @UploadedFiles() files: StoredUpload[],
   ) {
     return this.filesService.uploadListingImages(
       session.user.id,
@@ -160,14 +166,16 @@ export class FilesController {
   async download(
     @Session() session: UserSession | undefined,
     @Param("id") id: string,
-  ): Promise<StreamableFile> {
-    const { file, object } = await this.filesService.read(id, session?.user.id);
-    const disposition = file.kind === "CV" ? "attachment" : "inline";
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { file, key } = await this.filesService.read(id, session?.user.id);
 
-    return new StreamableFile(object.body, {
-      type: file.mimeType,
-      length: object.contentLength ?? file.size,
-      disposition: `${disposition}; filename="${file.originalName}"`,
+    return serveFile(this.disk, key, {
+      req,
+      res,
+      disposition: file.kind === "CV" ? "attachment" : "inline",
+      filename: file.originalName,
     });
   }
 

@@ -1,8 +1,8 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
+import { InjectDisk, StorageDisk } from "@nestjs/storage";
 import { logError, logEvent } from "../lib/log";
 import { PrismaService } from "../prisma.service";
-import { FILE_STORAGE, type FileStorage } from "./storage/file-storage";
 
 /** An object younger than this may still be part of an in-flight upload. */
 const ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
@@ -11,7 +11,7 @@ const ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
 export class FilesLifecycleService {
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(FILE_STORAGE) private readonly storage: FileStorage,
+    @InjectDisk("files") private readonly disk: StorageDisk,
   ) {}
 
   /**
@@ -62,7 +62,10 @@ export class FilesLifecycleService {
    */
   @Cron("0 3 * * *")
   async sweepOrphanedObjects(): Promise<void> {
-    const objects = await this.storage.list();
+    const objects: { key: string; lastModified: Date }[] = [];
+    for await (const entry of this.disk.listAll()) {
+      objects.push({ key: entry.key, lastModified: entry.lastModified });
+    }
     const referenced = new Set(
       (
         await this.prisma.storedFile.findMany({
@@ -87,7 +90,7 @@ export class FilesLifecycleService {
   private async removeObjects(keys: string[], context: string): Promise<void> {
     await Promise.all(
       keys.map((key) =>
-        this.storage.remove(key).catch((error: unknown) => {
+        this.disk.delete(key).catch((error: unknown) => {
           logError("files.object.remove_failed", error, { context, key });
         }),
       ),

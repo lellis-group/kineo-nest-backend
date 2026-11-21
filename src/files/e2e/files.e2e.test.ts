@@ -263,7 +263,7 @@ describe("CV validation and privacy", () => {
   it("refuses a PNG sent as a CV, even with a PDF MIME header", async () => {
     const world = await seedWorld();
     const response = await uploadCv(world.candidateCookies, PNG, "cv.pdf");
-    expect(response.status).toBe(422);
+    expect(response.status).toBe(415);
   });
 
   it("accepts a PDF, private to its owner", async () => {

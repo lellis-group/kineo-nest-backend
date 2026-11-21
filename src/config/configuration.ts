@@ -423,25 +423,26 @@ function configuration() {
     // the same rule for the clients built outside Nest.
     prismaLogQueries: envBoolean(process.env.PRISMA_LOG_QUERIES, false),
 
-    // ---- File storage (RustFS, S3-compatible) ----
-    // RustFS serves path-style URLs by default and calls its root credentials
-    // `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY`, which are handed the same values
-    // from docker-compose. The fallback pair is for development and tests only:
-    // a hardened environment must supply its own (checked in the schema below),
-    // so a deployment cannot accidentally ship the well-known local credentials.
-    files: {
+    // ---- File storage ----
+    // The driver is the only switch between a local folder and RustFS (or any
+    // S3-compatible store). `files.limits` stays here: it is a business rule,
+    // independent of where the bytes end up.
+    storage: {
+      driver: (process.env.STORAGE_DRIVER ?? "").trim() || "local",
+      root: (process.env.STORAGE_ROOT ?? "").trim() || "storage",
       s3: {
         endpoint:
-          (process.env.FILES_S3_ENDPOINT ?? "").trim() ||
-          "http://localhost:9000",
-        region: (process.env.FILES_S3_REGION ?? "").trim() || "us-east-1",
-        bucket: (process.env.FILES_S3_BUCKET ?? "").trim() || "kineo-files",
-        forcePathStyle: envBoolean(process.env.FILES_S3_FORCE_PATH_STYLE, true),
-        accessKeyId:
-          (process.env.FILES_S3_ACCESS_KEY ?? "").trim() || "kineolocal",
+          (process.env.S3_ENDPOINT ?? "").trim() || "http://localhost:9000",
+        region: (process.env.S3_REGION ?? "").trim() || "us-east-1",
+        bucket: (process.env.S3_BUCKET ?? "").trim() || "kineo-files",
+        forcePathStyle: envBoolean(process.env.S3_FORCE_PATH_STYLE, true),
+        accessKeyId: (process.env.S3_ACCESS_KEY ?? "").trim() || "kineolocal",
         secretAccessKey:
-          (process.env.FILES_S3_SECRET_KEY ?? "").trim() || "kineolocal",
+          (process.env.S3_SECRET_KEY ?? "").trim() || "kineolocal",
       },
+    },
+
+    files: {
       limits: {
         avatarBytes: positiveInteger(
           process.env.FILES_MAX_AVATAR_BYTES,
@@ -682,13 +683,15 @@ export const envValidationSchema = z
     // Unset means there is no deep health probe.
     HEALTH_DEEP_TOKEN: z.string().min(16).optional(),
 
-    // ---- File storage (RustFS / S3-compatible) ----
-    FILES_S3_ENDPOINT: z.string().url().default("http://localhost:9000"),
-    FILES_S3_REGION: z.string().min(1).default("us-east-1"),
-    FILES_S3_BUCKET: z.string().min(1).default("kineo-files"),
-    FILES_S3_ACCESS_KEY: z.string().min(1).optional(),
-    FILES_S3_SECRET_KEY: z.string().min(1).optional(),
-    FILES_S3_FORCE_PATH_STYLE: BoolEnum.optional(),
+    // ---- File storage (official @nestjs/storage drivers) ----
+    STORAGE_DRIVER: z.enum(["local", "s3"]).optional(),
+    STORAGE_ROOT: z.string().min(1).optional(),
+    S3_ENDPOINT: z.string().url().default("http://localhost:9000"),
+    S3_REGION: z.string().min(1).default("us-east-1"),
+    S3_BUCKET: z.string().min(1).default("kineo-files"),
+    S3_ACCESS_KEY: z.string().min(1).optional(),
+    S3_SECRET_KEY: z.string().min(1).optional(),
+    S3_FORCE_PATH_STYLE: BoolEnum.optional(),
     FILES_MAX_AVATAR_BYTES: z.coerce.number().int().positive().optional(),
     FILES_MAX_IMAGE_BYTES: z.coerce.number().int().positive().optional(),
     FILES_MAX_IMAGES_PER_LISTING: z.coerce.number().int().positive().optional(),

@@ -12,6 +12,9 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Client } from "pg";
 import type { PrismaClient } from "../../generated/prisma/client";
@@ -164,6 +167,13 @@ export async function bootApp(): Promise<E2EFixture> {
   process.env.RATE_LIMIT_MAX = "10000";
   process.env.CREDENTIAL_RATE_LIMIT_MAX = "10000";
   process.env.CHANGE_EMAIL_RATE_LIMIT_MAX = "10000";
+  // E2E suites use the official storage package's local disk: no RustFS and no
+  // network dependency. Set before the app is imported, like DATABASE_URL.
+  process.env.STORAGE_DRIVER = "local";
+  process.env.STORAGE_ROOT = join(
+    tmpdir(),
+    `kineo-e2e-storage-${process.env.KINEO_E2E_SUITE ?? "default"}`,
+  );
 
   // prisma.config.ts resolves the datasource through env("DATABASE_URL") and
   // dotenv/config only fills variables that are not already set, so the value
@@ -220,6 +230,9 @@ export async function shutdownApp(): Promise<void> {
   await app.close();
   await prisma.$disconnect();
   await dropIfExists();
+  if (process.env.STORAGE_DRIVER === "local" && process.env.STORAGE_ROOT) {
+    rmSync(process.env.STORAGE_ROOT, { recursive: true, force: true });
+  }
 }
 
 /** Truncates the data a suite writes, leaving the scaffold in place. */

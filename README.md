@@ -43,7 +43,7 @@ Out of MVP scope: contract generation, payment, real-time RPPS API verification,
 - **Validation**: Zod via `nestjs-zod` (DTOs, response serialization, auto-generated OpenAPI schemas)
 - **Email**: Nodemailer (SMTP), Mailpit for local dev
 - **Database**: PostgreSQL
-- **File storage**: RustFS (S3-compatible, via `@aws-sdk/client-s3`) for avatars, listing photos and CVs — objects are private, served through authenticated routes
+- **File storage**: official `@nestjs/storage` disks (local folder or S3-compatible RustFS) for avatars, listing photos and CVs — objects stay private, served through authenticated routes
 - **Security**: Helmet, `@nestjs/throttler` (multi-tier rate limiting), CORS, serializable transactions for concurrency-sensitive writes
 - **Frontend**: TanStack Router + React (early scaffolding only, not covered by this document)
 
@@ -116,7 +116,7 @@ erDiagram
     StoredFile {
         string id PK
         enum kind "AVATAR LISTING_IMAGE CV"
-        string storageKey "RustFS object key, unique"
+        string storageKey "Storage disk key, unique"
         string originalName
         string mimeType
         int size
@@ -328,18 +328,23 @@ Still open: email notifications on status changes are written (templates + maile
 
 ## 8. Running it
 
-Requires a PostgreSQL reachable at `DATABASE_URL`, a `bun install`, and — for
-file uploads — a RustFS reachable at `FILES_S3_ENDPOINT`. `docker compose up -d
-rustfs` starts one locally (S3 API on 9000, console on 9001); set
-`FILES_S3_ACCESS_KEY`, `FILES_S3_SECRET_KEY` and the other `FILES_*` variables
-from `.env.example`. The API connects with path-style addressing and creates the
-`FILES_S3_BUCKET` bucket on boot if it is missing. Uploads are validated by magic
-number, bounded by per-kind ceilings, and served only through `GET /files/:id`;
-the CV attached to an application is a `CopyObject` snapshot, so editing the
-candidate's reusable CV never changes what a practice owner received. The two
-read routes use `@OptionalAuth()`: avatars and a public listing's photos stream
-to anonymous readers, while CVs — and private or closed listings — still answer
-404 without the owner's session. Every other route keeps the global AuthGuard.
+Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`. File
+storage uses the official `@nestjs/storage` package with one switch:
+`STORAGE_DRIVER=local` writes to `STORAGE_ROOT` (development and every test
+suite), `STORAGE_DRIVER=s3` points `S3Disk` at RustFS or any S3-compatible store
+with path-style addressing. To try RustFS locally, run `docker compose up -d
+rustfs` (S3 API on 9000, console on 9001), set the `S3_*` variables from
+`.env.example`, then run `bun run files:bucket` once — the disk expects the
+bucket to exist, and the script creates it idempotently. Uploads are validated by
+magic number in `uploadToDisk()` before a byte is committed, bounded by the
+per-kind ceilings, and served only through `GET /files/:id` via `serveFile()`;
+the CV attached to an application is a `StorageDisk.copy()` snapshot, so editing
+the candidate's reusable CV never changes what a practice owner received. The
+two read routes use `@OptionalAuth()`: avatars and a public listing's photos
+stream to anonymous readers, while CVs — and private or closed listings — still
+answer 404 without the owner's session. Every other route keeps the global
+AuthGuard. Use an object store in production: a container's local disk vanishes
+when the task is replaced.
 
 Bun is the only runtime: it runs the TypeScript sources directly in development,
 `tsc` is driven through `bun x`, and the tests, the Prisma CLI and the image all
@@ -353,7 +358,8 @@ go through it too. Nothing in the chain spawns node.
 | `bun run lint` | Biome, formatting + correctness rules |
 | `bun run test` | Unit suites, excluding `**/e2e/**` |
 | `bun run test:e2e` | Every e2e suite, discovered under `src/`, each on its own throwaway database |
-| `bun run test:e2e:files` | Only the upload/streaming suite (needs RustFS running) |
+| `bun run test:e2e:files` | Only the upload/streaming suite (uses a local disk, no RustFS needed) |
+| `bun run files:bucket` | Create the `S3_BUCKET` bucket once on the configured S3-compatible store |
 | `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
 | `bun run db:seed` | **Wipe and repopulate.** Development fixtures only: it refuses to run outside development and test |
 | `bun run db:check` | Replay the migration history and diff it against the schema |
