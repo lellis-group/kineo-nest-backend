@@ -361,14 +361,21 @@ describe("application CV snapshots", () => {
       .set("Cookie", world.candidateCookies);
     expect(attached.status).toBe(201);
 
+    const cvUrl = `/applications/${application.id}/cv`;
+
     const practiceRead = await request(fx.baseUrl)
-      .get(attached.body.url)
+      .get(cvUrl)
       .set("Cookie", world.ownerCookies);
     expect(practiceRead.status).toBe(200);
     expect(practiceRead.body).toEqual(v1);
 
+    const applicantRead = await request(fx.baseUrl)
+      .get(cvUrl)
+      .set("Cookie", world.candidateCookies);
+    expect(applicantRead.status).toBe(200);
+
     const strangerRead = await request(fx.baseUrl)
-      .get(attached.body.url)
+      .get(cvUrl)
       .set("Cookie", world.strangerCookies);
     expect(strangerRead.status).toBe(404);
 
@@ -376,7 +383,7 @@ describe("application CV snapshots", () => {
     const v2 = await uploadCv(world.candidateCookies, pdf("application-cv-v2"));
     expect(v2.status).toBe(201);
     const afterEdit = await request(fx.baseUrl)
-      .get(attached.body.url)
+      .get(cvUrl)
       .set("Cookie", world.ownerCookies);
     expect(afterEdit.body).toEqual(v1);
   });

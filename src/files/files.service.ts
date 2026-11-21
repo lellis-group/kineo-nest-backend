@@ -243,6 +243,49 @@ export class FilesService {
     }
   }
 
+  /**
+   * The CV an application carries, without exposing its file id.
+   *
+   * A practice owner knows the application, not the candidate's file ids, so
+   * this is the read path the frontend uses on the received-applications side.
+   */
+  async readApplicationCv(
+    applicationId: string,
+    userId: string,
+  ): Promise<{ file: StoredFileDto; object: StoredObject }> {
+    const subject = {
+      kind: "CV" as const,
+      profileId: null,
+      listingId: null,
+      applicationId,
+    };
+    if (!(await canReadFile(this.prisma, subject, userId))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    const file = await this.prisma.storedFile.findFirst({
+      where: { kind: "CV", applicationId },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!file) {
+      throw new NotFoundException(
+        `No CV attached to application ${applicationId}`,
+      );
+    }
+
+    try {
+      return {
+        file: toDto(file),
+        object: await this.storage.open(file.storageKey),
+      };
+    } catch (error) {
+      logError("files.open_failed", error, { applicationId });
+      throw new NotFoundException(
+        `No CV attached to application ${applicationId}`,
+      );
+    }
+  }
+
   async remove(id: string, userId: string): Promise<void> {
     const file = await this.prisma.storedFile.findUnique({ where: { id } });
     if (!file) {

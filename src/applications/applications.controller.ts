@@ -6,6 +6,7 @@ import {
   Patch,
   Post,
   Query,
+  StreamableFile,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -88,6 +89,29 @@ export class ApplicationsController {
   @ZodSerializerDto(StoredFileDto)
   attachCv(@Session() session: UserSession, @Param("id") id: string) {
     return this.filesService.attachCvToApplication(session.user.id, id);
+  }
+
+  @Get(":id/cv")
+  @ApiOperation({
+    summary: "Stream the CV attached to an application",
+    description:
+      "Only the applicant and the owner of the listing's practice may read it.",
+  })
+  @ApiResponse({ status: 404, description: "No CV attached", type: ApiError })
+  async readCv(
+    @Session() session: UserSession,
+    @Param("id") id: string,
+  ): Promise<StreamableFile> {
+    const { file, object } = await this.filesService.readApplicationCv(
+      id,
+      session.user.id,
+    );
+
+    return new StreamableFile(object.body, {
+      type: file.mimeType,
+      length: object.contentLength ?? file.size,
+      disposition: `attachment; filename="${file.originalName}"`,
+    });
   }
 
   @Get("mine")
