@@ -12,10 +12,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { InMemoryDisk, STORAGE_MODULE_OPTIONS } from "@nestjs/storage";
 import { Client } from "pg";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { SYSTEM_SCAFFOLD } from "../system-scaffold";
@@ -122,6 +121,9 @@ export interface E2EFixture {
 
 let fixture: E2EFixture | null = null;
 
+/** The disk the app writes to in e2e, replaceable per suite like the DB. */
+export const testStorage = new InMemoryDisk();
+
 export async function bootApp(): Promise<E2EFixture> {
   if (fixture) {
     return fixture;
@@ -167,14 +169,6 @@ export async function bootApp(): Promise<E2EFixture> {
   process.env.RATE_LIMIT_MAX = "10000";
   process.env.CREDENTIAL_RATE_LIMIT_MAX = "10000";
   process.env.CHANGE_EMAIL_RATE_LIMIT_MAX = "10000";
-  // E2E suites use the official storage package's local disk: no RustFS and no
-  // network dependency. Set before the app is imported, like DATABASE_URL.
-  process.env.STORAGE_DRIVER = "local";
-  process.env.STORAGE_ROOT = join(
-    tmpdir(),
-    `kineo-e2e-storage-${process.env.KINEO_E2E_SUITE ?? "default"}`,
-  );
-
   // prisma.config.ts resolves the datasource through env("DATABASE_URL") and
   // dotenv/config only fills variables that are not already set, so the value
   // written above is the one the CLI migrates.
@@ -183,11 +177,27 @@ export async function bootApp(): Promise<E2EFixture> {
     stdio: "pipe",
   });
 
-  // createApp() rather than a bare testing module: the latter would run none of
-  // the middleware the server runs — no helmet, no compression, no CORS, no
-  // trust proxy, no Swagger gate.
-  const { createApp } = await import("../../app");
-  const app = await createApp();
+  // Build the app through a testing module so `STORAGE_MODULE_OPTIONS` can be
+  // overridden with an InMemoryDisk, exactly as @nestjs/storage documents.
+  // `configureApp()` still applies the real helmet, compression, CORS, proxy
+  // and Swagger stack — this is not a bare Nest application.
+  const { Test } = await import("@nestjs/testing");
+  const { configureApp } = await import("../../app");
+  const { AppModule } = await import("../../app.module");
+  const { nestLogger } = await import("../../lib/nest-logger");
+
+  testStorage.clear();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(STORAGE_MODULE_OPTIONS)
+    .useValue({ default: "files", disks: { files: testStorage } })
+    .compile();
+
+  const app = configureApp(
+    moduleRef.createNestApplication<NestExpressApplication>({
+      bodyParser: false,
+      logger: nestLogger,
+    }),
+  );
   app.enableShutdownHooks();
 
   // Port 0 lets the OS pick, so a suite never collides with a dev server.
@@ -230,9 +240,7 @@ export async function shutdownApp(): Promise<void> {
   await app.close();
   await prisma.$disconnect();
   await dropIfExists();
-  if (process.env.STORAGE_DRIVER === "local" && process.env.STORAGE_ROOT) {
-    rmSync(process.env.STORAGE_ROOT, { recursive: true, force: true });
-  }
+  testStorage.clear();
 }
 
 /** Truncates the data a suite writes, leaving the scaffold in place. */

@@ -29,6 +29,19 @@ export async function createApp(): Promise<NestExpressApplication> {
     logger: nestLogger,
   });
 
+  return configureApp(app);
+}
+
+/**
+ * Applies the middleware and Swagger setup to an application instance.
+ *
+ * Kept separate from `createApp()` so e2e suites can build the app through
+ * `Test.createTestingModule()` — and override providers such as
+ * `STORAGE_MODULE_OPTIONS` — while still exercising the real HTTP stack.
+ */
+export function configureApp(
+  app: NestExpressApplication,
+): NestExpressApplication {
   app.use(compression({ filter: compressionFilter }));
 
   const configService = app.get(ConfigService);
