@@ -136,6 +136,12 @@ enum DataDeletionRequestStatus {
   SUPERSEDED
 }
 
+enum StoredFileKind {
+  AVATAR
+  LISTING_IMAGE
+  CV
+}
+
 model Profile {
   id           String               @id @default(cuid())
   userId       String               @unique
@@ -150,9 +156,11 @@ model Profile {
   longitude    Float?
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
-  practices    Practice[]
-  listings     ReplacementListing[] @relation("CreatedListings")
-  applications Application[]
+  practices      Practice[]
+  listings       ReplacementListing[] @relation("CreatedListings")
+  applications   Application[]
+  uploadedFiles  StoredFile[]         @relation("UploadedFiles")
+  attachedFiles  StoredFile[]         @relation("ProfileFiles")
 
   @@index([specialty, isPublic])
   @@map("profile")
@@ -194,6 +202,7 @@ model ReplacementListing {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   applications    Application[]
+  images          StoredFile[]
 
   // Not partial, unlike the two they replace. `status` is always sent as a
   // parameter, and a partial index whose predicate is a literal is invisible to
@@ -224,6 +233,7 @@ model Application {
   respondedAt     DateTime?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
+  files           StoredFile[]
 
   @@unique([listingId, applicantId])
   @@index([applicantId, status])
@@ -255,4 +265,35 @@ model DataDeletionRequest {
   @@index([emailHash])
   @@index([status, updatedAt])
   @@map("data_deletion_request")
+}
+
+/// Metadata for an object in RustFS. The binary lives in the bucket, never in
+/// the database: a row without its object is a broken link, and an object without
+/// its row is unreachable. The three optional ids select the owner of the file
+/// according to `kind` — exactly one is set, enforced in FilesService.
+model StoredFile {
+  id            String              @id @default(cuid())
+  kind          StoredFileKind
+  storageKey    String              @unique
+  originalName  String
+  mimeType      String
+  size          Int
+  position      Int                 @default(0)
+  uploaderId    String
+  uploader      Profile             @relation("UploadedFiles", fields: [uploaderId], references: [id], onDelete: Cascade)
+  profileId     String?
+  profile       Profile?            @relation("ProfileFiles", fields: [profileId], references: [id], onDelete: Cascade)
+  listingId     String?
+  listing       ReplacementListing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  applicationId String?
+  application   Application?        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdAt     DateTime            @default(now())
+
+  // One avatar per profile. The partial index keeps the rule in the database:
+  // two concurrent uploads cannot both win, even if the service races.
+  @@unique([profileId], where: { kind: "AVATAR" }, map: "stored_file_avatar_profile_key")
+  @@index([profileId, kind])
+  @@index([listingId, kind])
+  @@index([applicationId, kind])
+  @@map("stored_file")
 }
