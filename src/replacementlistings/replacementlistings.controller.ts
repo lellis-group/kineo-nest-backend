@@ -9,6 +9,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
@@ -21,6 +22,7 @@ import type { UserSession } from "@thallesp/nestjs-better-auth";
 import { Session } from "@thallesp/nestjs-better-auth";
 import { ZodSerializerDto } from "nestjs-zod";
 import { ApiBadRequest, ApiError } from "../common/api-errors";
+import { BrowsePlacesCacheInterceptor } from "../common/browse-places-cache";
 import { EmailVerifiedGuard } from "../common/guards/email-verified.guard";
 import { ThrottleWithConfig } from "../common/throttle";
 import { MAX_BROWSE_MAP_PLACES } from "../replacementlistings/browse";
@@ -130,6 +132,10 @@ export class ReplacementlistingsController {
   // listing with that id.
   @Get("places")
   @Header("Cache-Control", BROWSE_CACHE_CONTROL)
+  // The map's read is identical for every member, so one shared entry per
+  // filter is safe. Never put this on the controller: `/mine` and `/:id` are
+  // owner-scoped.
+  @UseInterceptors(BrowsePlacesCacheInterceptor)
   @ApiOperation({
     summary:
       "The places the browse map is drawn from, over the whole matching collection",
