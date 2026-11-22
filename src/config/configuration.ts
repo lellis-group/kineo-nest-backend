@@ -506,6 +506,21 @@ const TimerMsSchema = z.coerce
   .max(MAX_TIMER_MS)
   .optional();
 
+/**
+ * Treat a present-but-blank env var as unset.
+ *
+ * `.optional()` only skips validation for `undefined`, not for `""`, and the
+ * `.env` templates ship optional credentials as `S3_ACCESS_KEY=` with no value.
+ * A blank line therefore used to fail `.min(1)` and refuse to boot. Blank means
+ * "unset": trim, then let the wrapped schema's default (or the factory's
+ * fallback) apply.
+ */
+const blankAsUnset = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess(
+    (raw) => (typeof raw === "string" && raw.trim() === "" ? undefined : raw),
+    schema,
+  );
+
 /** Accepts plain seconds ("604800") or a suffixed duration ("15m", "1h"). */
 const DurationString = z.string().refine(
   (raw) => {
@@ -685,12 +700,14 @@ export const envValidationSchema = z
 
     // ---- File storage (official @nestjs/storage drivers) ----
     STORAGE_DRIVER: z.enum(["local", "s3"]).optional(),
-    STORAGE_ROOT: z.string().min(1).optional(),
-    S3_ENDPOINT: z.string().url().default("http://localhost:9000"),
-    S3_REGION: z.string().min(1).default("us-east-1"),
-    S3_BUCKET: z.string().min(1).default("kineo-files"),
-    S3_ACCESS_KEY: z.string().min(1).optional(),
-    S3_SECRET_KEY: z.string().min(1).optional(),
+    STORAGE_ROOT: blankAsUnset(z.string().min(1).optional()),
+    S3_ENDPOINT: blankAsUnset(
+      z.string().url().default("http://localhost:9000"),
+    ),
+    S3_REGION: blankAsUnset(z.string().min(1).default("us-east-1")),
+    S3_BUCKET: blankAsUnset(z.string().min(1).default("kineo-files")),
+    S3_ACCESS_KEY: blankAsUnset(z.string().min(1).optional()),
+    S3_SECRET_KEY: blankAsUnset(z.string().min(1).optional()),
     S3_FORCE_PATH_STYLE: BoolEnum.optional(),
     FILES_MAX_AVATAR_BYTES: z.coerce.number().int().positive().optional(),
     FILES_MAX_IMAGE_BYTES: z.coerce.number().int().positive().optional(),

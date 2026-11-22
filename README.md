@@ -332,8 +332,9 @@ Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`. File
 storage uses the official `@nestjs/storage` package with one switch:
 `STORAGE_DRIVER=local` writes to `STORAGE_ROOT` (development and every test
 suite), `STORAGE_DRIVER=s3` points `S3Disk` at RustFS or any S3-compatible store
-with path-style addressing. To try RustFS locally, set the `S3_*` variables from
-`.env.example`, run `docker compose --profile s3 up -d rustfs` (S3 API on 9000,
+with path-style addressing. To try RustFS locally, copy the `S3_*` variables from
+`.env.example` (they ship with development defaults), run
+`docker compose --profile s3 up -d rustfs` (S3 API on 9000,
 console on 9001), then run `bun run files:bucket` once — the disk expects the
 bucket to exist, and the script creates it idempotently. Uploads are validated by
 magic number in `uploadToDisk()` before a byte is committed, bounded by the
