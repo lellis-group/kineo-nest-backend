@@ -1,523 +1,76 @@
-# Kineo
+# Kineo - Backend
 
-Application connecting established doctors with locum doctors (replacements) in France, with a differentiating positioning focusing on administrative automation (contracts, RPPS verification, statuses) rather than just simple job listings.
+Kineo connects established doctors in France with locum doctors seeking replacements. Its distinguishing focus is administrative automation around contracts, identity verification, and status tracking rather than simple job listings.
 
-This document serves both as a product specification for a human and as context for an AI taking over the code (architecture, entities, flows, conventions). This specifically targets the **backend** of the fullstack project.
+This repository contains the backend: a NestJS API running on Bun, backed by PostgreSQL. It is the single authentication server for the platform; the Next.js frontend proxies `/api/auth/*` to it and does not implement authentication itself.
 
----
+## At a glance
 
-## 1. Context and Positioning
-
-The market already includes established players:
-- **MonRempla / Rempla** (regional network backed by CNOM) — leader, verification via the Medical Council.
-- **RemplaMed, MesRemplas, Remplaclinic, RemplaJob** — private actors, classic matchmaking.
-
-**Targeted differentiation**: reduce administrative friction rather than simply duplicating matchmaking.
-
-| Axis | Description |
+| | |
 |---|---|
-| Verification | RPPS / Medical Council status verified at registration (declarative in MVP, official API in V2) |
-| Contract | Automatic generation of standard locum contract (pre-filled PDF) |
-| Emergency | "Last-minute replacement" mode with alerts to nearby available locums |
-| Reputation | Bilateral rating after replacement (Airbnb-style) |
-| Niche | Initial targeting of a specific specialty or restricted geographical area, not a generalized national coverage |
-| Communication | Applicants are never left in the dark: viewed/responded timestamps, shortlist status, and explicit rejection/withdrawal reasons |
+| Domain | Medical locum replacements in France |
+| Runtime | Bun only; no Node process in the toolchain |
+| Framework | NestJS 12, TypeScript |
+| Persistence | PostgreSQL through Prisma 7 with `@prisma/adapter-pg` |
+| Authentication | better-auth: email and password, sessions, optional bearer plugin |
+| Validation | Zod through `nestjs-zod`; OpenAPI generated from the DTOs |
+| Mail | Nodemailer over SMTP, with Mailpit in development |
+| Files | Private objects served through authenticated routes; local disk or S3-compatible store |
+| Status | MVP shipped; contracts, payments, ratings and messaging deferred |
 
-**MVP scope** (minimal functional perimeter):
-1. Registration / authentication (established doctor or locum)
-2. Doctor profile (specialty, status, geographical area)
-3. Publishing a replacement listing (practice, dates, specialty)
-4. Search / apply for a listing
-5. Application lifecycle with transparent status tracking (no messaging/conversation module yet)
-6. Listing status (draft → open → in discussion → full → filled → closed/cancelled)
-
-Out of MVP scope: contract generation, payment, real-time RPPS API verification, rating, messaging/conversation module.
-
----
-
-## 2. Tech Stack
-
-- **Backend**: NestJS (TypeScript), running on Bun
-- **ORM**: Prisma (`provider = postgresql`, driver adapter `@prisma/adapter-pg`)
-- **Auth**: better-auth (email/password + sessions, optional JWT plugin, email verification)
-- **Validation**: Zod via `nestjs-zod` (DTOs, response serialization, auto-generated OpenAPI schemas)
-- **Email**: Nodemailer (SMTP), Mailpit for local dev
-- **Database**: PostgreSQL
-- **File storage**: official `@nestjs/storage` disks (local folder or S3-compatible RustFS) for avatars, listing photos and CVs — objects stay private, served through authenticated routes
-- **Security**: Helmet, `@nestjs/throttler` (multi-tier rate limiting), CORS, serializable transactions for concurrency-sensitive writes
-- **Frontend**: TanStack Router + React (early scaffolding only, not covered by this document)
-
----
-
-## 3. Global Architecture
+## System context
 
 ```mermaid
 flowchart LR
-    subgraph Client
-        Web[Web App]
-    end
-
-    subgraph Backend NestJS
-        Auth[Auth Module
-        better-auth]
-        Profile[Profile Module]
-        Practices[Practices Module]
-        Listings[ReplacementListings Module]
-        Applications[Applications Module]
-        Notifications[Email / Notifications
-        not yet wired as a module]
-        Prisma[Prisma Client]
-    end
-
-    DB[(PostgreSQL)]
-    SMTP[(SMTP / Mailpit)]
-
-    Web --> Auth
-    Web --> Profile
-    Web --> Practices
-    Web --> Listings
-    Web --> Applications
-
-    Auth --> Prisma
-    Profile --> Prisma
-    Practices --> Prisma
-    Listings --> Prisma
-    Applications --> Prisma
-    Prisma --> DB
-
-    Auth --> SMTP
-    Notifications -.planned.-> SMTP
+    Web[Web app] --> API[Kineo API]
+    API --> DB[(PostgreSQL)]
+    API --> SMTP[(SMTP / Mailpit)]
+    API --> Files[(Local disk or S3-compatible store)]
 ```
 
----
+The API owns every business rule: profile visibility, practice ownership, listing lifecycle, application transitions, and account erasure. The web app consumes it rather than duplicating that logic.
 
-## 4. Data Model
+## Documentation
 
-### 4.1 Auth (better-auth)
+This README is the entry point. All detail lives in a self-contained documentation set under [`docs/`](docs/README.md).
 
-- `User`: base identity (email, name, `emailVerified`, image)
-- `Session`, `Account`, `Verification`: managed by better-auth
-- `Jwks`: only used if the optional JWT plugin is enabled (`JWT_ENABLED=true`)
+| Area | Document | Covers |
+|---|---|---|
+| Product | [Overview](docs/product/overview.md) | Market, positioning, MVP perimeter |
+| Product | [Roadmap](docs/product/roadmap.md) | Shipped work, next steps, deferred items |
+| Architecture | [Overview](docs/architecture/overview.md) | Stack, modules, system diagram |
+| Architecture | [Data model](docs/architecture/data-model.md) | Auth tables, entities, relationships |
+| Architecture | [Domain flows](docs/architecture/flows.md) | Registration, publication, application, lifecycles |
+| Guides | [Getting started](docs/guides/getting-started.md) | Setup, local services, commands |
+| Guides | [Configuration](docs/guides/configuration.md) | Environment variables, limits, storage |
+| Guides | [API](docs/guides/api.md) | Swagger, bearer tokens, route groups |
+| Operations | [Security and reliability](docs/operations/security.md) | Access control, concurrency, throttling |
+| Operations | [Testing and CI](docs/operations/testing.md) | Unit and e2e suites, drift gate |
+| Operations | [Account erasure](docs/operations/account-erasure.md) | Anonymization, audit trail, purge |
+| Reference | [Conventions](docs/reference/conventions.md) | Rules for the next reader |
+| Reference | [AI takeover notes](docs/reference/ai-takeover.md) | Constraints for automated contributors |
 
-### 4.2 Business Model (implemented)
+## Quick start
 
-```mermaid
-erDiagram
-    User ||--o| Profile : "has"
-    Profile ||--o{ Practice : "owns"
-    Practice ||--o{ ReplacementListing : "hosts"
-    Profile ||--o{ ReplacementListing : "creates"
-    ReplacementListing ||--o{ Application : "receives"
-    Profile ||--o{ Application : "applies"
-    Profile ||--o{ StoredFile : "avatar / reusable CV"
-    ReplacementListing ||--o{ StoredFile : "photos"
-    Application ||--o{ StoredFile : "CV snapshot"
-
-    StoredFile {
-        string id PK
-        enum kind "AVATAR LISTING_IMAGE CV"
-        string storageKey "Storage disk key, unique"
-        string originalName
-        string mimeType
-        int size
-        int position
-        string uploaderId FK
-        string profileId FK "optional"
-        string listingId FK "optional"
-        string applicationId FK "optional"
-    }
-
-    Profile {
-        string id PK
-        string userId FK
-        string rppsNumber "11-digit, unique, optional"
-        enum specialty
-        enum profileType "INSTALLED REPLACEMENT BOTH"
-        boolean verified
-        boolean isPublic
-        string city
-        float latitude
-        float longitude
-    }
-
-    Practice {
-        string id PK
-        string ownerId FK
-        string name
-        string address
-        string city
-        float latitude
-        float longitude
-        boolean isPublic
-    }
-
-    ReplacementListing {
-        string id PK
-        string practiceId FK
-        string createdById FK
-        string title
-        datetime startDate
-        datetime endDate
-        enum specialty
-        enum status "DRAFT OPEN IN_DISCUSSION FULL FILLED CLOSED CANCELLED"
-        boolean urgent
-        string description
-        int maxApplications "optional cap on active applications"
-    }
-
-    Application {
-        string id PK
-        string listingId FK
-        string applicantId FK
-        enum status "PENDING SHORTLISTED ACCEPTED REJECTED WITHDRAWN"
-        string message
-        string rejectionReason
-        string withdrawnReason
-        datetime viewedAt
-        datetime respondedAt
-    }
-```
-
-**Not implemented**: `Conversation`/`Message` (messaging module), originally planned in the ERD, is out of scope for now — deferred until a real need emerges.
-
----
-
-## 5. Main Flows
-
-### 5.1 Registration and Profile Creation
-
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant A as better-auth
-    participant API as NestJS API
-    participant DB as PostgreSQL
-    participant Mail as SMTP
-
-    U->>A: Sign up (email, password)
-    A->>DB: Create User + Account
-    A->>Mail: Send verification email
-    A-->>U: Session token
-    U->>API: POST /profile (specialty, profileType, city)
-    Note over API: EmailVerifiedGuard blocks unverified accounts
-    API->>DB: Create Profile linked to User
-    API-->>U: Profile created
-```
-
-> **Email links**: links sent by Better Auth emails (email verification, password
-> reset) are rewritten to the Next.js frontend pages (`/verify-email`,
-> `/reset-password`) using the `FRONTEND_URL` variable. The frontend pages then
-> complete the flow through `authClient`, which proxies `/api/auth/*` to the
-> NestJS API — the API remains the single authentication server and all
-> endpoints are unchanged.
->
-> The API also exposes a custom Better Auth endpoint, `GET
-> /api/auth/check-email-verification?token=…`: given a verification token (even
-> an expired or already-used one) it reports whether the account is already
-> verified. The `/verify-email` page uses it to show the success screen when a
-> user re-clicks an old email link, and the signup page displays a “check your
-> inbox” confirmation with a resend action after registration.
-
-### 5.2 Listing Publication and Application
-
-```mermaid
-sequenceDiagram
-    actor I as Established Doctor
-    actor R as Locum Doctor
-    participant API as NestJS API
-    participant DB as PostgreSQL
-
-    I->>API: POST /replacement-listings (practiceId, dates, specialty)
-    API->>DB: Create ReplacementListing (status=DRAFT)
-    I->>API: PATCH /replacement-listings/:id/publish
-    API->>DB: status=OPEN
-
-    R->>API: GET /replacement-listings?specialty=...&city=...
-    API->>DB: Search applicable listings (OPEN and IN_DISCUSSION)
-    API-->>R: Paginated listings with active application count
-
-    R->>API: POST /applications (listingId, message)
-    Note over API: Serializable transaction: checks limits, ownership, listing status
-    API->>DB: Create Application (status=PENDING)
-    API->>DB: Recalculate listing status (OPEN/IN_DISCUSSION/FULL)
-
-    I->>API: PATCH /applications/:id/accept
-    Note over API: Serializable transaction: accept + reject competitors + fill listing
-    API->>DB: Application status=ACCEPTED, others=REJECTED, Listing status=FILLED
-```
-
-### 5.3 Listing Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> DRAFT : creation
-    DRAFT --> OPEN : publish
-    OPEN --> IN_DISCUSSION : first active application
-    IN_DISCUSSION --> FULL : maxApplications reached
-    FULL --> IN_DISCUSSION : an application is withdrawn/rejected, below cap again
-    IN_DISCUSSION --> FILLED : application accepted
-    FULL --> FILLED : application accepted
-    OPEN --> FILLED : application accepted
-    OPEN --> CLOSED : closed by owner
-    FILLED --> CLOSED : replacement completed
-    DRAFT --> CANCELLED : cancelled by owner
-    OPEN --> CANCELLED : cancelled by owner
-    IN_DISCUSSION --> CANCELLED : cancelled by owner (active applications auto-rejected)
-    FULL --> CANCELLED : cancelled by owner (active applications auto-rejected)
-```
-
-### 5.4 Application Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING : applicant applies
-    PENDING --> SHORTLISTED : owner shortlists
-    PENDING --> ACCEPTED : owner accepts
-    SHORTLISTED --> ACCEPTED : owner accepts
-    PENDING --> REJECTED : owner rejects, or listing cancelled
-    SHORTLISTED --> REJECTED : owner rejects, or listing cancelled
-    PENDING --> WITHDRAWN : applicant withdraws
-    SHORTLISTED --> WITHDRAWN : applicant withdraws
-```
-
----
-
-## 6. Security & Reliability
-
-Resolved in the branches that built this section; the state of each is
-reflected below rather than claimed:
-
-- **Access control**: ownership checks on every mutating route across all four modules; `404` (not `403`) returned for private resources to avoid enumeration.
-- **Concurrency**: `Serializable` isolation level with automatic retry (`common/serializable-transaction.ts`) on every write that touches shared counters (application limits, listing capacity, accept/reject cascades); the raw relations the front end drives race-side (`shortlist`, the message edit) go through optimistic CAS instead — the write carries the expected status in its `where`, and a count of zero answers the refusal, so a decision committed between the authorizing read and the write cannot be overwritten. The shortlist-vs-accept race is pinned over HTTP (`applications-transitions.e2e.test.ts`).
-- **One database client**: the application and better-auth serve every read and write from the single `PrismaService` instance (`PrismaModule`), `DATABASE_POOL_MAX` states what a replica costs against Postgres `max_connections` (the pg default of 10 per client otherwise), and the standalone auth scripts want is built on first ask (`createStandaloneAuth()`), never at import.
-- **Rate limiting**: multi-tier throttling (`short`/`medium`/`long`) via `@nestjs/throttler`, declared once in `config/configuration.ts` and applied per route by `common/throttle.ts`; proxy-aware IP tracking. A fourth `deletion` tier is registered but refused by the guard unless the route opted in, so its budget cannot leak onto the rest of the API. better-auth's own 3-per-10s rule on the credential endpoints is overridden by `CREDENTIAL_RATE_LIMIT_*`. On the auth routes Express never sees, better-auth does its own IP resolution: the proxies themselves are named in `TRUST_PROXY_IPS`, and the same list is Express's `trust proxy` setting, so the throttler's `req.ip` resolves the same client (a two-hop `X-Forwarded-For` chain otherwise resolves to no client at all, and every such caller collapses into one shared bucket). When `REDIS_URL` is set, both layers count their buckets in the shared Redis (`lib/auth/rate-limit-redis.ts`, `ThrottlerStorageRedisService`), so N replicas enforce one budget instead of N.
-- **Account erasure**: `deleteUser.beforeDelete` refuses better-auth's hard delete, so the only path is the anonymization described in §9. The `verification` purge, the ghost listings and the keyed trail are covered by the e2e suite, not only by fakes.
-- **Input validation**: length/range constraints on every Zod DTO (text fields capped, coordinates bounded, RPPS format-checked); per-profile resource caps configurable via env vars (`MAX_PRACTICES_PER_PROFILE`, `MAX_ACTIVE_LISTINGS_PER_PROFILE`, `MAX_ACTIVE_APPLICATIONS_PER_PROFILE`).
-- **Transport security**: Helmet with a CSP scoped to allow the Scalar-based Swagger UI; CORS restricted to `TRUSTED_ORIGINS`.
-- **Email**: no more plaintext token logging; real SMTP delivery (auth + TLS aware) with error handling that never blocks the underlying business transaction. Every HTML template escapes its interpolations and refuses a call to action whose target is not http(s).
-- **Indexes**: composite and partial indexes aligned with actual query patterns (`status`-filtered lookups on listings/applications, bounding-box geo search on practices).
-- **Sensitive zones** (accepted, not fixed): `verification` holds the password-reset and account-deletion tokens in clear text — better-auth stores the email-verification ones as signed JWTs instead, so they are not there. Whoever can read that table can reset a password and confirm a deletion, which is a database-read capability rather than an application defect: the response is encryption at rest and access restrictions on the role, and nothing this repository can change. The hourly sweep (`data-lifecycle.service.ts`, under an advisory lock) is what bounds the window, so a token that is never read still expires. `Session.token` is the same class of exposure and is bounded the same way. The `account` table holds better-auth password hashes and is reachable by the same database role; scrypt cost and `minPasswordLength: 8` are the mitigation on that side.
-
-Automated tests are wired into CI and are not optional any more: 201 unit tests over `bun test`, and two e2e suites (`bun run test:e2e`) that boot the real `AppModule` through `createApp()`, replay the migration history into a throwaway database and drive it over HTTP. Every pull request runs `prisma validate`, `generate`, `build`, `typecheck` (which covers the specs and the seed, unlike the build), `lint`, the unit suites, the e2e suites, the seed, `bun audit --production`, and a migration drift gate that replays the history and diffs it against `schema.prisma`.
-
-Still open: email notifications on status changes are written (templates + mailer) but not wired into `ApplicationsService` — planned as a dedicated `NotificationsModule`.
-
----
-
-## 7. Roadmap
-
-- [x] Auth (better-auth + Prisma, optional JWT, email verification, password reset)
-- [x] Profile Module (CRUD, public/private visibility, pagination, RPPS format validation)
-- [x] Practice Module (CRUD, geo search with bounding-box pre-filter)
-- [x] ReplacementListing Module (full lifecycle, capacity threshold, geo/date/specialty search)
-- [x] Application Module (apply, shortlist, accept/reject cascade, withdraw, view tracking)
-- [x] Security hardening (throttling, Helmet, CORS, indexes, input validation, concurrency safety)
-- [x] Account erasure (art. 17): anonymization instead of deletion, keyed audit trail, third-party applications parked on ghost listings, purge after the grace period
-- [x] Automated test suite (unit + e2e), enforced in CI
-- [ ] Email notifications wired into the application lifecycle (`NotificationsModule`)
-- [ ] Messaging Module (conversation linked to an application) — deferred, not MVP-critical
-- [ ] Frontend (early TanStack Router scaffolding only)
-- [ ] V2: RPPS verification via official API, PDF contract generation, bilateral rating, geolocated "emergency" alerts
-- [ ] Decouple Auth from better-auth (deferred tech debt, not MVP): introduce an `AuthPort` (`IAuthProvider`) behind a NestJS wrapper so better-auth becomes swappable — isolate `Session`/`UserSession`/`AllowAnonymous` (`@thallesp/nestjs-better-auth`) in controllers, `lib/auth/index.ts` (`betterAuth`, `prismaAdapter`, plugins), guards (`email-verified.guard.ts`), and `hashPassword` usage in `prisma/seed.ts`
-- [ ] Email via `NotificationsModule` with an `EmailPort` (deferred, not MVP): Nodemailer is already isolated in `lib/email/mailer.ts` (low coupling, single import point) — the work is functional decoupling (queue/retry, wiring into `ApplicationsService`, provider-agnostic templates in `lib/email/templates/*`), not swapping Nodemailer itself
-- [ ] Watch `nestjs-zod` for a release declaring `^12` peers: the project runs `nestjs-zod@5.5.0` on Nest 12 — it works and is tested, but the dependency declares `@nestjs/common ^10 || ^11` and `@nestjs/swagger ^7.4.2 || ^8 || ^11`, so the combo is officially untested. When a version declaring `^12` appears, upgrade and pin it with `bun test` + the e2e suites in CI. No scheduled check: it would add a network dependency to CI to detect a release whose only action is a manual upgrade — this entry is the reminder.
-
----
-
----
-
-## 8. Running it
-
-Requires a PostgreSQL reachable at `DATABASE_URL` and a `bun install`. File
-storage uses the official `@nestjs/storage` package with one switch:
-`STORAGE_DRIVER=local` writes to `STORAGE_ROOT` (development and every test
-suite), `STORAGE_DRIVER=s3` points `S3Disk` at RustFS or any S3-compatible store
-with path-style addressing. To try RustFS locally, copy the `S3_*` variables from
-`.env.example` (they ship with development defaults), run
-`docker compose --profile s3 up -d rustfs` (S3 API on 9000,
-console on 9001), then run `bun run files:bucket` once — the disk expects the
-bucket to exist, and the script creates it idempotently. Uploads are validated by
-magic number in `uploadToDisk()` before a byte is committed, bounded by the
-per-kind ceilings, and served only through `GET /files/:id` via `serveFile()`;
-the CV attached to an application is a `StorageDisk.copy()` snapshot, so editing
-the candidate's reusable CV never changes what a practice owner received. The
-two read routes use `@OptionalAuth()`: avatars and a public listing's photos
-stream to anonymous readers, while CVs — and private or closed listings — still
-answer 404 without the owner's session. Every other route keeps the global
-AuthGuard. Use an object store in production: a container's local disk vanishes
-when the task is replaced, and `STORAGE_DRIVER=local` now refuses to boot in a
-hardened environment. Give the app only `s3:GetObject`, `s3:PutObject`,
-`s3:DeleteObject` and `s3:ListBucket` on that bucket — without `ListBucket`, a
-missing key answers `403` instead of `404`.
-
-Bun is the only runtime: it runs the TypeScript sources directly in development,
-`tsc` is driven through `bun x`, and the tests, the Prisma CLI and the image all
-go through it too. Nothing in the chain spawns node.
-
-| Command | What it does |
-| --- | --- |
-| `bun run dev` | Runs `src/main.ts` with `--watch` |
-| `bun run build` | `bun x tsc -p tsconfig.build.json`, so the specs and the e2e suites stay out of `dist/` |
-| `bun run typecheck` | `tsc` over `src/` **and** `prisma/`, specs and e2e included |
-| `bun run lint` | Biome, formatting + correctness rules |
-| `bun run test` | Unit suites, excluding `**/e2e/**` |
-| `bun run test:e2e` | Every e2e suite, discovered under `src/`, each on its own throwaway database |
-| `bun run test:e2e:files` | Only the upload/streaming suite (uses a local disk, no RustFS needed) |
-| `bun run files:bucket` | Create the `S3_BUCKET` bucket once on the configured S3-compatible store |
-| `bun run db:migrate` | Create and apply a migration from a `schema.prisma` change |
-| `bun run db:seed` | **Wipe and repopulate.** Development fixtures only: it refuses to run outside development and test |
-| `bun run db:check` | Replay the migration history and diff it against the schema |
-| `bun run profile` | Measure the two listing reads left unindexed on purpose (`scripts/profile-listings.ts`) over a self-built throwaway corpus — `TEST_DATABASE_ADMIN_URL` required, `PROFILE_PRACTICES` / `PROFILE_LISTINGS_MIN`–`MAX` resize the corpus, nothing it measures is ever written back into the schema |
-
-`tsconfig.json` is the base every tool reads and covers `src/` and `prisma/` with
-the specs included; `tsconfig.build.json` is what the build compiles, adding
-`rootDir`, `outDir` and the test exclusions. That split is why the build is not a
-bare `bun x tsc`: with the base config, the specs and the seed would be emitted
-into `dist/`.
-
-`node dist/main.js` cannot run this build, and adding `.js` to every relative
-import would not fix it: `moduleResolution: Bundler` is a bundler-style ESM
-configuration, so `tsc` emits bare specifiers, and the generated Prisma client
-emits its own bare specifiers too. Bun resolves both.
-
-Swagger (`/api`, development and test only) now declares a bearer scheme. Sign in
-with `POST /api/auth/sign-in/email`, take the token from the `set-auth-token`
-response header, and paste it into **Authorize** to use *Try it out* on protected
-routes. The token is accepted because better-auth runs its `bearer()` plugin;
-without it the global `AuthGuard` only reads the session cookie.
-
-`bun run db:seed` **wipes every table** and recreates 40 accounts that share one
-password which is in this repository, so it refuses to run outside development
-and test unless `ALLOW_DESTRUCTIVE_SEED=true` is set. It is not a deploy step:
-the rows an account erasure parks other candidates' applications on come from a
-migration, and `SystemScaffoldService` repairs them at boot if they are missing.
-
-## 9. The account erasure
-
-The endpoint is `POST /account/confirm-deletion` with the token from the emailed
-link. No session is required: better-auth's own `delete-user` demands a valid
-cookie at click time, which answers "invalid link" from a different browser or a
-blocked cookie. The emailed token is the proof of identity.
-
-What it does, in order:
-
-1. Consumes the single-use `delete-account-*` token, refusing an expired one.
-2. Moves the applications other candidates wrote on this account's listings onto
-   a ghost listing owned by the system scaffold. They are not the account
-   holder's data to erase, so both their authors and the practices that received
-   them keep a real row. A placement (`ACCEPTED` on a `FILLED` listing) is never
-   moved: the candidate is waiting on that listing, and it carries no undecided
-   answer anyway.
-3. Anonymizes: the address becomes `erased-<fingerprint>@deleted.invalid`, the
-   name and image go, the profile loses its RPPS number, city and coordinates, the
-   account's own applications are settled so their listings recalculate. A
-   listing still circulating loses its title, description and dates and stops
-   being shown (`CLOSED_NO_CANDIDATE`); one already past its end (`CLOSED`,
-   `CANCELLED`, a protected placement) is scrubbed of the owner's words only —
-   the status it was closed with is part of the trail.
-   The candidacies parked on a ghost that nobody can decide any more
-   (`PENDING`, `SHORTLISTED`) are settled `REJECTED` with `decisionSource =
-   SYSTEM`: the account that would have answered is gone, and an open row would
-   queue the candidate's own application quota for nothing.
-4. Drops the sessions and credentials, so the erasure takes effect immediately.
-5. Sets `deletedAt`. The hourly sweep drops the row after
-   `ACCOUNT_PURGE_GRACE_DAYS`.
-
-A listing holding an **accepted placement** is deliberately left alone: the
-placement was agreed with a candidate who is still waiting for an answer. It
-leaves circulation rather than being scrubbed, and the response says how many
-there are. That is the policy the erasure chose — "F2, option A" in the audit
-conversation that drove this codebase's 2026 hardening: never detach an
-`ACCEPTED` application from a `FILLED` listing, because the placement is a
-verifiable fact and `accept` has already settled the other actives that could
-have been stranded behind it.
-
-The trail (`DataDeletionRequest`) stores two keyed fingerprints, not the
-identifier:
-
-```
-userIdHash = HMAC-SHA256(DELETION_PEPPER, userId)
-emailHash  = HMAC-SHA256(DELETION_PEPPER, email)
-```
-
-An unkeyed hash would not do: the inputs are emails and cuid ids, enumerable from
-any other table of the same dump.
-
-**Back up `DELETION_PEPPER` with the database.** Losing it does not erase the
-trail, it makes the trail unreachable: nothing can compute the fingerprint to
-search for. The trail holds no identifier either way.
-
-To answer "was this person processed?", compute the fingerprint and query:
-
-```sql
-SELECT "status", "createdAt", "executedAt"
-FROM "data_deletion_request"
-WHERE "emailHash" = '<HMAC-SHA256 of the address under the pepper>';
-```
-
-`emailHash` is written and never read by the application; it exists so an
-operator can do this without a dump.
-
-### 9.1 If the trail migration stops halfway
-
-The two migrations around the trail are split on purpose. The first adds nullable
-fingerprint columns; the second makes them `NOT NULL` and drops the plaintext
-`userId`/`email`. A database still holding trail rows fails the second rather than
-losing them — an accountability record is not ours to rewrite.
-
-If `bun run db:migrate` reports a failure in `enforce_erasure_fingerprints`:
+Requires a PostgreSQL database reachable at `DATABASE_URL`.
 
 ```bash
-DELETION_PEPPER=<the real pepper> bun run db:seed   # recomputes the fingerprints
-bun run db:migrate                                  # now succeeds
+bun install
+cp .env.example .env
+bun run db:migrate
+bun run dev
 ```
 
-`db:seed` also wipes the rest of the data, so on anything but a development
-database, run the backfill by hand instead:
+The dev server listens on `PORT` (3000 by default), and Swagger is available at `/api` in development and test. See [Getting started](docs/guides/getting-started.md) for local services, seeding, and the full command list.
 
-```sql
--- one row at a time, with the fingerprints computed by your own script
-UPDATE "data_deletion_request"
-SET "userIdHash" = '<hmac>', "emailHash" = '<hmac>', "updatedAt" = NOW()
-WHERE "userIdHash" IS NULL;
-```
+## Scope
 
-## 10. Notes for the next reader
+The MVP covers registration, profiles and practices, publishing listings, search and apply, transparent application tracking, and the listing lifecycle. Contract generation, payments, real-time RPPS verification, ratings and messaging are out of scope. See [Product overview](docs/product/overview.md) for the reasoning.
 
-- Nothing checks a migration that was hand-edited or renamed: `bun run db:check`
-  is the gate, and it is in CI. Do not give a migration folder a hand-picked
-  timestamp — a name dated in the future sorts before everything generated after
-  it, and the replay fails.
-- The e2e suites need `bun run test:e2e`. Running `bun test src` collects them
-  too, and they refuse to share a process with anything else: the whole
-  application reads `DATABASE_URL` at import time, so a suite that loaded after a
-  unit spec would silently assert against the developer's own database.
-- Every list endpoint orders by `createdAt` then `id`. `createdAt` is not unique,
-  and offset pagination over a non-total order repeats and skips rows.
-- `prisma/schema.prisma` runs with `previewFeatures = ["partialIndexes"]` — the
-  partial unique indexes the erasure's one-`PENDING`-per-fingerprint rule rests
-  on. It is production code on a preview flag (Prisma 7.9.1 at the time of
-  writing): check the release notes at every upgrade before touching it.
-- The browse feed answers the *applicable* set — `OPEN` **and** `IN_DISCUSSION`
-  (`src/common/listing-status.ts`), the statuses `applications.create` accepts —
-  and so do the facets, the map and the direct link. A `FULL` posting is out
-  by construction, `RECRUITING_LISTING_STATUSES` is the wider console set, and
-  the gap between the two is the product's, not an accident.
-- Every read route requires a session — the feed (`/replacement-listings`,
-  `/facets`, `/places`, `/page-of`, `/:id`) and the directories (`/profile`,
-  `/profile/:id`, `/practices`, `/practices/:id`) included; besides better-auth's
-  own `/api/auth/*` routes, only `/`, `/ping`,
-  `/health` and the erasure confirmation opt out. The feed is therefore sent
-  `Cache-Control: private`, so no shared cache stores it, and a public profile's
-  coordinates are rounded to two decimals (~1 km): a profile is a person, and
-  the exact values stay on the owner's `GET /profile/me`.
+## Companion repository
 
-## 11. Notes for AI Takeover
+`kineo-next-frontend` is the web client of the platform. It is documented independently in its own repository, and this documentation set does not depend on it.
 
-- The `User`, `Session`, `Account`, `Verification`, `Jwks` models are managed by better-auth: do not modify them manually, regenerate via the better-auth CLI if additional fields are needed on `User`.
-- All business data (specialty, status, location) lives in `Profile`, not in `User`.
-- `email-verified.guard.ts` must be applied on **controllers**, not services — Nest guards have no effect on plain service methods.
-- Every service that needs to check resource ownership uses the shared helpers in `common/profile-lookup.ts` rather than duplicating `findUnique` logic.
-- Any write that reads-then-writes a shared counter (application count, listing capacity) must go through `runSerializableTransaction` (`common/serializable-transaction.ts`) to avoid race conditions.
-- Zod entity schemas use `z.iso.datetime()` for date fields exposed to Swagger — plain `z.date()` breaks OpenAPI generation (`nestjs-zod` / Zod v4 limitation) and must not be reintroduced.
-- No payment or legal contract logic is implemented yet: to be handled in V2 with particular vigilance on compliance (GDPR, health data indirectly linked via RPPS).
+## Contributing
+
+Before opening a pull request, run `bun run typecheck`, `bun run lint`, `bun run test`, and `bun run test:e2e`. CI also enforces a migration drift gate. See [Testing and CI](docs/operations/testing.md).
