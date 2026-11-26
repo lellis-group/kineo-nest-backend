@@ -32,7 +32,7 @@ import {
   ListingStatus as LISTING_STATUSES,
   Specialty,
 } from "../generated/prisma/enums";
-import { escapeLike, geoWhere, haversineKm } from "../practices/geo-query";
+import { escapeLike, geoWhere } from "../practices/geo-query";
 import { PrismaService } from "../prisma.service";
 import { PLACE_PREVIEW_LIMIT } from "./browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
@@ -562,11 +562,14 @@ export class ReplacementlistingsService {
         publicOnly: options.publicOnly !== false,
       });
 
+      // No ORDER BY: this query only decides *which* practices are in the
+      // radius. The listing reads apply their own ordering; sorting every
+      // candidate by haversine here would be work thrown away. The bounding
+      // box above is what the latitude/longitude index serves.
       const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`
           SELECT p."id" FROM practice p
           WHERE ${where}
-          ORDER BY ${haversineKm(filters.lat, filters.lng)} ASC
         `,
       );
       practiceIds = rows.map((row) => row.id);

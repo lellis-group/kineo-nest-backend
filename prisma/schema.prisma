@@ -192,6 +192,12 @@ model Practice {
   @@index([city(ops: raw("gin_trgm_ops"))], type: Gin, map: "practice_city_trgm_idx")
   @@index([departmentCode])
   @@index([cityCodeInsee])
+  // Every public browse read filters on isPublic alongside one of these
+  // codes; a composite serves both predicates from one index lookup. The
+  // single-column indexes stay for the owner's own feed, which has no
+  // isPublic predicate.
+  @@index([isPublic, cityCodeInsee], map: "practice_public_cityCode_idx")
+  @@index([isPublic, departmentCode], map: "practice_public_department_idx")
   @@map("practice")
 }
 
