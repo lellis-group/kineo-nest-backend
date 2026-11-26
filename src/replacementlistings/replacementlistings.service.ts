@@ -32,7 +32,7 @@ import {
   ListingStatus as LISTING_STATUSES,
   Specialty,
 } from "../generated/prisma/enums";
-import { escapeLike } from "../practices/geo-query";
+import { escapeLike, geoWhere, haversineKm } from "../practices/geo-query";
 import { PrismaService } from "../prisma.service";
 import { PLACE_PREVIEW_LIMIT } from "./browse";
 import type { CreateReplacementListingDto } from "./dto/create-replacementlisting.dto";
@@ -508,12 +508,17 @@ export class ReplacementlistingsService {
    * replace the first, and the feed would quietly stop filtering by city — or
    * stop hiding private practices, depending on the order.
    */
-  private buildListingsWhere(
+  private async buildListingsWhere(
     filters: Pick<
       FindReplacementListingsDto,
       | "status"
       | "specialty"
       | "city"
+      | "cityCode"
+      | "department"
+      | "lat"
+      | "lng"
+      | "radiusKm"
       | "urgent"
       | "startDateFrom"
       | "startDateTo"
@@ -531,13 +536,47 @@ export class ReplacementlistingsService {
       ...(filters.city
         ? { city: { contains: escapeLike(filters.city), mode: "insensitive" } }
         : {}),
+      ...(filters.cityCode ? { cityCodeInsee: filters.cityCode } : {}),
+      ...(filters.department ? { departmentCode: filters.department } : {}),
       ...(options.publicOnly ? { isPublic: true } : {}),
     };
+
+    // The radius is resolved to practice ids first. The five listing reads have
+    // different selects and pagination, but all of them accept `practiceId IN`.
+    let practiceIds: string[] | undefined;
+    if (
+      filters.lat !== undefined &&
+      filters.lng !== undefined &&
+      filters.radiusKm !== undefined
+    ) {
+      const latitudeDelta = (filters.radiusKm / 6_371) * (180 / Math.PI);
+      const cosLat = Math.cos((filters.lat * Math.PI) / 180);
+      const longitudeDelta =
+        Math.abs(cosLat) < 1e-6 ? 180 : latitudeDelta / Math.abs(cosLat);
+      const where = geoWhere({
+        lat: filters.lat,
+        lng: filters.lng,
+        radiusKm: filters.radiusKm,
+        latitudeDelta,
+        longitudeDelta,
+        publicOnly: options.publicOnly !== false,
+      });
+
+      const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`
+          SELECT p."id" FROM practice p
+          WHERE ${where}
+          ORDER BY ${haversineKm(filters.lat, filters.lng)} ASC
+        `,
+      );
+      practiceIds = rows.map((row) => row.id);
+    }
 
     return {
       status: filters.status,
       specialty: filters.specialty,
       urgent: filters.urgent,
+      ...(practiceIds ? { practiceId: { in: practiceIds } } : {}),
       // Free-text, matched against the posting's own words rather than the
       // practice's city: a reader typing « dermatologue » or « mi-temps » is
       // naming the work, not a place. An `OR` over title and description, each
@@ -591,7 +630,7 @@ export class ReplacementlistingsService {
     // while its direct link kept answering: the contract contradicted itself.
     const { status: _statusFilter, ...publicFilters } = filters;
     const where: Prisma.ReplacementListingWhereInput = {
-      ...this.buildListingsWhere(publicFilters, { publicOnly: true }),
+      ...(await this.buildListingsWhere(publicFilters, { publicOnly: true })),
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
@@ -650,7 +689,7 @@ export class ReplacementlistingsService {
     // Same set as the feed: the panels count what the feed shows, and an
     // `IN_DISCUSSION` opening the feed counts must not vanish from its facets.
     const where: Prisma.ReplacementListingWhereInput = {
-      ...this.buildListingsWhere(scope, { publicOnly: true }),
+      ...(await this.buildListingsWhere(scope, { publicOnly: true })),
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
@@ -729,7 +768,7 @@ export class ReplacementlistingsService {
    */
   async findPlaces(filters: FindPlacesDto, maxPlaces: number) {
     const where: Prisma.ReplacementListingWhereInput = {
-      ...this.buildListingsWhere(filters, { publicOnly: true }),
+      ...(await this.buildListingsWhere(filters, { publicOnly: true })),
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
@@ -825,7 +864,7 @@ export class ReplacementlistingsService {
    */
   async findPageOf(id: string, filters: FindPageOfDto) {
     const scope: Prisma.ReplacementListingWhereInput = {
-      ...this.buildListingsWhere(filters, { publicOnly: true }),
+      ...(await this.buildListingsWhere(filters, { publicOnly: true })),
       status: { in: APPLICABLE_LISTING_STATUSES },
     };
 
@@ -867,7 +906,7 @@ export class ReplacementlistingsService {
     const { page, limit, skip } = paginate(filters);
     const where = {
       createdById: profileId,
-      ...this.buildListingsWhere(filters),
+      ...(await this.buildListingsWhere(filters)),
     };
 
     const // The buckets count every filter the paginator applies except the
@@ -876,7 +915,7 @@ export class ReplacementlistingsService {
       { status: _status, ...countFilters } = filters;
     const countsWhere = {
       createdById: profileId,
-      ...this.buildListingsWhere(countFilters),
+      ...(await this.buildListingsWhere(countFilters)),
     };
 
     const [data, total, counts, nextRecruiting] = await Promise.all([

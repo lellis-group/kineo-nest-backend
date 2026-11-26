@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { geoCodesAgree, geoWriteFields } from "../../common/validation/geo";
 import { latLongsPaired } from "../../common/validation/lat-long";
-import { CITY_REGEX } from "../../common/validation/text";
+import { CITY_LABEL_REGEX } from "../../common/validation/text";
 import { createZodDto } from "../../common/zod-dto";
 import { ProfileType, Specialty } from "../../generated/prisma/enums";
 
@@ -26,11 +27,12 @@ export const CreateProfileObjectSchema = z
       .min(1)
       .max(100)
       .regex(
-        CITY_REGEX,
-        "City must contain only letters, spaces, hyphens or apostrophes",
+        CITY_LABEL_REGEX,
+        "City must contain only letters, digits, spaces, hyphens or apostrophes",
       )
       .optional()
-      .describe("Main city of practice"),
+      .describe("Main city label; the stable code is cityCodeInsee"),
+    ...geoWriteFields,
     latitude: z
       .number()
       .min(-90)
@@ -56,6 +58,9 @@ export const CreateProfileSchema = CreateProfileObjectSchema.refine(
     message: "latitude and longitude must be provided together",
     path: ["latitude"],
   },
-);
+).refine(geoCodesAgree, {
+  message: "departmentCode must match cityCodeInsee",
+  path: ["departmentCode"],
+});
 
 export class CreateProfileDto extends createZodDto(CreateProfileSchema) {}

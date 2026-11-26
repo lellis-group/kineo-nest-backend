@@ -157,3 +157,38 @@ describe("the other browse filters", () => {
     expect(FindPlacesSchema.safeParse({ limit: 50 }).success).toBe(false);
   });
 });
+
+describe("the browse geographic filters", () => {
+  for (const { name, schema, extra } of readers) {
+    describe(name, () => {
+      it("accepts a commune code and a department code", () => {
+        expect(
+          schema.safeParse({ ...extra, cityCode: "69001", department: "69" })
+            .success,
+        ).toBe(true);
+      });
+
+      it("refuses a radius without a centre on every read", () => {
+        expect(schema.safeParse({ ...extra, radiusKm: 10 }).success).toBe(
+          false,
+        );
+        expect(
+          schema.safeParse({ ...extra, lat: 45.7, lng: 4.8 }).success,
+        ).toBe(false);
+      });
+
+      it("accepts a complete centre and radius", () => {
+        expect(
+          schema.safeParse({ ...extra, lat: 45.7, lng: 4.8, radiusKm: 10 })
+            .success,
+        ).toBe(true);
+      });
+    });
+  }
+
+  it("keeps the legacy text filter while the codes take over", () => {
+    expect(
+      FindReplacementListingsSchema.safeParse({ city: "Lyon" }).success,
+    ).toBe(true);
+  });
+});

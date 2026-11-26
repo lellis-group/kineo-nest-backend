@@ -90,6 +90,25 @@ describe("Profile DTO security", () => {
       ).toBe(false);
     });
 
+    it("accepts coherent structured codes and refuses incoherent ones", () => {
+      const base = { specialty: "GENERALIST", profileType: "BOTH" } as const;
+      expect(
+        CreateProfileSchema.safeParse({
+          ...base,
+          cityCodeInsee: "2A004",
+          departmentCode: "2A",
+          postalCode: "20100",
+        }).success,
+      ).toBe(true);
+      expect(
+        CreateProfileSchema.safeParse({
+          ...base,
+          cityCodeInsee: "2A004",
+          departmentCode: "2B",
+        }).success,
+      ).toBe(false);
+    });
+
     it("requires latitude and longitude together", () => {
       const single = CreateProfileSchema.safeParse({
         specialty: "GENERALIST",

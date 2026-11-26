@@ -12,8 +12,12 @@ import { z } from "zod";
 export const FORBIDDEN_CHARS =
   /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u0080-\u009F\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
 
-/** Shared pattern for city names (letters, accents, spaces, hyphens, apostrophes). */
-export const CITY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ' -]+$/;
+/**
+ * City labels may carry a postcode typed by a reader who did not pick a
+ * suggestion (`Lyon 69000`), but never markup or punctuation used to smuggle
+ * it. Unicode letters and digits cover French accents and the overseas codes.
+ */
+export const CITY_LABEL_REGEX = /^[\p{L}\p{N}\s'’\-]+$/u;
 
 /**
  * Validate a human-readable text field: trims leading/trailing whitespace,

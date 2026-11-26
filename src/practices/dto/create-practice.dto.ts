@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { geoCodesAgree, geoWriteFields } from "../../common/validation/geo";
 import { latLongsPaired } from "../../common/validation/lat-long";
-import { CITY_REGEX, textField } from "../../common/validation/text";
+import { CITY_LABEL_REGEX, textField } from "../../common/validation/text";
 import { createZodDto } from "../../common/zod-dto";
 
 export const CreatePracticeObjectSchema = z
@@ -11,10 +12,13 @@ export const CreatePracticeObjectSchema = z
     ),
     city: textField(100, "City")
       .regex(
-        CITY_REGEX,
-        "City must contain only letters, spaces, hyphens or apostrophes",
+        CITY_LABEL_REGEX,
+        "City must contain only letters, digits, spaces, hyphens or apostrophes",
       )
-      .describe("City where the practice is located"),
+      .describe(
+        "City label shown on the practice; the stable code is cityCodeInsee",
+      ),
+    ...geoWriteFields,
     latitude: z
       .number()
       .min(-90)
@@ -40,6 +44,9 @@ export const CreatePracticeSchema = CreatePracticeObjectSchema.refine(
     message: "latitude and longitude must be provided together",
     path: ["latitude"],
   },
-);
+).refine(geoCodesAgree, {
+  message: "departmentCode must match cityCodeInsee",
+  path: ["departmentCode"],
+});
 
 export class CreatePracticeDto extends createZodDto(CreatePracticeSchema) {}

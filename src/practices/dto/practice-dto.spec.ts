@@ -89,13 +89,39 @@ describe("Practice DTO security", () => {
       ).toBe(false);
     });
 
-    it("rejects a city containing forbidden characters", () => {
+    it("rejects markup in a city", () => {
+      expect(
+        CreatePracticeSchema.safeParse({
+          ...validPractice,
+          city: "<script>",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("accepts a postcode typed as a free-text city", () => {
       expect(
         CreatePracticeSchema.safeParse({
           ...validPractice,
           city: "Lyon 69000",
         }).success,
+      ).toBe(true);
+    });
+
+    it("refuses a department code contradicting the commune code", () => {
+      expect(
+        CreatePracticeSchema.safeParse({
+          ...validPractice,
+          cityCodeInsee: "75056",
+          departmentCode: "69",
+        }).success,
       ).toBe(false);
+      expect(
+        CreatePracticeSchema.safeParse({
+          ...validPractice,
+          cityCodeInsee: "75056",
+          departmentCode: "75",
+        }).success,
+      ).toBe(true);
     });
   });
 

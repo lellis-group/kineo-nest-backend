@@ -143,19 +143,22 @@ enum StoredFileKind {
 }
 
 model Profile {
-  id           String               @id @default(cuid())
-  userId       String               @unique
-  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  rppsNumber   String?              @unique
-  specialty    Specialty
-  profileType  ProfileType
-  verified     Boolean              @default(false)
-  isPublic     Boolean              @default(true)
-  city         String?
-  latitude     Float?
-  longitude    Float?
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
+  id             String               @id @default(cuid())
+  userId         String               @unique
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rppsNumber     String?              @unique
+  specialty      Specialty
+  profileType    ProfileType
+  verified       Boolean              @default(false)
+  isPublic       Boolean              @default(true)
+  city           String?
+  cityCodeInsee  String?
+  postalCode     String?
+  departmentCode String?
+  latitude       Float?
+  longitude      Float?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
   practices      Practice[]
   listings       ReplacementListing[] @relation("CreatedListings")
   applications   Application[]
@@ -163,25 +166,32 @@ model Profile {
   attachedFiles  StoredFile[]         @relation("ProfileFiles")
 
   @@index([specialty, isPublic])
+  @@index([departmentCode])
+  @@index([cityCodeInsee])
   @@map("profile")
 }
 
 model Practice {
-  id        String               @id @default(cuid())
-  ownerId   String
-  owner     Profile              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  name      String
-  address   String
-  city      String
-  latitude  Float?
-  longitude Float?
-  isPublic  Boolean              @default(true)
-  createdAt DateTime             @default(now())
-  listings  ReplacementListing[]
+  id             String               @id @default(cuid())
+  ownerId        String
+  owner          Profile              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name           String
+  address        String
+  city           String
+  cityCodeInsee  String?
+  postalCode     String?
+  departmentCode String?
+  latitude       Float?
+  longitude      Float?
+  isPublic       Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  listings       ReplacementListing[]
 
   @@index([ownerId])
   @@index([latitude, longitude])
   @@index([city(ops: raw("gin_trgm_ops"))], type: Gin, map: "practice_city_trgm_idx")
+  @@index([departmentCode])
+  @@index([cityCodeInsee])
   @@map("practice")
 }
 
