@@ -1014,6 +1014,8 @@ describe("ReplacementlistingsService", () => {
       const reads: { findManyWhere?: unknown; countWhere?: unknown } = {};
       let groupByAsked = false;
       const prisma = {
+        // The radius search resolves its centre to practice ids in SQL.
+        $queryRaw: async () => [{ id: "p1" }],
         replacementListing: {
           findMany: async (args: { where: unknown }) => {
             reads.findManyWhere = args.where;
@@ -1088,6 +1090,35 @@ describe("ReplacementlistingsService", () => {
           isPublic: true,
         },
       });
+    });
+
+    it("filters by stable commune and department codes, not by text", async () => {
+      const { reads, service } = prismaFor([]);
+
+      await service.findAll({
+        cityCode: "69001",
+        department: "69",
+      } as unknown as FindReplacementListingsDto);
+
+      expect(reads.findManyWhere).toMatchObject({
+        practice: {
+          cityCodeInsee: "69001",
+          departmentCode: "69",
+          isPublic: true,
+        },
+      });
+    });
+
+    it("turns a radius search into a practice-id filter shared by every read", async () => {
+      const { reads, service } = prismaFor([]);
+
+      await service.findAll({
+        lat: 45.7,
+        lng: 4.8,
+        radiusKm: 10,
+      } as unknown as FindReplacementListingsDto);
+
+      expect(reads.findManyWhere).toMatchObject({ practiceId: { in: ["p1"] } });
     });
 
     it("filters the practice on its visibility alone when no city is asked", async () => {

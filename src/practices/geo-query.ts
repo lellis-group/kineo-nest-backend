@@ -47,7 +47,7 @@ const BACKSLASH_ESCAPE_LITERAL = `'${String.fromCharCode(92)}'`;
  * `undefined`.
  */
 export const PRACTICE_GEO_COLUMNS =
-  'p."id", p."ownerId", p."name", p."address", p."city", p."latitude", p."longitude", p."isPublic", p."createdAt"';
+  'p."id", p."ownerId", p."name", p."address", p."city", p."cityCodeInsee", p."postalCode", p."departmentCode", p."latitude", p."longitude", p."isPublic", p."createdAt"';
 
 /** What a geographic row looks like once it has come back. */
 export interface PracticeGeoRow {
@@ -56,6 +56,9 @@ export interface PracticeGeoRow {
   name: string;
   address: string;
   city: string;
+  cityCodeInsee: string | null;
+  postalCode: string | null;
+  departmentCode: string | null;
   latitude: number;
   longitude: number;
   isPublic: boolean;
@@ -145,13 +148,23 @@ export function geoWhere(input: {
   longitudeDelta: number;
   name?: string;
   city?: string;
+  /** The public feed hides private practices; the owner's own feed must not. */
+  publicOnly?: boolean;
 }): Prisma.Sql {
-  const { lat, lng, radiusKm, latitudeDelta, longitudeDelta, name, city } =
-    input;
+  const {
+    lat,
+    lng,
+    radiusKm,
+    latitudeDelta,
+    longitudeDelta,
+    name,
+    city,
+    publicOnly = true,
+  } = input;
 
   return Prisma.sql`
-    p."isPublic" = true
-    AND p."latitude" IS NOT NULL
+    ${publicOnly ? Prisma.sql`p."isPublic" = true AND` : Prisma.empty}
+    p."latitude" IS NOT NULL
     AND p."longitude" IS NOT NULL
     AND p."latitude" BETWEEN ${lat - latitudeDelta} AND ${lat + latitudeDelta}
     AND ${longitudeWindow(lng, longitudeDelta)}

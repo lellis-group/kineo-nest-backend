@@ -4,8 +4,31 @@ import {
   paginationQueryShape,
   paginationWithinBounds,
 } from "../../common/pagination";
+import {
+  CITY_CODE_REGEX,
+  DEPARTMENT_CODE_REGEX,
+} from "../../common/validation/geo";
 import { createZodDto } from "../../common/zod-dto";
 import { ListingStatus, Specialty } from "../../generated/prisma/enums";
+
+/**
+ * `lat`, `lng` and `radiusKm` are one filter, not three optional ones.
+ */
+function refineGeoFilters(
+  data: { lat?: number; lng?: number; radiusKm?: number },
+  ctx: z.RefinementCtx,
+) {
+  const present = [data.lat, data.lng, data.radiusKm].filter(
+    (value) => value !== undefined,
+  ).length;
+  if (present > 0 && present < 3) {
+    ctx.addIssue({
+      code: "custom",
+      message: "lat, lng and radiusKm must be provided together",
+      path: ["lat"],
+    });
+  }
+}
 
 /**
  * Query parameters are plain strings: `z.coerce.boolean()` would turn the
@@ -39,7 +62,38 @@ const listingFilterShape = {
     .min(1)
     .max(100)
     .optional()
-    .describe("Filter by practice city"),
+    .describe("Legacy substring filter by practice city"),
+  cityCode: z
+    .string()
+    .trim()
+    .regex(CITY_CODE_REGEX, "Expected an INSEE commune code")
+    .optional()
+    .describe("Filter by the INSEE code of the practice's commune"),
+  department: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(DEPARTMENT_CODE_REGEX, "Expected a French department code")
+    .optional()
+    .describe("Filter by the practice's department code"),
+  lat: z.coerce
+    .number()
+    .min(-90)
+    .max(90)
+    .optional()
+    .describe("Centre latitude of a radius search"),
+  lng: z.coerce
+    .number()
+    .min(-180)
+    .max(180)
+    .optional()
+    .describe("Centre longitude of a radius search"),
+  radiusKm: z.coerce
+    .number()
+    .positive()
+    .max(500)
+    .optional()
+    .describe("Radius in kilometres around lat/lng"),
   q: z
     .string()
     .trim()
@@ -83,6 +137,7 @@ export const FindReplacementListingsSchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
+    refineGeoFilters(data, ctx);
     if (
       data.startDateFrom &&
       data.startDateTo &&
@@ -114,6 +169,7 @@ export const FindPlacesSchema = z
   .object(listingFilterShape)
   .strict()
   .superRefine((data, ctx) => {
+    refineGeoFilters(data, ctx);
     if (
       data.startDateFrom &&
       data.startDateTo &&
@@ -148,6 +204,7 @@ export const FindPageOfSchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
+    refineGeoFilters(data, ctx);
     if (
       data.startDateFrom &&
       data.startDateTo &&

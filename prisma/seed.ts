@@ -25,9 +25,12 @@ const PASSWORD = "Password123!";
  * ceiling, never drawn the "+N others" line, and never drawn a place it could
  * not place.
  */
-const USER_COUNT = Number(process.env.SEED_USERS ?? 260);
-const PRACTICE_COUNT = Number(process.env.SEED_PRACTICES ?? 620);
-const MAX_APPLICATIONS_PER_LISTING = 5;
+const USER_COUNT = Number(process.env.SEED_USERS ?? 800);
+const PRACTICE_COUNT = Number(process.env.SEED_PRACTICES ?? 2000);
+const MAX_APPLICATIONS_PER_LISTING = 8;
+
+/** How many real communes the seed spreads its corpus over. */
+const SEED_CITY_COUNT = Number(process.env.SEED_CITIES ?? 600);
 
 /**
  * How many postings a practice publishes: one to six.
@@ -35,7 +38,7 @@ const MAX_APPLICATIONS_PER_LISTING = 5;
  * Six, because four of them are all a popup shows. A corpus where no practice
  * exceeds that has never once drawn the line saying there are more.
  */
-const LISTINGS_PER_PRACTICE = { min: 1, max: 6 };
+const LISTINGS_PER_PRACTICE = { min: 1, max: 8 };
 
 /** One practice in `N` is left without coordinates. */
 const UNMAPPED_EVERY = 24;
@@ -55,71 +58,117 @@ const MONTHS = [
   "December",
 ];
 
+interface SeedCity {
+  codeInsee: string;
+  nom: string;
+  postalCode: string;
+  departmentCode: string;
+  codeRegion: string;
+  latitude: number;
+  longitude: number;
+}
+
+/** Minimal CSV reader: a quoted field may itself contain a comma. */
+function parseCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] as string;
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (char === "," && !quoted) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+}
+
 /**
- * Rough city centres, so a geo search spreads across France instead of
- * clustering around Paris.
- *
- * Fifty-one of them, and the spread is the point: the browse map clusters by
- * viewport, so a corpus held to a dozen cities shows one cluster and proves
- * nothing about a count spread over a country.
+ * The COG 2026 reference, published as a gzip CSV by data.gouv.fr: one request
+ * instead of paging the commune API, whose deep offsets answer 504. Still no
+ * data kept in this file — the seed reads the same authoritative source the
+ * frontend resolves places from.
  */
-const cityCoordinates: Record<string, { latitude: number; longitude: number }> =
-  {
-    Paris: { latitude: 48.8566, longitude: 2.3522 },
-    Lyon: { latitude: 45.764, longitude: 4.8357 },
-    Marseille: { latitude: 43.2965, longitude: 5.3698 },
-    Toulouse: { latitude: 43.6047, longitude: 1.4442 },
-    Nice: { latitude: 43.7102, longitude: 7.262 },
-    Nantes: { latitude: 47.2184, longitude: -1.5536 },
-    Strasbourg: { latitude: 48.5734, longitude: 7.7521 },
-    Montpellier: { latitude: 43.6108, longitude: 3.8767 },
-    Bordeaux: { latitude: 44.8378, longitude: -0.5792 },
-    Lille: { latitude: 50.6292, longitude: 3.0573 },
-    Rennes: { latitude: 48.1173, longitude: -1.6778 },
-    Grenoble: { latitude: 45.1885, longitude: 5.7245 },
-    Rouen: { latitude: 49.4432, longitude: 1.0999 },
-    Toulon: { latitude: 43.1242, longitude: 5.928 },
-    "Saint-Étienne": { latitude: 45.4397, longitude: 4.3872 },
-    "Le Havre": { latitude: 49.4944, longitude: 0.1079 },
-    Reims: { latitude: 49.2583, longitude: 4.0317 },
-    Dijon: { latitude: 47.322, longitude: 5.0415 },
-    Angers: { latitude: 47.4784, longitude: -0.5632 },
-    Brest: { latitude: 48.3904, longitude: -4.4861 },
-    Nîmes: { latitude: 43.8367, longitude: 4.3601 },
-    "Clermont-Ferrand": { latitude: 45.7772, longitude: 3.087 },
-    "Le Mans": { latitude: 48.0061, longitude: 0.1996 },
-    "Aix-en-Provence": { latitude: 43.5297, longitude: 5.4474 },
-    Amiens: { latitude: 49.8941, longitude: 2.2958 },
-    Tours: { latitude: 47.3941, longitude: 0.6848 },
-    Limoges: { latitude: 45.8336, longitude: 1.2611 },
-    Villeurbanne: { latitude: 45.7719, longitude: 4.8905 },
-    Besançon: { latitude: 47.2378, longitude: 6.0241 },
-    Orléans: { latitude: 47.9029, longitude: 1.9093 },
-    Mulhouse: { latitude: 47.7508, longitude: 7.3359 },
-    Metz: { latitude: 49.1193, longitude: 6.1757 },
-    Caen: { latitude: 49.1829, longitude: -0.3707 },
-    "Boulogne-Billancourt": { latitude: 48.8352, longitude: 2.2409 },
-    Roubaix: { latitude: 50.6942, longitude: 3.1746 },
-    Perpignan: { latitude: 42.6887, longitude: 2.8948 },
-    Nancy: { latitude: 48.6921, longitude: 6.1844 },
-    Argenteuil: { latitude: 48.9472, longitude: 2.2467 },
-    Tourcoing: { latitude: 50.7239, longitude: 3.1612 },
-    Valence: { latitude: 44.9334, longitude: 4.8924 },
-    Pau: { latitude: 43.2951, longitude: -0.3708 },
-    Calais: { latitude: 50.9513, longitude: 1.8585 },
-    Avignon: { latitude: 43.9493, longitude: 4.8055 },
-    "La Rochelle": { latitude: 46.1603, longitude: -1.1511 },
-    Annecy: { latitude: 45.8992, longitude: 6.1294 },
-    Antibes: { latitude: 43.5804, longitude: 7.1239 },
-    Cannes: { latitude: 43.5528, longitude: 7.0174 },
-    Colmar: { latitude: 48.0793, longitude: 7.3585 },
-    Cherbourg: { latitude: 49.6337, longitude: -1.6222 },
-    "Saint-Nazaire": { latitude: 47.2734, longitude: -2.2138 },
-    Bourges: { latitude: 47.081, longitude: 2.3988 },
-    Quimper: { latitude: 47.996, longitude: -4.1024 },
-    Vannes: { latitude: 47.6582, longitude: -2.7608 },
-    Bayonne: { latitude: 43.4929, longitude: -1.4748 },
+const COMMUNE_REFERENCE_URL =
+  "https://www.data.gouv.fr/api/1/datasets/r/262afe2d-1c35-40da-ace0-a2eb595eaced";
+
+async function loadSeedCities(): Promise<SeedCity[]> {
+  const response = await fetch(COMMUNE_REFERENCE_URL, {
+    signal: AbortSignal.timeout(60_000),
+    headers: { Accept: "application/gzip" },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Unable to load the commune reference: HTTP ${response.status}`,
+    );
+  }
+
+  const compressed = new Uint8Array(await response.arrayBuffer());
+  const csv = new TextDecoder().decode(Bun.gunzipSync(compressed));
+  const lines = csv.split("\n").filter((line) => line.trim().length > 0);
+  const header = parseCsvLine((lines.shift() ?? "").replace(/\r$/, ""));
+  const column = (name: string) => {
+    const index = header.indexOf(name);
+    if (index < 0) {
+      throw new Error(`Missing ${name} in the commune reference`);
+    }
+    return index;
   };
+  const fields = {
+    code: column("code_insee"),
+    nom: column("nom_standard"),
+    departement: column("dep_code"),
+    region: column("reg_code"),
+    postal: column("code_postal"),
+    population: column("population"),
+    latitude: column("latitude_centre"),
+    longitude: column("longitude_centre"),
+  };
+
+  const cities = lines
+    .map((line) => parseCsvLine(line.replace(/\r$/, "")))
+    .filter((row) => {
+      const latitude = Number(row[fields.latitude]);
+      const longitude = Number(row[fields.longitude]);
+      return (
+        Boolean(row[fields.code]) &&
+        Boolean(row[fields.nom]) &&
+        Boolean(row[fields.departement]) &&
+        Number.isFinite(latitude) &&
+        Number.isFinite(longitude)
+      );
+    })
+    .sort(
+      (left, right) =>
+        Number(right[fields.population] ?? 0) -
+        Number(left[fields.population] ?? 0),
+    )
+    .slice(0, SEED_CITY_COUNT)
+    .map((row) => ({
+      codeInsee: row[fields.code] as string,
+      nom: row[fields.nom] as string,
+      postalCode: row[fields.postal] ?? "",
+      departmentCode: row[fields.departement] as string,
+      codeRegion: row[fields.region] ?? "",
+      latitude: Number(row[fields.latitude]),
+      longitude: Number(row[fields.longitude]),
+    }));
+
+  if (cities.length === 0) {
+    throw new Error("The commune reference returned no usable city");
+  }
+  return cities;
+}
 
 const specialtyLabels: Record<Specialty, string> = {
   GENERALIST: "general practitioner",
@@ -470,7 +519,8 @@ async function main() {
     "Fournier",
     "Faure",
   ];
-  const cities = Object.keys(cityCoordinates);
+  const seedCities = await loadSeedCities();
+  const cityByCode = new Map(seedCities.map((city) => [city.codeInsee, city]));
   const specialties = Object.values(Specialty);
   const profileTypes = Object.values(ProfileType);
 
@@ -482,9 +532,12 @@ async function main() {
     const row = Math.floor(i / firstNames.length);
     const firstName = firstNames[i % firstNames.length];
     const lastName = lastNames[(i + row * 7) % lastNames.length];
-    const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@medecin.fr`;
-    const city = cities[i % cities.length];
-    const coordinates = cityCoordinates[city];
+    // The 20×20 name grid repeats after 400 rows; suffix later cycles so a
+    // larger corpus keeps every email unique.
+    const cycle = Math.floor(i / (firstNames.length * lastNames.length));
+    const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}${cycle > 0 ? cycle : ""}@medecin.fr`;
+    const seedCity = seedCities[i % seedCities.length];
+    const coordinates = seedCity;
     const specialty = specialties[i % specialties.length];
     const profileType = profileTypes[i % profileTypes.length];
 
@@ -508,7 +561,10 @@ async function main() {
           create: {
             specialty: specialty,
             profileType: profileType,
-            city: city,
+            city: seedCity.nom,
+            cityCodeInsee: seedCity.codeInsee,
+            postalCode: seedCity.postalCode,
+            departmentCode: seedCity.departmentCode,
             verified: i % 3 !== 0,
             isPublic: true,
             latitude: coordinates.latitude + (random() - 0.5) * 0.2,
@@ -596,10 +652,13 @@ async function main() {
     // Owners cycle, so a practice is never orphaned and no owner carries
     // an unbounded number of them.
     const owner = practiceOwners[i % practiceOwners.length];
-    const cityValue = owner.city ?? "Paris";
-    const coordinates = cityCoordinates[cityValue] ?? {
-      latitude: owner.latitude,
-      longitude: owner.longitude,
+    const seedCity = owner.cityCodeInsee
+      ? cityByCode.get(owner.cityCodeInsee)
+      : undefined;
+    const cityValue = seedCity?.nom ?? owner.city ?? "Paris";
+    const coordinates = seedCity ?? {
+      latitude: owner.latitude as number,
+      longitude: owner.longitude as number,
     };
 
     {
@@ -618,6 +677,9 @@ async function main() {
             streetTypes[i % streetTypes.length]
           } ${streetNames[(i * 3) % streetNames.length]}`,
           city: cityValue,
+          cityCodeInsee: owner.cityCodeInsee,
+          postalCode: owner.postalCode,
+          departmentCode: owner.departmentCode,
           latitude: unmapped
             ? null
             : coordinates.latitude + (random() - 0.5) * 0.08,
